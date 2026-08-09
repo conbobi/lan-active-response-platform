@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LARP Dashboard</title>
+    <style>
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        .online { color: green; font-weight: bold; }
+        .offline { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>LARP Dashboard</h1>
+    <div id="agents"></div>
+
+    <script>
+        async function fetchAgents() {
+            const res = await fetch('/api/agents');
+            const agents = await res.json();
+            let html = '<table><tr><th>Agent ID</th><th>Online</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Firewall</th></tr>';
+            agents.forEach(a => {
+                html += `<tr>
+                    <td>${a.agent_id}</td>
+                    <td class="${a.is_online ? 'online' : 'offline'}">${a.is_online ? 'ON' : 'OFF'}</td>
+                    <td>${a.cpu_percent != null ? a.cpu_percent.toFixed(1) + '%' : '-'}</td>
+                    <td>${a.ram_percent != null ? a.ram_percent.toFixed(1) + '%' : '-'}</td>
+                    <td>${a.disk_percent != null ? a.disk_percent.toFixed(1) + '%' : '-'}</td>
+                    <td>${a.firewall_active ? 'Active' : 'Inactive'}</td>
+                </tr>`;
+            });
+            html += '</table>';
+            document.getElementById('agents').innerHTML = html;
+        }
+        fetchAgents();
+        setInterval(fetchAgents, 5000);
+    </script>
+</body>
+</html>
