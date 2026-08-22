@@ -1,7 +1,5 @@
-# manager/app/core/deps.py
-from app.core.database import async_session
+from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
 
-async def get_db():
-    async with async_session() as session:
-        yield session
+__all__ = ["get_db", "AsyncSession"]

@@ -1,38 +1,90 @@
-# manager/app/websocket/agent_ws.py
 import json
-from fastapi import WebSocket, WebSocketDisconnect, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.deps import get_db
-from app.services.agent_service import process_agent_data
-from app.websocket.connection_manager import manager as ws_manager
+import logging
+from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 
-async def agent_websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
-    # ✅ Phải accept trước khi giao tiếp
-    await websocket.accept()
+from app.websocket.connection_manager import connection_manager
+from app.schemas.heartbeat import HeartbeatDTO
+from app.schemas.topology import TopologyUpdateDTO
+from app.schemas.path_release import PathReleaseDTO
+from app.schemas.command_ack import CommandAckDTO
+from app.services.topology_service import topology_facade
+from app.services.command_dispatcher import command_dispatcher
+from app.core.database import AsyncSessionLocal
 
-    # Nhận dữ liệu đầu tiên để xác định agent_id
+logger = logging.getLogger(__name__)
+
+
+async def agent_websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for persistent bi-directional communications with agents.
+    Receives JSON messages, dispatches to appropriate services, and returns responses or commands.
+    """
+    # Extract agent_id from query params e.g. /ws/agent?agent_id=agent-123
+    agent_id = websocket.query_params.get("agent_id", "unknown")
+    await connection_manager.connect(agent_id, websocket)
+
     try:
-        data = await websocket.receive_text()
-        msg = json.loads(data)
-        agent_id = msg.get("agent_id")
-        if not agent_id:
-            await websocket.close(code=1008)
-            return
-    except:
-        await websocket.close(code=1008)
-        return
-
-    await ws_manager.connect(agent_id, websocket)
-    try:
-        # Xử lý gói tin đầu tiên
-        async with db.begin():
-            await process_agent_data(db, msg)
-
-        # Vòng lặp nhận dữ liệu tiếp theo
         while True:
-            data = await websocket.receive_text()
-            msg = json.loads(data)
-            async with db.begin():
-                await process_agent_data(db, msg)
+            raw_text = await websocket.receive_text()
+            try:
+                data = json.loads(raw_text)
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": "Invalid JSON format"})
+                continue
+
+            msg_type = data.get("type", "").upper()
+
+            async with AsyncSessionLocal() as session:
+                try:
+                    response_payload = None
+
+                    if msg_type == "HEARTBEAT":
+                        dto = HeartbeatDTO(**data.get("payload", {}))
+                        agent_id = dto.agent_id
+                        await topology_facade.process_heartbeat(dto, session)
+                        # Check for pending commands to attach to heartbeat ack
+                        pending_cmds = await command_dispatcher.pull_pending_commands(agent_id, session)
+                        response_payload = {
+                            "status": "ack",
+                            "message": "Heartbeat processed",
+                            "pending_commands": [
+                                {"command_id": c.id, "action": c.action, "payload": c.payload}
+                                for c in pending_cmds
+                            ]
+                        }
+
+                    elif msg_type == "TOPOLOGY_UPDATE":
+                        dto = TopologyUpdateDTO(**data.get("payload", {}))
+                        await topology_facade.handle_topology_update(dto, session)
+                        response_payload = {"status": "ack", "message": "Topology update processed"}
+
+                    elif msg_type == "PATH_RELEASE":
+                        dto = PathReleaseDTO(**data.get("payload", {}))
+                        released = await topology_facade.release_path(dto, session)
+                        response_payload = {"status": "ack", "released": released}
+
+                    elif msg_type == "COMMAND_ACK":
+                        dto = CommandAckDTO(**data.get("payload", {}))
+                        await command_dispatcher.verify_execution(dto, session)
+                        response_payload = {"status": "ack", "message": "Command ack recorded"}
+
+                    else:
+                        response_payload = {"error": f"Unknown message type '{msg_type}'"}
+
+                    await session.commit()
+                    if response_payload:
+                        await websocket.send_json(response_payload)
+
+                except ValidationError as ve:
+                    await session.rollback()
+                    logger.error(f"WebSocket validation error: {ve}")
+                    await websocket.send_json({"error": "Validation error", "details": ve.errors()})
+                except Exception as e:
+                    await session.rollback()
+                    logger.error(f"Error processing WS message: {e}", exc_info=True)
+                    await websocket.send_json({"error": str(e)})
+
     except WebSocketDisconnect:
-        ws_manager.disconnect(agent_id)
+        connection_manager.disconnect(agent_id)
+        logger.info(f"Agent '{agent_id}' disconnected from WebSocket.")

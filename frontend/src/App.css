@@ -1,0 +1,41 @@
+/* src/App.css */
+.card {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-bg-card);
+    border-radius: var(--radius-md);
+    padding: 1.5rem;
+}
+
+.table-scroll {
+    overflow-x: auto;
+}
+
+.table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.agent-table {
+    width: 100%;
+}
+
+.agent-table th,
+.agent-table td {
+    padding: 0.625rem;
+    color: var(--color-text-primary);
+    vertical-align: middle;
+}
+
+.agent-table tbody tr {
+    border-top: 1px solid var(--color-bg-card);
+}
+
+.agent-table tbody tr:hover {
+    background: var(--color-bg-card);
+}
+
+.disabled {
+    color: var(--color-text-tertiary);
+}

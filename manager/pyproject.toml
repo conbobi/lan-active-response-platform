@@ -1,0 +1,18 @@
+[project]
+name = "manager"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiogram>=3.30.0",
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "pydantic-core>=2.46.4",
+    "pydantic-settings>=2.15.0",
+    "reportlab>=5.0.1",
+    "sqlalchemy>=2.0.52",
+    "uvicorn>=0.52.4",
+]

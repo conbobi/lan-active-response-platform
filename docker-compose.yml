@@ -4,17 +4,18 @@ services:
   db:
     image: postgres:16-alpine #Tải bản cài đặt PostgreSQL phiên bản 16 (dùng bản alpine cho siêu nhẹ, tiết kiệm dung lượng).
     environment:
-      POSTGRES_USER: larp # dặt tên môi trường ảo là larp
+      POSTGRES_USER: larp # tên tài khoản quản trị postgre
       POSTGRES_PASSWORD: larp_password
       POSTGRES_DB: larpdb
     ports:
-      - "5432:5432"   # Tùy chọn, để truy cập DB từ máy host nếu cần debug
+      - "5432:5432" # Tùy chọn, để truy cập DB từ máy host nếu cần debug
     volumes:
       - pgdata:/var/lib/postgresql/data #Đây là "két sắt bảo vệ dữ liệu". Khi container bị tắt đi hay xóa đi làm lại, dữ liệu bên trong vẫn được giữ lại an toàn ở ổ cứng máy thật, không bị mất.
     networks:
       - larp-net
+    privileged: true
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U larp -d larpdb"]
+      test: [ "CMD-SHELL", "pg_isready -U larp -d larpdb" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -22,12 +23,17 @@ services:
   manager:
     build: ./manager #Bảo Docker đi vào thư mục ./manager tìm file Dockerfile để tự động xây dựng nên "tòa nhà" Manager của bạn.
     ports:
-      - "8000:8000" #Mở cổng 8000 ra máy thật để bạn có thể mở trình duyệt web lên xem Dashboard
+      - "8002:8000" #Mở cổng 8000 ra máy thật để bạn có thể mở trình duyệt web lên xem Dashboard
     environment:
       - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb #Đây là "đường ống" kết nối từ tòa nhà Manager đến két sắt bảo vệ dữ liệu (PostgreSQL). Lưu ý: db chính là tên dịch vụ PostgreSQL ở trên, không phải localhost hay 127.0.0.1
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - larp-net
 
@@ -41,8 +47,8 @@ services:
     networks:
       - larp-net
     depends_on:
-      - manager #Đảm bảo tổng đài manager phải mở cửa sẵn sàng đón khách thì các máy con client1, client2 mới được phép kết nối vào.
-
+      manager:
+        condition: service_healthy
   client2:
     build: ./agent
     hostname: client2
@@ -52,7 +58,45 @@ services:
     networks:
       - larp-net
     depends_on:
-      - manager
+      manager:
+        condition: service_healthy
+
+  client3:
+    build: ./agent
+    hostname: client3
+    environment:
+      - MANAGER_URL=ws://manager:8000/ws/agent
+      - AGENT_ID=client3
+    networks:
+      - larp-net
+    depends_on:
+      manager:
+        condition: service_healthy
+
+  client4:
+    build: ./agent
+    hostname: client4
+    environment:
+      - MANAGER_URL=ws://manager:8000/ws/agent
+      - AGENT_ID=client4
+    networks:
+      - larp-net
+    depends_on:
+      manager:
+        condition: service_healthy
+
+  attacker:
+    build: ./agent
+    hostname: attacker
+    environment:
+      - MANAGER_URL=ws://manager:8000/ws/agent
+      - AGENT_ID=attacker
+    networks:
+      - larp-net
+    depends_on:
+      manager:
+        condition: service_healthy
+    privileged: true
 
 networks:
   larp-net:
