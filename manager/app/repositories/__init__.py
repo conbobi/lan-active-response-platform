@@ -13,6 +13,8 @@ from app.repositories.whitelist_repository import WhitelistRepository
 from app.repositories.risk_score_repository import RiskScoreRepository
 from app.repositories.report_repository import ReportRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.threat_indicator_repository import ThreatIndicatorRepository
+from app.repositories.system_setting_repository import SystemSettingRepository
 
 __all__ = [
     "AbstractRepository",
@@ -31,4 +33,6 @@ __all__ = [
     "RiskScoreRepository",
     "ReportRepository",
     "NotificationRepository",
+    "ThreatIndicatorRepository",
+    "SystemSettingRepository",
 ]

@@ -13,6 +13,9 @@ from app.routers.v1.notification_router import router as notification_router
 from app.routers.v1.report_router import router as report_router
 from app.routers.v1.whitelist_router import router as whitelist_router
 from app.routers.v1.risk_router import router as risk_router
+from app.routers.v1.threat_intel_router import router as threat_intel_router
+from app.routers.v1.process_router import router as process_router
+from app.routers.v1.setting_router import router as setting_router
 
 api_router = APIRouter()
 
@@ -29,5 +32,8 @@ api_router.include_router(notification_router, prefix="/notifications", tags=["N
 api_router.include_router(report_router, prefix="/reports", tags=["Reports"])
 api_router.include_router(whitelist_router, prefix="/whitelist", tags=["Whitelist"])
 api_router.include_router(risk_router, prefix="/risk", tags=["Risk Assessment"])
+api_router.include_router(threat_intel_router, prefix="/threat-intel", tags=["Threat Intelligence"])
+api_router.include_router(process_router, prefix="/process", tags=["Process & Root Cause Analysis"])
+api_router.include_router(setting_router, prefix="/settings", tags=["Settings"])
 
 __all__ = ["api_router"]

@@ -4,6 +4,7 @@ from enum import Enum
 class AgentStatus(str, Enum):
     ACTIVE = "active"
     ISOLATED = "isolated"
+    QUARANTINE = "quarantine"
     INACTIVE = "inactive"
     DEAD = "dead"
 
@@ -25,6 +26,8 @@ class IncidentSeverity(str, Enum):
 
 class IncidentStatus(str, Enum):
     OPEN = "open"
-    IN_PROGRESS = "in_progress"
+    INVESTIGATING = "investigating"
+    CONTAINED = "contained"
     RESOLVED = "resolved"
+    FALSE_POSITIVE = "false_positive"
     CLOSED = "closed"

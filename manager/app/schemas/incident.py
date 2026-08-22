@@ -1,8 +1,30 @@
 from datetime import datetime
-from typing import Optional
-from pydantic import Field
+from typing import Optional, List
+from pydantic import BaseModel, Field
 from app.schemas.base import ORMBaseModel
 from app.schemas.enums import IncidentSeverity, IncidentStatus
+
+
+class IncidentNoteCreate(BaseModel):
+    user: str = "system"
+    content: str
+
+
+class IncidentNoteOut(ORMBaseModel):
+    id: str
+    incident_id: str
+    user: str
+    content: str
+    created_at: datetime
+
+
+class IncidentAssignDTO(BaseModel):
+    user_id: str
+
+
+class IncidentNoteAddDTO(BaseModel):
+    content: str
+    user: str = "system"
 
 
 class IncidentCreate(ORMBaseModel):
@@ -13,6 +35,7 @@ class IncidentCreate(ORMBaseModel):
     agent_id: Optional[str] = None
     assigned_to: Optional[str] = None
     risk_score: float = 0.0
+    notes: Optional[str] = None
 
 
 class IncidentUpdate(ORMBaseModel):
@@ -22,6 +45,7 @@ class IncidentUpdate(ORMBaseModel):
     status: Optional[IncidentStatus] = None
     assigned_to: Optional[str] = None
     risk_score: Optional[float] = None
+    notes: Optional[str] = None
 
 
 class IncidentOut(ORMBaseModel):
@@ -33,5 +57,7 @@ class IncidentOut(ORMBaseModel):
     agent_id: Optional[str]
     assigned_to: Optional[str]
     risk_score: float
+    notes: Optional[str] = None
+    resolved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

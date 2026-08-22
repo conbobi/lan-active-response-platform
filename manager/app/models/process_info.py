@@ -11,9 +11,12 @@ class ProcessInfo(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     agent_id: Mapped[str] = mapped_column(String(64), ForeignKey("agents.id"), nullable=False)
     pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     exe: Mapped[str] = mapped_column(String(512), default="")
+    exe_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     cmdline: Mapped[str] = mapped_column(String(1024), default="")
+    session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     cpu_percent: Mapped[float] = mapped_column(Float, default=0.0)
     memory_percent: Mapped[float] = mapped_column(Float, default=0.0)
     hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
@@ -29,6 +32,8 @@ class ProcessInfo(Base):
             return True
         if any(s in self.name.lower() for s in suspicious_names):
             return True
-        if "/tmp/" in self.exe or "/dev/shm" in self.exe:
+        if self.exe and ("/tmp/" in self.exe or "/dev/shm" in self.exe):
+            return True
+        if self.exe_path and ("/tmp/" in self.exe_path or "/dev/shm" in self.exe_path):
             return True
         return False

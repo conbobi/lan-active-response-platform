@@ -16,6 +16,9 @@ from app.services.whitelist_service import WhitelistService
 from app.services.notification_service import NotificationService
 from app.services.risk_assessment_service import RiskAssessmentService
 from app.services.report_service import ReportService
+from app.services.threat_intelligence_service import ThreatIntelligenceService
+from app.services.process_tree_service import ProcessTreeService
+from app.services.setting_service import SettingService
 
 __all__ = [
     "AbstractService",
@@ -36,4 +39,7 @@ __all__ = [
     "NotificationService",
     "RiskAssessmentService",
     "ReportService",
+    "ThreatIntelligenceService",
+    "ProcessTreeService",
+    "SettingService",
 ]
