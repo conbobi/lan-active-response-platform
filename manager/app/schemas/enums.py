@@ -8,6 +8,11 @@ class AgentStatus(str, Enum):
     INACTIVE = "inactive"
     DEAD = "dead"
 
+class ActionType(str, Enum):
+    LOG = "log"
+    ALERT = "alert"
+    ALERT_WITH_BUTTONS = "alert_with_buttons"
+    AUTO_ISOLATE = "auto_isolate"
 
 class CommandStatus(str, Enum):
     PENDING = "pending"

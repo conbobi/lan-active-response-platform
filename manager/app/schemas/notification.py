@@ -5,17 +5,15 @@ from app.schemas.base import ORMBaseModel
 
 
 class NotificationConfigCreate(BaseModel):
-    channel: str = "telegram"
-    bot_token: str
-    chat_id: str
+    channel: str = "discord"
+    webhook_url: str
     enabled: bool = True
 
 
 class NotificationConfigOut(ORMBaseModel):
     id: str
     channel: str
-    bot_token: str
-    chat_id: str
+    webhook_url: str
     enabled: bool
 
 

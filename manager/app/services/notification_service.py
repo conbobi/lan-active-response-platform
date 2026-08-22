@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class NotificationService:
     """
-    Facade service for dispatching security notifications and handling Telegram bot callbacks.
+    Facade service for dispatching security notifications via Discord webhook.
     """
 
     def __init__(self, session: Optional[AsyncSession] = None):
@@ -26,9 +26,9 @@ class NotificationService:
         self.repo = NotificationRepository(session) if session else None
 
     async def get_active_config(self) -> Optional[NotificationConfig]:
-        """Fetch active notification configuration from DB or return None."""
+        """Fetch active Discord notification configuration from DB or return None."""
         if self.repo:
-            configs = await self.repo.get_enabled_configs(channel="telegram")
+            configs = await self.repo.get_enabled_configs(channel="discord")
             if configs:
                 return configs[0]
         return None
@@ -36,55 +36,54 @@ class NotificationService:
     async def send_alert(
         self,
         message: str,
-        chat_id: Optional[str] = None,
-        bot_token: Optional[str] = None,
-        buttons: Optional[List[List[Dict[str, str]]]] = None
+        title: str = "LARP Security Alert",
+        webhook_url: Optional[str] = None,
+        color: int = 0xFF0000,  # Màu đỏ
+        buttons: Optional[List[Any]] = None
     ) -> bool:
         """
-        Send a Telegram alert message with optional inline keyboard buttons.
+        Send a Discord alert message via webhook.
         """
         config = await self.get_active_config()
 
-        token = bot_token or (config.bot_token if config else os.getenv("TELEGRAM_BOT_TOKEN", ""))
-        target_chat = chat_id or (config.chat_id if config else os.getenv("TELEGRAM_CHAT_ID", ""))
+        target_webhook = webhook_url or (config.webhook_url if config else os.getenv("DISCORD_WEBHOOK_URL", ""))
         config_id = config.id if config else None
 
-        if not token or not target_chat:
-            logger.warning("Telegram notification skipped: Bot token or Chat ID not configured.")
+        if not target_webhook:
+            logger.warning("Discord notification skipped: Webhook URL not configured.")
             return False
 
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload: Dict[str, Any] = {
-            "chat_id": target_chat,
-            "text": message,
-            "parse_mode": "HTML"
+        payload = {
+            "embeds": [
+                {
+                    "title": title,
+                    "description": message,
+                    "color": color,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            ]
         }
-
-        if buttons:
-            payload["reply_markup"] = {
-                "inline_keyboard": buttons
-            }
 
         status_str = "failed"
         sent_at = None
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload)
-                if response.status_code == 200:
+                response = await client.post(target_webhook, json=payload)
+                if response.status_code in (200, 204):
                     status_str = "sent"
                     sent_at = datetime.now(timezone.utc)
-                    logger.info(f"Telegram notification sent successfully to chat '{target_chat}'.")
+                    logger.info("Discord notification sent successfully.")
                 else:
-                    logger.error(f"Telegram notification failed ({response.status_code}): {response.text}")
+                    logger.error(f"Discord notification failed ({response.status_code}): {response.text}")
         except Exception as e:
-            logger.exception(f"Error dispatching Telegram alert: {e}")
+            logger.exception(f"Error dispatching Discord alert: {e}")
 
         if self.repo:
             log_entry = NotificationLog(
                 config_id=config_id,
-                channel="telegram",
-                recipient=target_chat,
+                channel="discord",
+                recipient=target_webhook,
                 message=message,
                 status=status_str,
                 sent_at=sent_at
@@ -93,56 +92,12 @@ class NotificationService:
 
         return status_str == "sent"
 
+    # Discord không có cơ chế callback như Telegram, có thể loại bỏ hoặc giữ nhưng không dùng.
     async def handle_callback(
         self,
         callback_data: Dict[str, Any],
         session: AsyncSession
     ) -> Dict[str, Any]:
-        """
-        Process callback payloads received from Telegram webhook / inline button triggers.
-        Example callback string: "isolate:<agent_id>" or "unisolate:<agent_id>"
-        """
-        data_str = callback_data.get("data", "")
-        parts = data_str.split(":", 1)
-        action = parts[0]
-        agent_id = parts[1] if len(parts) > 1 else ""
-
-        if not agent_id:
-            return {"status": "ignored", "reason": "No agent_id provided in callback"}
-
-        agent_repo = AgentRepository(session)
-        agent = await agent_repo.get(agent_id)
-        if not agent:
-            return {"status": "error", "message": f"Agent '{agent_id}' not found"}
-
-        if action == "isolate":
-            agent.isolate()
-            cmd_repo = CommandRepository(session)
-            cmd = Command(
-                agent_id=agent_id,
-                action="isolate",
-                payload={"reason": "Telegram manual callback trigger"},
-                status=CommandStatus.PENDING
-            )
-            await cmd_repo.add(cmd)
-            await command_dispatcher.push_command(cmd.id, agent_id)
-            await session.flush()
-            logger.info(f"Agent '{agent_id}' isolated via Telegram callback.")
-            return {"status": "success", "action": "isolated", "agent_id": agent_id}
-
-        elif action == "unisolate":
-            agent.unisolate()
-            cmd_repo = CommandRepository(session)
-            cmd = Command(
-                agent_id=agent_id,
-                action="unisolate",
-                payload={"reason": "Telegram manual callback trigger"},
-                status=CommandStatus.PENDING
-            )
-            await cmd_repo.add(cmd)
-            await command_dispatcher.push_command(cmd.id, agent_id)
-            await session.flush()
-            logger.info(f"Agent '{agent_id}' unisolated via Telegram callback.")
-            return {"status": "success", "action": "unisolated", "agent_id": agent_id}
-
-        return {"status": "ignored", "action": action}
+        """Discord webhooks không hỗ trợ callback như Telegram, method này tạm thời không xử lý."""
+        logger.info("Discord webhook callback không được hỗ trợ.")
+        return {"status": "ignored", "reason": "Discord webhook does not support callbacks"}

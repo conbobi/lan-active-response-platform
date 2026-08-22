@@ -11,7 +11,7 @@ from app.schemas.notification import (
 )
 from app.repositories.notification_repository import NotificationRepository
 from app.services.notification_service import NotificationService
-
+from fastapi import Request, HTTPException
 router = APIRouter(tags=["Notifications"])
 
 
@@ -28,8 +28,7 @@ async def create_notification_config(dto: NotificationConfigCreate, db: AsyncSes
     repo = NotificationRepository(db)
     config = NotificationConfig(
         channel=dto.channel,
-        bot_token=dto.bot_token,
-        chat_id=dto.chat_id,
+        webhook_url=dto.webhook_url,
         enabled=dto.enabled
     )
     created = await repo.add(config)
@@ -53,3 +52,46 @@ async def list_notification_logs(skip: int = 0, limit: int = 100, db: AsyncSessi
     """Retrieve notification audit log history."""
     repo = NotificationRepository(db)
     return await repo.list_logs(skip=skip, limit=limit)
+@router.post("/webhook/telegram")
+async def telegram_webhook(payload: Dict[str, Any], db: AsyncSession = Depends(get_db)):
+    """Webhook listener for Telegram bot callback queries."""
+    service = NotificationService(db)
+    callback_query = payload.get("callback_query")
+    if callback_query:
+        result = await service.handle_callback_telegram(callback_query, db)
+        return result
+    return {"status": "ok", "message": "No callback query in payload"}
+
+
+@router.post("/webhook/discord")
+async def discord_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Webhook listener cho Discord Interactions (Nút bấm)."""
+    # 1. Lấy signature từ Headers (Bắt buộc của Discord)
+    signature = request.headers.get("X-Signature-Ed25519")
+    timestamp = request.headers.get("X-Signature-Timestamp")
+    
+    if not signature or not timestamp:
+        raise HTTPException(status_code=401, detail="Missing Discord signatures")
+
+    # Đọc body thô để verify chữ ký
+    raw_body = await request.body()
+    
+    service = NotificationService(db)
+    
+    # 2. Verify chữ ký (Logic này bạn sẽ viết trong NotificationService)
+    is_valid = service.verify_discord_signature(raw_body, signature, timestamp)
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+
+    payload = await request.json()
+    
+    # 3. Phản hồi PING của Discord (Bắt buộc)
+    if payload.get("type") == 1: # 1 là PING
+        return {"type": 1} # Trả về PONG
+
+    # 4. Xử lý khi Admin bấm nút (type == 3 là MESSAGE_COMPONENT)
+    if payload.get("type") == 3:
+        result = await service.handle_callback_discord(payload, db)
+        return result
+
+    return {"status": "ok"}

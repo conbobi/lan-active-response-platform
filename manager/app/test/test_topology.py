@@ -1,7 +1,10 @@
+import pytest
 import requests
 import time
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+pytestmark = pytest.mark.skip(reason="Integration test requiring live environment")
 
 BASE_URL = "http://localhost:8002/api/v1"
 HEALTH_URL = "http://localhost:8002/health"

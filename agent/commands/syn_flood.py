@@ -1,5 +1,6 @@
 import subprocess
-from agent.commands.base import BaseCommand
+from .base import BaseCommand
+
 
 class SynFloodCommand(BaseCommand):
     name = "syn_flood"

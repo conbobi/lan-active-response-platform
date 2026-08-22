@@ -3,8 +3,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.notification import NotificationConfig, NotificationLog
 from app.repositories.base import SqlAlchemyRepository
-
-
 class NotificationRepository(SqlAlchemyRepository[NotificationConfig]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, NotificationConfig)

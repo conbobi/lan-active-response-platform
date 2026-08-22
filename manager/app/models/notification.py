@@ -7,15 +7,14 @@ from app.models.base import Base
 
 
 class NotificationConfig(Base):
-    """Model representing notification channel target configurations (Telegram, etc.)."""
+    """Model representing notification channel target configurations (Discord, etc.)."""
     __tablename__ = "notification_configs"
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    channel: Mapped[str] = mapped_column(String(64), default="telegram", nullable=False)
-    bot_token: Mapped[str] = mapped_column(String(256), nullable=False)
-    chat_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    channel: Mapped[str] = mapped_column(String(64), default="discord", nullable=False)
+    webhook_url: Mapped[str] = mapped_column(String(512), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -35,7 +34,7 @@ class NotificationLog(Base):
         String(64), ForeignKey("notification_configs.id"), nullable=True
     )
     channel: Mapped[str] = mapped_column(String(64), nullable=False)
-    recipient: Mapped[str] = mapped_column(String(128), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(512), nullable=False)
     message: Mapped[str] = mapped_column(String(2048), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
