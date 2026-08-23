@@ -16,6 +16,7 @@ from app.models.report import Report
 from app.models.notification import NotificationConfig, NotificationLog
 from app.models.threat_indicator import ThreatIndicator
 from app.models.system_setting import SystemSetting
+from app.models.detection_rule import DetectionRule
 
 __all__ = [
     "Base",
@@ -38,4 +39,5 @@ __all__ = [
     "NotificationLog",
     "ThreatIndicator",
     "SystemSetting",
+    "DetectionRule",
 ]

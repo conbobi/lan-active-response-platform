@@ -15,6 +15,7 @@ from app.repositories.report_repository import ReportRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.threat_indicator_repository import ThreatIndicatorRepository
 from app.repositories.system_setting_repository import SystemSettingRepository
+from app.repositories.detection_rule_repository import DetectionRuleRepository
 
 __all__ = [
     "AbstractRepository",
@@ -35,4 +36,5 @@ __all__ = [
     "NotificationRepository",
     "ThreatIndicatorRepository",
     "SystemSettingRepository",
+    "DetectionRuleRepository",
 ]

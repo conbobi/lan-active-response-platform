@@ -50,6 +50,8 @@ services:
     depends_on:
       manager:
         condition: service_healthy
+    cap_add:
+      - NET_ADMIN
   client2:
     build: ./agent
     hostname: client2
@@ -61,7 +63,8 @@ services:
     depends_on:
       manager:
         condition: service_healthy
-
+    cap_add:
+      - NET_ADMIN
   client3:
     build: ./agent
     hostname: client3
@@ -73,7 +76,8 @@ services:
     depends_on:
       manager:
         condition: service_healthy
-
+    cap_add:
+      - NET_ADMIN
   client4:
     build: ./agent
     hostname: client4
@@ -85,7 +89,8 @@ services:
     depends_on:
       manager:
         condition: service_healthy
-
+    cap_add:
+      - NET_ADMIN
   attacker:
     build: ./agent
     hostname: attacker
@@ -98,7 +103,8 @@ services:
       manager:
         condition: service_healthy
     privileged: true
-
+    cap_add:
+      - NET_ADMIN
 networks:
   larp-net:
     driver: bridge #Đây chính là "hệ thống giao thông nội bộ" của thành phố ảo

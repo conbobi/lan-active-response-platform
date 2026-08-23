@@ -1,6 +1,6 @@
 import uuid
 import logging
-from typing import Dict, Any, Tuple, Union
+from typing import Dict, Any, Tuple, Union, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.risk_score import RiskScoreRecord
@@ -15,6 +15,8 @@ from app.services.notification_service import NotificationService
 from app.services.threat_intelligence_service import ThreatIntelligenceService
 from app.services.incident_service import IncidentService
 from app.services.setting_service import SettingService
+from app.services.detection_rule_service import DetectionRuleService
+from app.services.risk_rules import create_default_registry, RiskRuleRegistry
 from app.services.command_dispatcher import command_dispatcher
 
 logger = logging.getLogger(__name__)
@@ -22,12 +24,12 @@ logger = logging.getLogger(__name__)
 
 class RiskAssessmentService:
     """
-    Intelligent dynamic risk assessment service (Strategy Pattern).
-    Evaluates multi-factor telemetry risk scores, threat intelligence indicators,
-    whitelist rules, and executes automated isolation, incident creation, & notification workflows.
+    Intelligent dynamic risk assessment service using Registry Pattern and Strategy Pattern.
+    Evaluates composite telemetry risk scores across 13 security risk rules, whitelist rules,
+    and executes automated network isolation, incident creation, and notifications.
     """
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, registry: Optional[RiskRuleRegistry] = None):
         self.session = session
         self.risk_repo = RiskScoreRepository(session)
         self.agent_repo = AgentRepository(session)
@@ -35,97 +37,54 @@ class RiskAssessmentService:
         self.notification_service = NotificationService(session)
         self.threat_intel_service = ThreatIntelligenceService(session)
         self.setting_service = SettingService(session)
+        self.detection_rule_service = DetectionRuleService(session)
+        self.registry = registry if registry is not None else create_default_registry()
 
     async def evaluate(
         self, agent_id: str, data: Union[RiskAssessmentDTO, Dict[str, Any]]
     ) -> Tuple[float, Dict[str, Any]]:
         """
-        Evaluate composite risk score (0 - 100) based on telemetry factors:
-        - CPU Spikes
-        - Unlisted / Suspicious processes
-        - Threat Intelligence Indicators (Hashes, malicious IPs)
-        - High risk network connections
-        - File system modification count
+        Evaluate composite risk score (0 - 100) using dynamic rules in RiskRuleRegistry.
         """
+        # Convert incoming data to standard telemetry dict
         if isinstance(data, RiskAssessmentDTO):
-            cpu = data.cpu_usage
-            processes = data.process_list
-            connections = data.network_connections
-            file_changes = data.file_changes_count
+            telemetry = data.model_dump()
+        elif isinstance(data, dict):
+            try:
+                dto = RiskAssessmentDTO.model_validate(data)
+                telemetry = dto.model_dump()
+            except Exception:
+                telemetry = data
         else:
-            cpu = data.get("cpu_usage", 0.0)
-            processes = data.get("process_list", [])
-            connections = data.get("network_connections", [])
-            file_changes = data.get("file_changes_count", 0)
+            telemetry = getattr(data, "__dict__", {})
+
+        # Try to sync rule configurations from database
+        try:
+            await self.detection_rule_service.sync_registry(self.registry)
+        except Exception as e:
+            logger.debug(f"Risk rule DB sync skipped/failed: {e}")
+
+        context = {
+            "threat_intel_service": self.threat_intel_service,
+            "whitelist_service": self.whitelist_service,
+            "setting_service": self.setting_service,
+            "session": self.session,
+            "agent_id": agent_id,
+        }
 
         score = 0.0
         factors: Dict[str, Any] = {}
 
-        # 1. CPU Usage Evaluation
-        if cpu > 85.0:
-            score += 30.0
-            factors["cpu"] = f"Critical CPU spike ({cpu}%)"
-        elif cpu > 70.0:
-            score += 15.0
-            factors["cpu"] = f"Elevated CPU usage ({cpu}%)"
-
-        # 2. Suspicious Process & Threat Intel Hash Evaluation
-        suspicious_proc_count = 0
-        threat_hash_count = 0
-        proc_names = []
-        for proc in processes:
-            name = proc.get("name", "") if isinstance(proc, dict) else getattr(proc, "name", "")
-            p_hash = proc.get("hash") if isinstance(proc, dict) else getattr(proc, "hash", None)
-
-            if proc.get("is_suspicious") or name.lower() in ["mimikatz.exe", "netcat", "nc.exe", "nmap", "chisel"]:
-                suspicious_proc_count += 1
-                proc_names.append(name)
-
-            if p_hash:
-                intel_res = await self.threat_intel_service.check_hash(p_hash)
-                if intel_res.get("is_malicious"):
-                    threat_hash_count += 1
-
-        if suspicious_proc_count > 0:
-            score += min(45.0, suspicious_proc_count * 25.0)
-            factors["processes"] = f"Found {suspicious_proc_count} suspicious processes: {', '.join(proc_names)}"
-
-        if threat_hash_count > 0:
-            score += 40.0
-            factors["threat_intel_hash"] = f"Matched {threat_hash_count} malicious file hashes with Threat Intelligence"
-
-        # 3. Network Connections & Threat Intel IP Evaluation
-        suspicious_ports = {4444, 1337, 31337, 6667, 23}
-        suspicious_conns = 0
-        threat_ip_count = 0
-
-        for conn in connections:
-            dst_port = conn.get("dst_port", 0) if isinstance(conn, dict) else getattr(conn, "dst_port", 0)
-            dst_ip = conn.get("dst_ip") if isinstance(conn, dict) else getattr(conn, "dst_ip", None)
-
-            if dst_port in suspicious_ports:
-                suspicious_conns += 1
-
-            if dst_ip:
-                ip_intel = await self.threat_intel_service.check_ip(dst_ip)
-                if ip_intel.get("is_malicious"):
-                    threat_ip_count += 1
-
-        if suspicious_conns > 0:
-            score += min(35.0, suspicious_conns * 20.0)
-            factors["network"] = f"Detected {suspicious_conns} connections to suspicious ports"
-
-        if threat_ip_count > 0:
-            score += 30.0
-            factors["threat_intel_ip"] = f"Detected {threat_ip_count} connections to malicious IPs"
-
-        # 4. File Changes Evaluation
-        if file_changes > 100:
-            score += 25.0
-            factors["file_changes"] = f"Massive file modifications count ({file_changes})"
-        elif file_changes > 30:
-            score += 10.0
-            factors["file_changes"] = f"Elevated file modifications count ({file_changes})"
+        # Evaluate each enabled rule in registry
+        for rule in self.registry.get_enabled_rules():
+            try:
+                rule_score, reason = await rule.evaluate(telemetry, context)
+                if rule_score > 0:
+                    weighted_score = rule_score * getattr(rule, "weight", 1.0)
+                    score += weighted_score
+                    factors[rule.rule_id] = reason
+            except Exception as exc:
+                logger.error(f"Error evaluating rule '{rule.rule_id}': {exc}", exc_info=True)
 
         final_score = min(100.0, round(score, 2))
         factors["total_score"] = final_score

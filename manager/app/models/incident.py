@@ -11,7 +11,7 @@ class Incident(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
-    description: Mapped[str] = mapped_column(String(1024), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
     severity: Mapped[IncidentSeverity] = mapped_column(
         Enum(IncidentSeverity), default=IncidentSeverity.MEDIUM, nullable=False
     )
