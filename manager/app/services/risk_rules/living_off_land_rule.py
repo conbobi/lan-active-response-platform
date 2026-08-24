@@ -8,6 +8,7 @@ class LivingOffLandRule(RiskRule):
     description = "Detects abuse of legitimate system administrative tools for malicious execution."
     enabled = True
     weight = 1.0
+    category = "behavior"
 
     LOLBIN_BINARIES = [
         "powershell.exe", "powershell", "pwsh.exe", "wmic.exe", "wmic",

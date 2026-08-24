@@ -10,6 +10,7 @@ from app.schemas.path_release import PathReleaseDTO
 from app.schemas.command_ack import CommandAckDTO
 from app.services.topology_service import topology_facade
 from app.services.command_dispatcher import command_dispatcher
+from app.services.risk_assessment_service import RiskAssessmentService
 from app.core.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,20 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                                 {"command_id": c.id, "action": c.action, "payload": c.payload}
                                 for c in pending_cmds
                             ]
+                        }
+
+                    elif msg_type == "TELEMETRY_RISK":
+                        risk_service = RiskAssessmentService(session)
+                        payload = data.get("payload", {})
+                        target_agent_id = payload.get("agent_id", agent_id)
+                        record = await risk_service.process_risk(
+                            agent_id=target_agent_id,
+                            data=payload
+                        )
+                        response_payload = {
+                            "status": "ack",
+                            "message": "Risk telemetry processed",
+                            "score": record.score
                         }
 
                     elif msg_type == "TOPOLOGY_UPDATE":

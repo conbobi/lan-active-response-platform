@@ -72,6 +72,7 @@ class RiskRuleRegistry:
             if rule:
                 rule.enabled = getattr(record, "enabled", rule.enabled)
                 rule.weight = getattr(record, "weight", rule.weight)
+                rule.category = getattr(record, "category", getattr(rule, "category", "os"))
                 rec_cfg = getattr(record, "config", None)
                 if rec_cfg and isinstance(rec_cfg, dict):
                     rule.config = rec_cfg

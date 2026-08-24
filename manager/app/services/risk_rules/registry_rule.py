@@ -8,6 +8,7 @@ class RegistryRule(RiskRule):
     description = "Detects registry keys modification targeting system persistence and startup locations."
     enabled = True
     weight = 1.0
+    category = "os"
 
     DEFAULT_PERSISTENCE_KEYS = [
         "\\currentversion\\run",

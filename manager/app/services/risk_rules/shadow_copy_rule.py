@@ -8,6 +8,7 @@ class ShadowCopyRule(RiskRule):
     description = "Detects attempts to delete Volume Shadow Copies or disable backup catalog recovery."
     enabled = True
     weight = 1.0
+    category = "behavior"
 
     SHADOW_PATTERNS = [
         "vssadmin delete shadows",

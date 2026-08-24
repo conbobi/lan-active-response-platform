@@ -8,6 +8,7 @@ class C2CommunicationRule(RiskRule):
     description = "Detects connections to potential Command & Control servers or dynamic DNS infrastructure."
     enabled = True
     weight = 1.0
+    category = "network"
 
     DEFAULT_SUSPICIOUS_DOMAINS = [
         ".duckdns.org", ".ngrok.io", ".onion", ".bazar", ".bip.sh", ".serveo.net", ".trycloudflare.com"

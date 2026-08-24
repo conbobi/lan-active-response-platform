@@ -8,6 +8,7 @@ class MassFileModificationRule(RiskRule):
     description = "Detects rapid mass file modifications or file extension mass renaming."
     enabled = True
     weight = 1.0
+    category = "behavior"
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         mass_flag = telemetry.get("mass_file_modification", False)

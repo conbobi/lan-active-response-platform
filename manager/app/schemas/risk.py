@@ -66,17 +66,17 @@ class DnsQueryItem(BaseModel):
 class RiskAssessmentDTO(BaseModel):
     agent_id: str
     cpu_usage: float = 0.0
-    process_list: List[Union[ProcessItem, Dict[str, Any]]] = Field(default_factory=list)
-    network_connections: List[Union[NetworkConnectionItem, Dict[str, Any]]] = Field(default_factory=list)
+    process_list: List[Dict[str, Any]] = Field(default_factory=list)
+    network_connections: List[Dict[str, Any]] = Field(default_factory=list)
     file_changes_count: int = 0
-    process_tree: List[Union[ProcessTreeItem, Dict[str, Any]]] = Field(default_factory=list)
-    registry_changes: List[Union[RegistryChange, Dict[str, Any]]] = Field(default_factory=list)
-    credential_access_events: List[Union[CredentialAccessEvent, Dict[str, Any]]] = Field(default_factory=list)
-    shadow_copy_deletion: bool = False
     suspicious_commands: List[str] = Field(default_factory=list)
-    lateral_movement_events: List[Union[LateralMovementEvent, Dict[str, Any]]] = Field(default_factory=list)
+    shadow_copy_deletion: bool = False
+    registry_changes: List[Dict[str, Any]] = Field(default_factory=list)
+    credential_access_events: List[Dict[str, Any]] = Field(default_factory=list)
+    lateral_movement_events: List[Dict[str, Any]] = Field(default_factory=list)
     mass_file_modification: bool = False
-    dns_queries: List[Union[DnsQueryItem, Dict[str, Any], str]] = Field(default_factory=list)
+    dns_queries: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    process_tree: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class RiskScoreOut(ORMBaseModel):

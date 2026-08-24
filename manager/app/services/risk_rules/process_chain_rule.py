@@ -8,6 +8,7 @@ class ProcessChainRule(RiskRule):
     description = "Detects suspicious parent-child process chains (e.g. Office apps spawning shells)."
     enabled = True
     weight = 1.0
+    category = "process"
 
     DEFAULT_PARENTS = [
         "winword.exe", "word.exe", "excel.exe", "powerpnt.exe", "outlook.exe",

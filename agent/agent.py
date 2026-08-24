@@ -36,6 +36,65 @@ def collect_stats():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
+def get_process_list():
+    """Lấy danh sách process đang chạy, đánh dấu suspicious nếu tên nằm trong blacklist."""
+    suspicious_names = {"mimikatz.exe", "netcat", "nc.exe", "nmap", "chisel", "vssadmin.exe", "powershell.exe", "cmd.exe"}
+    processes = []
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+            try:
+                info = proc.info
+                name = info.get('name') or ""
+                path = info.get('exe') or ""
+                cmdline = " ".join(info.get('cmdline') or [])
+                is_suspicious = any(s in name.lower() for s in suspicious_names)
+                processes.append({
+                    "pid": info.get('pid'),
+                    "name": name,
+                    "path": path,
+                    "cmdline": cmdline,
+                    "is_suspicious": is_suspicious
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+    return processes[:50]   # Giới hạn 50 process
+
+def get_network_connections():
+    """Lấy các kết nối mạng đang mở, đánh dấu suspicious nếu cổng đích nằm trong danh sách lạ."""
+    suspicious_ports = {4444, 1337, 31337, 6667, 23}
+    connections = []
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.status == 'ESTABLISHED' or conn.status == 'LISTEN':
+                laddr = conn.laddr
+                raddr = conn.raddr
+                dst_ip = raddr.ip if raddr else "0.0.0.0"
+                dst_port = raddr.port if raddr else (laddr.port if laddr else 0)
+                connections.append({
+                    "src_ip": laddr.ip if laddr else "0.0.0.0",
+                    "src_port": laddr.port if laddr else 0,
+                    "dst_ip": dst_ip,
+                    "dst_port": dst_port,
+                    "status": conn.status,
+                    "is_suspicious": dst_port in suspicious_ports
+                })
+    except Exception:
+        pass
+    return connections[:30]
+
+def get_file_changes_count():
+    """Đếm số file .encrypted hoặc có thay đổi gần đây trong /tmp."""
+    count = 0
+    try:
+        for f in os.listdir('/tmp'):
+            if f.endswith('.encrypted'):
+                count += 1
+    except Exception:
+        pass
+    return count
+
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
     params = cmd.get("payload", {})
@@ -71,12 +130,43 @@ async def send_stats(websocket):
             pass
         await asyncio.sleep(5)
 
+async def send_risk_telemetry(websocket):
+    await asyncio.sleep(2)
+    while True:
+        try:
+            procs = get_process_list()
+            file_changes = get_file_changes_count()
+            suspicious_cmds = [p["cmdline"] for p in procs if p.get("is_suspicious") and p.get("cmdline")]
+            payload = {
+                "agent_id": AGENT_ID,
+                "cpu_usage": psutil.cpu_percent(interval=1),
+                "process_list": procs,
+                "network_connections": get_network_connections(),
+                "file_changes_count": file_changes,
+                "suspicious_commands": suspicious_cmds,
+                "shadow_copy_deletion": False,
+                "mass_file_modification": file_changes > 20,
+                "registry_changes": [],
+                "credential_access_events": [],
+                "lateral_movement_events": [],
+                "dns_queries": [],
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            message = {"type": "TELEMETRY_RISK", "payload": payload}
+            await websocket.send(json.dumps(message))
+        except Exception as e:
+            print(f"Error sending risk telemetry: {e}", flush=True)
+        await asyncio.sleep(10)
+
 async def main_agent():
     while True:
         try:
             async with websockets.connect(MANAGER_URL) as ws:
                 print(f"Connected to {MANAGER_URL}", flush=True)
-                await send_stats(ws)
+                await asyncio.gather(
+                    send_stats(ws),
+                    send_risk_telemetry(ws),
+                )
         except Exception as e:
             print(f"Error: {e}. Retrying in 5s...", flush=True)
             await asyncio.sleep(5)

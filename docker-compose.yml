@@ -52,6 +52,9 @@ services:
         condition: service_healthy
     cap_add:
       - NET_ADMIN
+    mem_limit: 2g # Giới hạn tối đa 2GB RAM
+    mem_reservation: 512m # Đảm bảo ít nhất 512MB
+    cpus: 0.5 # Giới hạn CPU (tùy chọn)
   client2:
     build: ./agent
     hostname: client2
@@ -65,6 +68,9 @@ services:
         condition: service_healthy
     cap_add:
       - NET_ADMIN
+    mem_limit: 2g # Giới hạn tối đa 2GB RAM
+    mem_reservation: 512m # Đảm bảo ít nhất 512MB
+    cpus: 0.5 # Giới hạn CPU (tùy chọn) 
   client3:
     build: ./agent
     hostname: client3
@@ -78,6 +84,9 @@ services:
         condition: service_healthy
     cap_add:
       - NET_ADMIN
+    mem_limit: 2g # Giới hạn tối đa 2GB RAM
+    mem_reservation: 512m # Đảm bảo ít nhất 512MB
+    cpus: 0.5 # Giớ i hạn CPU (tùy chọn) 
   client4:
     build: ./agent
     hostname: client4
@@ -91,6 +100,9 @@ services:
         condition: service_healthy
     cap_add:
       - NET_ADMIN
+    mem_limit: 2g # Giới hạn tối đa 2GB RAM
+    mem_reservation: 512m # Đảm bảo ít nhất 512MB
+    cpus: 0.5 # Giới hạn CPU (tùy chọn) 
   attacker:
     build: ./agent
     hostname: attacker

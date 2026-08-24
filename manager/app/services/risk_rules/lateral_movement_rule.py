@@ -8,6 +8,7 @@ class LateralMovementRule(RiskRule):
     description = "Detects internal reconnaissance, port scanning, SMB/WMI session sweeps, or WinRM misuse."
     enabled = True
     weight = 1.0
+    category = "network"
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         lateral_events = telemetry.get("lateral_movement_events", [])

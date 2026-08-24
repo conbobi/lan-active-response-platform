@@ -2,15 +2,25 @@
 import React, { useState, useEffect } from 'react';
 import useSettings from '../hooks/useSettings';
 import Button from '../components/ui/Button';
-import { FiSave, FiShield, FiSliders, FiCheckCircle } from 'react-icons/fi';
+import { FiSave, FiShield, FiSliders, FiFileText } from 'react-icons/fi';
 
 export default function Settings() {
-  const { settings, loading, saving, refreshSettings, updateSettingKey, updateRiskThresholds } = useSettings();
+  const {
+    settings,
+    loading,
+    saving,
+    updateSettingKey,
+    updateRiskThresholds,
+    updateFileChangesThresholds,
+  } = useSettings();
 
   const [autoIsolate, setAutoIsolate] = useState(85);
   const [alertWithButtons, setAlertWithButtons] = useState(70);
   const [alertThreshold, setAlertThreshold] = useState(50);
   const [logThreshold, setLogThreshold] = useState(20);
+
+  const [fileCritical, setFileCritical] = useState(100);
+  const [fileElevated, setFileElevated] = useState(30);
 
   const [autoResponse, setAutoResponse] = useState(true);
   const [notifyEmail, setNotifyEmail] = useState(true);
@@ -23,6 +33,10 @@ export default function Settings() {
       setAlertWithButtons(settings.risk_thresholds.alert_with_buttons ?? 70);
       setAlertThreshold(settings.risk_thresholds.alert ?? 50);
       setLogThreshold(settings.risk_thresholds.log ?? 20);
+    }
+    if (settings && settings.file_changes_thresholds) {
+      setFileCritical(settings.file_changes_thresholds.file_changes_critical ?? 100);
+      setFileElevated(settings.file_changes_thresholds.file_changes_elevated ?? 30);
     }
     if (settings) {
       setAutoResponse(settings.auto_response_enabled ?? true);
@@ -37,6 +51,10 @@ export default function Settings() {
       alert_with_buttons: Number(alertWithButtons),
       alert: Number(alertThreshold),
       log: Number(logThreshold),
+    });
+    await updateFileChangesThresholds({
+      file_changes_critical: Number(fileCritical),
+      file_changes_elevated: Number(fileElevated),
     });
     await updateSettingKey('auto_response_enabled', autoResponse);
     await updateSettingKey('email_notifications_enabled', notifyEmail);
@@ -80,7 +98,7 @@ export default function Settings() {
       <div className="page-header">
         <div>
           <h1 className="page-title">SOC Platform Settings</h1>
-          <p className="page-subtitle">Configure risk escalation thresholds, automated response policies, and notifications</p>
+          <p className="page-subtitle">Configure risk escalation thresholds, file modification anomalies, and notifications</p>
         </div>
         <Button variant="primary" size="md" iconLeft={<FiSave size={14} />} onClick={handleSaveAll} disabled={saving}>
           {saving ? 'Saving...' : savedSuccess ? '✓ Settings Saved' : 'Save Changes'}
@@ -143,6 +161,47 @@ export default function Settings() {
             />
             <span style={{ fontWeight: 700, color: 'var(--text-secondary)', minWidth: 32, textAlign: 'right' }}>{logThreshold}</span>
           </div>
+        </Row>
+      </Section>
+
+      {/* File Changes Anomaly Thresholds */}
+      <Section title="File Changes Anomaly Thresholds" desc="Configure file modification event count cutoffs for triggering risk anomalies.">
+        <Row label="Critical File Changes Threshold" desc="Trigger maximum risk points when modified files count exceeds this number (default: 100)">
+          <input
+            type="number"
+            min="10"
+            max="10000"
+            value={fileCritical}
+            onChange={(e) => setFileCritical(+e.target.value)}
+            style={{
+              width: 100,
+              padding: '0.4rem 0.6rem',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              fontWeight: 600,
+            }}
+          />
+        </Row>
+
+        <Row label="Elevated File Changes Threshold" desc="Trigger medium risk points when modified files count exceeds this number (default: 30)">
+          <input
+            type="number"
+            min="5"
+            max="1000"
+            value={fileElevated}
+            onChange={(e) => setFileElevated(+e.target.value)}
+            style={{
+              width: 100,
+              padding: '0.4rem 0.6rem',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              fontWeight: 600,
+            }}
+          />
         </Row>
       </Section>
 

@@ -1,274 +1,271 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Line } from 'react-chartjs-2';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler } from 'chart.js';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useAgents } from '../hooks/useAgents';
+import AgentDetailModal from '../components/ui/AgentDetailModal';
+import Badge from '../components/ui/Badge';
+import SearchBar from '../components/ui/SearchBar';
+import Dropdown from '../components/ui/Dropdown';
+import Pagination from '../components/ui/Pagination';
 import Button from '../components/ui/Button';
-import { FiZap, FiSquare, FiTerminal } from 'react-icons/fi';
-import api from '../api/api';
-import { useAgents } from '../hooks/useAgents';   // <-- import hook useAgents
+import { FiEye, FiLock, FiUnlock, FiCpu, FiRefreshCw } from 'react-icons/fi';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Filler);
+const ITEMS_PER_PAGE = 8;
 
-const makeLog = (msg, type = 'normal') => ({
-  id: Date.now() + Math.random(),
-  msg,
-  type,
-  time: new Date().toLocaleTimeString(),
-});
+const STATUS_OPTS = [
+  { value: 'all', label: 'All Status' },
+  { value: 'online', label: 'Online' },
+  { value: 'offline', label: 'Offline' },
+  { value: 'isolated', label: 'Isolated' },
+];
 
-export default function Attack() {
-  const { agents } = useAgents();   // <-- sử dụng hook để lấy danh sách agents
-  const [status, setStatus] = useState('idle'); // idle | running | stopped
-  const [logs, setLogs] = useState([makeLog('Attack Simulation ready. Select target and launch.', 'ok')]);
-  const [packets, setPackets] = useState([0]);
-  const [labels, setLabels] = useState(['0s']);
-  const [targetAgentId, setTargetAgentId] = useState('');
-  const [targetIp, setTargetIp] = useState('');
-  const [port, setPort] = useState('80');
-  const [duration, setDuration] = useState('10');
-  const [loading, setLoading] = useState(false);
+export default function Agents() {
+  const { agents, loading, handleIsolate, handleUnisolate, refreshAgents } = useAgents();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [blockIpInput, setBlockIpInput] = useState({});
 
-  const intervalRef = useRef(null);
-  const logRef = useRef(null);
-  const t = useRef(0);
+  // Lọc và tìm kiếm
+  const filteredAgents = useMemo(() => {
+    return agents.filter((agent) => {
+      const matchSearch =
+        (agent.hostname && agent.hostname.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (agent.ip && agent.ip.includes(searchTerm)) ||
+        (agent.ip_address && agent.ip_address.includes(searchTerm)) ||
+        (agent.id && agent.id.toLowerCase().includes(searchTerm.toLowerCase()));
+      const matchStatus = statusFilter === 'all' || agent.status === statusFilter;
+      return matchSearch && matchStatus;
+    });
+  }, [agents, searchTerm, statusFilter]);
 
-  const addLog = (msg, type) => setLogs((p) => [...p.slice(-60), makeLog(msg, type)]);
+  const totalPages = Math.ceil(filteredAgents.length / ITEMS_PER_PAGE) || 1;
+  const paginatedAgents = filteredAgents.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
-  const handleAgentSelect = (e) => {
-    const agentId = e.target.value;
-    const agent = agents.find((a) => a.id === agentId);
-    setTargetAgentId(agentId);
-    if (agent) {
-      setTargetIp(agent.ip);   // agent.ip đã được map từ ip_address trong useAgents
-    } else {
-      setTargetIp('');
-    }
-  };
+  // Reset trang về 1 khi thay đổi filter/search
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter]);
 
-  const launch = async () => {
-    if (!targetAgentId || !targetIp) {
-      addLog('Please select a target agent.', 'warn');
+  const handleBlockIp = async (agentId) => {
+    const ip = blockIpInput[agentId] || '';
+    if (!ip) {
+      alert('Please enter an IP address.');
       return;
     }
-    setLoading(true);
-    setStatus('running');
-    addLog(`[SYN Flood] Targeting ${targetIp}:${port} via agent ${targetAgentId}`, 'warn');
-    try {
-      await api.post('/attack/syn-flood', {
-        target_agent_id: targetAgentId,
-        target_ip: targetIp,
-        target_port: Number(port),
-        duration: Number(duration),
-      });
-      addLog('Attack command sent successfully.', 'ok');
-    } catch (err) {
-      addLog(`Error: ${err.message}`, 'err');
-    } finally {
-      setLoading(false);
-      setStatus('stopped');
-    }
+    // TODO: Gọi API block IP tương ứng (nếu có)
+    alert(`Blocking IP ${ip} on agent ${agentId}`);
+    setBlockIpInput({ ...blockIpInput, [agentId]: '' });
   };
 
-  const stop = () => {
-    clearInterval(intervalRef.current);
-    setStatus('stopped');
-    addLog('[STOPPED] Attack terminated by operator.', 'ok');
-  };
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
-
-  useEffect(() => () => clearInterval(intervalRef.current), []);
-
-  const chartData = {
-    labels,
-    datasets: [
-      {
-        label: 'Packets/s',
-        data: packets,
-        borderColor: '#ef4444',
-        backgroundColor: 'rgba(239,68,68,0.1)',
-        tension: 0.4,
-        fill: true,
-        pointRadius: 2,
-        borderWidth: 2,
-      },
-    ],
-  };
-  const chartOpts = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: {
-      y: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8', font: { size: 10 } } },
-      x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 10 }, maxTicksLimit: 8 } },
-    },
-  };
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="page-header">
+          <h1 className="page-title">Agents</h1>
+        </div>
+        <div className="card skeleton" style={{ height: '300px' }} />
+      </div>
+    );
+  }
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Attack Simulation</h1>
-          <p className="page-subtitle">Controlled SYN Flood simulation for testing defenses</p>
+          <h1 className="page-title">Agents Management</h1>
+          <p className="page-subtitle">Monitor and control system agents</p>
+        </div>
+        <Button variant="outline" iconLeft={<FiRefreshCw size={15} />} onClick={refreshAgents}>
+          Refresh
+        </Button>
+      </div>
+
+      {/* Thanh công cụ */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div
+          style={{
+            padding: '1rem 1.25rem',
+            borderBottom: '1px solid var(--border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiCpu size={16} color="var(--primary)" />
+            <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>All Agents</span>
+            <span className="badge badge-info">{filteredAgents.length}</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <SearchBar
+              value={searchTerm}
+              onChange={setSearchTerm}
+              placeholder="Search hostname or IP…"
+              style={{ width: 220 }}
+            />
+            <Dropdown
+              label="Status"
+              options={STATUS_OPTS}
+              value={statusFilter}
+              onChange={setStatusFilter}
+            />
+          </div>
+        </div>
+
+        {/* Bảng danh sách */}
+        <div style={{ overflowX: 'auto' }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Agent ID</th>
+                <th>Hostname</th>
+                <th>IP Address</th>
+                <th>Status</th>
+                <th>CPU</th>
+                <th>RAM</th>
+                <th>Firewall</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginatedAgents.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                    No agents found
+                  </td>
+                </tr>
+              ) : (
+                paginatedAgents.map((agent) => (
+                  <tr key={agent.id}>
+                    <td style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {agent.id}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{agent.hostname}</td>
+                    <td>{agent.ip}</td>
+                    <td>
+                      <Badge status={agent.status} />
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 80 }}>
+                        <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${agent.cpu}%`,
+                              background:
+                                agent.cpu > 80
+                                  ? 'var(--error)'
+                                  : agent.cpu > 60
+                                    ? 'var(--warning)'
+                                    : 'var(--success)',
+                              borderRadius: 99,
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{agent.cpu}%</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 80 }}>
+                        <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${agent.ram}%`,
+                              background:
+                                agent.ram > 80
+                                  ? 'var(--error)'
+                                  : agent.ram > 60
+                                    ? 'var(--warning)'
+                                    : 'var(--primary)',
+                              borderRadius: 99,
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{agent.ram}%</span>
+                      </div>
+                    </td>
+                    <td>
+                      {agent.firewall ? (
+                        <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: '0.8rem' }}>Active</span>
+                      ) : (
+                        <span style={{ color: 'var(--error)', fontSize: '0.8rem' }}>Off</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="table-actions" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <button className="action-btn" onClick={() => setSelectedAgent(agent)} title="View Details">
+                          <FiEye size={13} />
+                        </button>
+
+                        {agent.status !== 'isolated' ? (
+                          <button className="action-btn" onClick={() => handleIsolate(agent.id)} title="Isolate Agent">
+                            <FiLock size={13} />
+                          </button>
+                        ) : (
+                          <button className="action-btn" onClick={() => handleUnisolate(agent.id)} title="Release Agent">
+                            <FiUnlock size={13} />
+                          </button>
+                        )}
+
+                        {/* Block IP input & button (nếu cần) */}
+                        {/*
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '4px' }}>
+                          <input
+                            type="text"
+                            placeholder="IP to block"
+                            value={blockIpInput[agent.id] || ''}
+                            onChange={(e) => setBlockIpInput({ ...blockIpInput, [agent.id]: e.target.value })}
+                            style={{
+                              width: '90px',
+                              padding: '3px 8px',
+                              background: 'var(--bg)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 'var(--radius-sm)',
+                              color: 'var(--text-primary)',
+                              fontSize: '0.75rem',
+                              outline: 'none',
+                            }}
+                          />
+                          <button className="action-btn danger" onClick={() => handleBlockIp(agent.id)} title="Block IP">
+                            <FiSlash size={13} />
+                          </button>
+                        </div>
+                        */}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Phân trang */}
+        <div
+          style={{
+            padding: '1rem 1.25rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            borderTop: '1px solid var(--border)',
+          }}
+        >
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            Showing {Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, filteredAgents.length)}–
+            {Math.min(currentPage * ITEMS_PER_PAGE, filteredAgents.length)} of {filteredAgents.length}
+          </span>
+          <Pagination current={currentPage} total={totalPages} onChange={setCurrentPage} />
         </div>
       </div>
 
-      <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
-        <div className="card">
-          <h3 style={{ fontWeight: 700, marginBottom: '1rem', fontSize: '0.95rem' }}>Target Configuration</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {/* Dropdown chọn agent mục tiêu */}
-            <div>
-              <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>
-                Target Agent
-              </label>
-              <select
-                value={targetAgentId}
-                onChange={handleAgentSelect}
-                disabled={status === 'running'}
-                style={{
-                  width: '100%',
-                  padding: '0.55rem 0.75rem',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.875rem',
-                  background: 'var(--bg)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                }}
-              >
-                <option value="">-- Select Agent --</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.hostname} ({agent.ip})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Hiển thị IP đã chọn (read-only) */}
-            <div>
-              <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>
-                Target IP
-              </label>
-              <input
-                value={targetIp}
-                readOnly
-                style={{
-                  width: '100%',
-                  padding: '0.55rem 0.75rem',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.875rem',
-                  background: 'var(--bg)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>
-                Port
-              </label>
-              <input
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                disabled={status === 'running'}
-                style={{
-                  width: '100%',
-                  padding: '0.55rem 0.75rem',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.875rem',
-                  background: 'var(--bg)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>
-                Duration (seconds)
-              </label>
-              <input
-                value={duration}
-                onChange={(e) => setDuration(e.target.value)}
-                disabled={status === 'running'}
-                style={{
-                  width: '100%',
-                  padding: '0.55rem 0.75rem',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.875rem',
-                  background: 'var(--bg)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                }}
-              />
-            </div>
-          </div>
-
-          <div className={`attack-status ${status}`} style={{ marginTop: '1rem' }}>
-            <span className={`attack-dot ${status}`} />
-            {status === 'idle' ? 'Ready to launch' : status === 'running' ? 'Attack in progress...' : 'Attack stopped'}
-          </div>
-
-          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.75rem' }}>
-            <Button
-              variant="danger"
-              size="md"
-              iconLeft={<FiZap size={14} />}
-              onClick={launch}
-              disabled={status === 'running' || loading}
-            >
-              Launch SYN Flood
-            </Button>
-            <Button
-              variant="outline"
-              size="md"
-              iconLeft={<FiSquare size={14} />}
-              onClick={stop}
-              disabled={status !== 'running'}
-            >
-              Stop
-            </Button>
-          </div>
-        </div>
-
-        <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-            <FiZap size={16} color="var(--error)" />
-            <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>Packets/sec</span>
-          </div>
-          <div style={{ height: 180 }}>
-            <Line data={chartData} options={chartOpts} />
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-          <FiTerminal size={16} color="var(--primary)" />
-          <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>Attack Log</span>
-        </div>
-        <div className="log-terminal" ref={logRef}>
-          {logs.map((l) => (
-            <div
-              key={l.id}
-              className={`log-line ${l.type === 'err' ? 'log-err' : l.type === 'ok' ? 'log-ok' : l.type === 'warn' ? 'log-warn' : ''}`}
-            >
-              <span style={{ opacity: 0.5, marginRight: '0.75rem' }}>[{l.time}]</span>{l.msg}
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Modal chi tiết */}
+      {selectedAgent && <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
     </div>
   );
 }

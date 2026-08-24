@@ -8,6 +8,7 @@ class NetworkConnectionRule(RiskRule):
     description = "Detects connections to suspicious ports and Threat Intelligence blacklisted IPs."
     enabled = True
     weight = 1.0
+    category = "network"
 
     DEFAULT_SUSPICIOUS_PORTS = {4444, 1337, 31337, 6667, 23}
 

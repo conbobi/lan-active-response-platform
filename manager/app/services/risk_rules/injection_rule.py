@@ -8,6 +8,7 @@ class InjectionRule(RiskRule):
     description = "Detects code injection or memory tampering within legitimate process contexts."
     enabled = True
     weight = 1.0
+    category = "process"
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         processes = telemetry.get("process_list", [])

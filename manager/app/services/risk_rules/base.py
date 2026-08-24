@@ -12,6 +12,7 @@ class RiskRule(ABC):
     description: str
     enabled: bool = True
     weight: float = 1.0
+    category: str = "os"
     config: Dict[str, Any] = {}
 
     @abstractmethod

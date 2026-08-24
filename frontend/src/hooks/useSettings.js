@@ -1,6 +1,13 @@
 // src/hooks/useSettings.js
 import { useState, useEffect, useCallback } from 'react';
-import { getSettings, updateSetting } from '../api/settings';
+import {
+  getSettings,
+  updateSetting,
+  getRiskThresholds,
+  updateRiskThresholds as apiUpdateRiskThresholds,
+  getFileChangesThresholds,
+  updateFileChangesThresholds as apiUpdateFileChangesThresholds,
+} from '../api/settings';
 
 const DEFAULT_SETTINGS = {
   risk_thresholds: {
@@ -8,6 +15,10 @@ const DEFAULT_SETTINGS = {
     alert_with_buttons: 70,
     alert: 50,
     log: 20,
+  },
+  file_changes_thresholds: {
+    file_changes_critical: 100,
+    file_changes_elevated: 30,
   },
   auto_response_enabled: true,
   email_notifications_enabled: true,
@@ -24,10 +35,26 @@ export const useSettings = () => {
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getSettings();
-      if (data && typeof data === 'object') {
-        setSettings((prev) => ({ ...prev, ...data }));
+      const [allData, riskT, fileT] = await Promise.all([
+        getSettings().catch(() => null),
+        getRiskThresholds().catch(() => DEFAULT_SETTINGS.risk_thresholds),
+        getFileChangesThresholds().catch(() => DEFAULT_SETTINGS.file_changes_thresholds),
+      ]);
+
+      const newSettings = { ...DEFAULT_SETTINGS };
+      if (allData && typeof allData === 'object') {
+        if (Array.isArray(allData)) {
+          allData.forEach((item) => {
+            newSettings[item.key] = item.value?.data ?? item.value;
+          });
+        } else {
+          Object.assign(newSettings, allData);
+        }
       }
+      newSettings.risk_thresholds = riskT || DEFAULT_SETTINGS.risk_thresholds;
+      newSettings.file_changes_thresholds = fileT || DEFAULT_SETTINGS.file_changes_thresholds;
+
+      setSettings(newSettings);
       setError(null);
     } catch (err) {
       console.warn('Using default system settings');
@@ -54,12 +81,25 @@ export const useSettings = () => {
 
   const handleUpdateRiskThresholds = async (newThresholds) => {
     setSaving(true);
-    const updatedThresholds = { ...settings.risk_thresholds, ...newThresholds };
-    setSettings((prev) => ({ ...prev, risk_thresholds: updatedThresholds }));
+    const updated = { ...settings.risk_thresholds, ...newThresholds };
+    setSettings((prev) => ({ ...prev, risk_thresholds: updated }));
     try {
-      await updateSetting('risk_thresholds', updatedThresholds);
+      await apiUpdateRiskThresholds(updated);
     } catch (err) {
       console.warn('Risk thresholds updated locally');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdateFileChangesThresholds = async (newThresholds) => {
+    setSaving(true);
+    const updated = { ...settings.file_changes_thresholds, ...newThresholds };
+    setSettings((prev) => ({ ...prev, file_changes_thresholds: updated }));
+    try {
+      await apiUpdateFileChangesThresholds(updated);
+    } catch (err) {
+      console.warn('File changes thresholds updated locally');
     } finally {
       setSaving(false);
     }
@@ -73,6 +113,7 @@ export const useSettings = () => {
     refreshSettings: loadSettings,
     updateSettingKey: handleUpdateSettingKey,
     updateRiskThresholds: handleUpdateRiskThresholds,
+    updateFileChangesThresholds: handleUpdateFileChangesThresholds,
   };
 };
 

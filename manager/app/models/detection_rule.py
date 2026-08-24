@@ -20,6 +20,7 @@ class DetectionRule(Base):
     description: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     weight: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    category: Mapped[str] = mapped_column(String(64), default="os", nullable=False)
     config: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -8,6 +8,7 @@ class SuspiciousProcessRule(RiskRule):
     description = "Detects known malicious binaries, suspicious flags, and Threat Intelligence hash matches."
     enabled = True
     weight = 1.0
+    category = "os"
 
     DEFAULT_SUSPICIOUS_NAMES = [
         "mimikatz.exe", "mimikatz", "netcat", "nc.exe", "nmap", "chisel",

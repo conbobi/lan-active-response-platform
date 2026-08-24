@@ -31,6 +31,7 @@ class DetectionRuleService:
                     description=r.description,
                     enabled=r.enabled,
                     weight=r.weight,
+                    category=getattr(r, "category", "os"),
                     config=getattr(r, "config", {})
                 )
                 await self.repo.add(db_rule)
@@ -59,6 +60,7 @@ class DetectionRuleService:
             description=dto.description,
             enabled=dto.enabled,
             weight=dto.weight,
+            category=dto.category,
             config=dto.config
         )
         await self.repo.add(db_rule)

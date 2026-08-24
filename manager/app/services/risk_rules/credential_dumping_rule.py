@@ -8,6 +8,7 @@ class CredentialDumpingRule(RiskRule):
     description = "Detects access or extraction attempts targeting LSASS memory, SAM, or credential stores."
     enabled = True
     weight = 1.0
+    category = "behavior"
 
     DUMP_PATTERNS = ["sekurlsa", "lsass", "procdump", "comsvcs", "sam", "security", "ntds.dit", "mimikatz"]
 

@@ -16,6 +16,34 @@ async def list_system_settings(db: AsyncSession = Depends(get_db)):
     return await service.list_settings()
 
 
+@router.get("/risk_thresholds")
+async def get_risk_thresholds(db: AsyncSession = Depends(get_db)):
+    """Get system risk thresholds."""
+    service = SettingService(db)
+    return await service.get_risk_thresholds()
+
+
+@router.put("/risk_thresholds")
+async def update_risk_thresholds(payload: dict, db: AsyncSession = Depends(get_db)):
+    """Update system risk thresholds."""
+    service = SettingService(db)
+    return await service.update_risk_thresholds(payload)
+
+
+@router.get("/file_changes_thresholds")
+async def get_file_changes_thresholds(db: AsyncSession = Depends(get_db)):
+    """Get file changes anomaly thresholds."""
+    service = SettingService(db)
+    return await service.get_file_changes_thresholds()
+
+
+@router.put("/file_changes_thresholds")
+async def update_file_changes_thresholds(payload: dict, db: AsyncSession = Depends(get_db)):
+    """Update file changes anomaly thresholds."""
+    service = SettingService(db)
+    return await service.update_file_changes_thresholds(payload)
+
+
 @router.get("/{key}", response_model=SystemSettingOut)
 async def get_system_setting(key: str, db: AsyncSession = Depends(get_db)):
     """Get system setting by key."""

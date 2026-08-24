@@ -8,6 +8,7 @@ class CpuSpikeRule(RiskRule):
     description = "Detects abnormally high CPU utilization spikes."
     enabled = True
     weight = 1.0
+    category = "os"
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         cpu = telemetry.get("cpu_usage", 0.0)
