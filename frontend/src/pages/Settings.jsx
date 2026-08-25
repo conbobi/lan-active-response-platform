@@ -14,7 +14,8 @@ export default function Settings() {
     updateFileChangesThresholds,
   } = useSettings();
 
-  const [autoKillThreshold, setAutoKillThreshold] = useState(90);
+  const [incidentCreationThreshold, setIncidentCreationThreshold] = useState(50);
+  const [autoKillThreshold, setAutoKillThreshold] = useState(85);
   const [autoIsolate, setAutoIsolate] = useState(85);
   const [alertWithButtons, setAlertWithButtons] = useState(70);
   const [alertThreshold, setAlertThreshold] = useState(50);
@@ -30,7 +31,8 @@ export default function Settings() {
 
   useEffect(() => {
     if (settings && settings.risk_thresholds) {
-      setAutoKillThreshold(settings.risk_thresholds.auto_kill_threshold ?? 90);
+      setIncidentCreationThreshold(settings.risk_thresholds.incident_creation_threshold ?? 50);
+      setAutoKillThreshold(settings.risk_thresholds.auto_kill_threshold ?? 85);
       setAutoIsolate(settings.risk_thresholds.auto_isolate ?? 85);
       setAlertWithButtons(settings.risk_thresholds.alert_with_buttons ?? 70);
       setAlertThreshold(settings.risk_thresholds.alert ?? 50);
@@ -49,6 +51,7 @@ export default function Settings() {
 
   const handleSaveAll = async () => {
     await updateRiskThresholds({
+      incident_creation_threshold: Number(incidentCreationThreshold),
       auto_kill_threshold: Number(autoKillThreshold),
       auto_isolate: Number(autoIsolate),
       alert_with_buttons: Number(alertWithButtons),
@@ -101,7 +104,7 @@ export default function Settings() {
       <div className="page-header">
         <div>
           <h1 className="page-title">SOC Platform Settings</h1>
-          <p className="page-subtitle">Configure risk escalation thresholds, file modification anomalies, and notifications</p>
+          <p className="page-subtitle">Configure risk escalation thresholds, automated process tree termination, and incident response policies</p>
         </div>
         <Button variant="primary" size="md" iconLeft={<FiSave size={14} />} onClick={handleSaveAll} disabled={saving}>
           {saving ? 'Saving...' : savedSuccess ? '✓ Settings Saved' : 'Save Changes'}
@@ -109,8 +112,22 @@ export default function Settings() {
       </div>
 
       {/* Risk Thresholds Policy */}
-      <Section title="Risk Threshold Escalation Policy" desc="Configure exact risk score cutoffs for automated response and alerts.">
-        <Row label="Auto Kill Process Tree Threshold" desc="Automatically terminate suspicious process tree on agent when risk score exceeds this value">
+      <Section title="Risk Threshold Escalation Policy" desc="Configure exact risk score cutoffs for automated response, incident generation, and alerts.">
+        <Row label="Incident Creation Threshold" desc="Automatically generate security incident record when risk score exceeds this value (default: 50)">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <input
+              type="range"
+              min={20}
+              max={90}
+              value={incidentCreationThreshold}
+              onChange={(e) => setIncidentCreationThreshold(+e.target.value)}
+              style={{ width: 140, accentColor: 'var(--primary)' }}
+            />
+            <span style={{ fontWeight: 700, color: 'var(--primary)', minWidth: 32, textAlign: 'right' }}>{incidentCreationThreshold}</span>
+          </div>
+        </Row>
+
+        <Row label="Auto Kill Process Tree Threshold" desc="Automatically dispatch kill_process_tree command to agent when risk score exceeds this value (default: 85)">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <input
               type="range"
@@ -124,7 +141,7 @@ export default function Settings() {
           </div>
         </Row>
 
-        <Row label="Auto Isolation Threshold" desc="Automatically isolate agent network link when score exceeds this value">
+        <Row label="Auto Network Isolation Threshold" desc="Automatically isolate agent network link when score exceeds this value (default: 85)">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <input
               type="range"

@@ -30,8 +30,33 @@ import {
   FiXCircle,
   FiCornerDownRight,
   FiSend,
-  FiGlobe
+  FiGlobe,
+  FiTrendingUp
 } from 'react-icons/fi';
+
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 export default function Incidents() {
   const {
@@ -77,7 +102,6 @@ export default function Incidents() {
       setActionSuccessMsg('');
       getIncidentNotes(selectedIncident.id)
         .then((notes) => setIncidentNotes(notes))
-
         .catch(() => setIncidentNotes([]))
         .finally(() => setLoadingNotes(false));
     }
@@ -94,6 +118,125 @@ export default function Incidents() {
 
     return { total, openCount, containedCount, resolvedCount, falsePositiveCount, closedCount };
   }, [incidents]);
+
+  // LineChart Data & Aggregation
+  const chartData = useMemo(() => {
+    const dates = [];
+    const dateMap = {};
+
+    // Generate last 7 days window
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const dateStr = d.toISOString().split('T')[0];
+      dates.push(dateStr);
+      dateMap[dateStr] = {
+        open: 0,
+        contained: 0,
+        resolved: 0,
+        false_positive: 0,
+        closed: 0,
+      };
+    }
+
+    incidents.forEach((inc) => {
+      if (!inc.createdAt) return;
+      const dStr = new Date(inc.createdAt).toISOString().split('T')[0];
+      if (!dateMap[dStr]) {
+        dateMap[dStr] = { open: 0, contained: 0, resolved: 0, false_positive: 0, closed: 0 };
+        if (!dates.includes(dStr)) dates.push(dStr);
+      }
+      let st = inc.status;
+      if (st === 'investigating') st = 'open';
+      if (dateMap[dStr] && dateMap[dStr][st] !== undefined) {
+        dateMap[dStr][st] += 1;
+      }
+    });
+
+    dates.sort();
+
+    const labels = dates.map((d) => {
+      const parts = d.split('-');
+      return `${parts[1]}/${parts[2]}`;
+    });
+
+    const colorConfig = {
+      open: { label: 'Open / Active', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)' },
+      contained: { label: 'Contained', color: '#f97316', bg: 'rgba(249, 115, 22, 0.15)' },
+      resolved: { label: 'Resolved', color: '#22c55e', bg: 'rgba(34, 197, 94, 0.15)' },
+      false_positive: { label: 'False Positive', color: '#a855f7', bg: 'rgba(168, 85, 247, 0.15)' },
+      closed: { label: 'Closed', color: '#6b7280', bg: 'rgba(107, 114, 128, 0.15)' },
+    };
+
+    const datasets = [];
+
+    if (statusFilter === 'all') {
+      Object.keys(colorConfig).forEach((key) => {
+        datasets.push({
+          label: colorConfig[key].label,
+          data: dates.map((d) => dateMap[d][key] || 0),
+          borderColor: colorConfig[key].color,
+          backgroundColor: colorConfig[key].bg,
+          borderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          tension: 0.3,
+          fill: true,
+        });
+      });
+    } else {
+      const key = statusFilter === 'investigating' ? 'open' : statusFilter;
+      const cfg = colorConfig[key] || { label: statusFilter, color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.15)' };
+      datasets.push({
+        label: cfg.label,
+        data: dates.map((d) => dateMap[d][key] || 0),
+        borderColor: cfg.color,
+        backgroundColor: cfg.bg,
+        borderWidth: 2.5,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        tension: 0.35,
+        fill: true,
+      });
+    }
+
+    return { labels, datasets };
+  }, [incidents, statusFilter]);
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: {
+          color: 'var(--text-secondary)',
+          font: { size: 12, weight: '500' },
+          usePointStyle: true,
+          padding: 15,
+        },
+      },
+      tooltip: {
+        mode: 'index',
+        intersect: false,
+        backgroundColor: 'var(--bg-secondary)',
+        titleColor: 'var(--text-primary)',
+        bodyColor: 'var(--text-secondary)',
+        borderColor: 'var(--border)',
+        borderWidth: 1,
+      },
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { color: 'var(--text-tertiary)' },
+      },
+      y: {
+        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { color: 'var(--text-tertiary)', precision: 0 },
+        beginAtZero: true,
+      },
+    },
+  };
 
   // Filter Tab Definitions
   const statusTabs = [
@@ -294,6 +437,22 @@ export default function Incidents() {
         <div className="stat-card">
           <div className="stat-label">Closed</div>
           <div className="stat-value">{kpis.closedCount}</div>
+        </div>
+      </div>
+
+      {/* Incident Analytics Line Chart */}
+      <div className="card" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiTrendingUp size={18} color="var(--primary)" />
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+              Incident Timeline & Trends ({statusFilter.toUpperCase()})
+            </h3>
+          </div>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Updated in real-time</span>
+        </div>
+        <div style={{ height: 220, position: 'relative' }}>
+          <Line data={chartData} options={chartOptions} />
         </div>
       </div>
 
