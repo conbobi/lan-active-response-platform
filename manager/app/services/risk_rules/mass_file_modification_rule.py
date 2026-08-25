@@ -17,7 +17,7 @@ class MassFileModificationRule(RiskRule):
         threshold = self.config.get("file_change_threshold", 200)
 
         if mass_flag or file_changes > threshold:
-            score = 40.0 if mass_flag else 25.0
+            score = (40.0 if mass_flag else 25.0) * self.base_score
             return score, f"Mass file modification / Ransomware activity detected (flag={mass_flag}, count={file_changes})"
 
         return 0.0, ""

@@ -12,6 +12,8 @@ from commands import COMMAND_HANDLERS
 MANAGER_URL = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
 
+ws_lock = asyncio.Lock()
+
 def get_ip_address():
     try:
         return socket.gethostbyname(socket.gethostname())
@@ -36,64 +38,112 @@ def collect_stats():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-def get_process_list():
-    """Lấy danh sách process đang chạy, đánh dấu suspicious nếu tên nằm trong blacklist."""
-    suspicious_names = {"mimikatz.exe", "netcat", "nc.exe", "nmap", "chisel", "vssadmin.exe", "powershell.exe", "cmd.exe"}
+def collect_process_info():
+    """
+    Thu thập thông tin toàn bộ tiến trình đang chạy trên host agent.
+    Bao gồm PID, parent PID (ppid), name, exe, cmdline, cpu/memory %, và đánh dấu is_suspicious.
+    """
+    suspicious_keywords = [
+        "mimikatz", "netcat", "nc", "nc.openbsd", "nc.traditional", "nmap", "chisel",
+        "vssadmin", "powershell", "cmd.exe", "lsass.dump", "ransomware_sim",
+        "backdoor_sim", "credential_dump", "lateral_movement", "c2_communication", "sleep", "certutil"
+    ]
     processes = []
     try:
-        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent']):
             try:
                 info = proc.info
-                name = info.get('name') or ""
-                path = info.get('exe') or ""
-                cmdline = " ".join(info.get('cmdline') or [])
-                is_suspicious = any(s in name.lower() for s in suspicious_names)
+                pid = info.get('pid')
+                ppid = info.get('ppid')
+                name = str(info.get('name') or "")
+                exe = str(info.get('exe') or "")
+                cmdline_list = info.get('cmdline') or []
+                cmdline = " ".join(cmdline_list) if isinstance(cmdline_list, list) else str(cmdline_list)
+                cpu_pct = float(info.get('cpu_percent') or 0.0)
+                mem_pct = float(info.get('memory_percent') or 0.0)
+
+                full_str = f"{name} {exe} {cmdline}".lower()
+                is_suspicious = any(s in full_str for s in suspicious_keywords)
+
                 processes.append({
-                    "pid": info.get('pid'),
+                    "pid": pid,
+                    "parent_pid": ppid,
                     "name": name,
-                    "path": path,
+                    "exe": exe,
+                    "exe_path": exe,
                     "cmdline": cmdline,
+                    "cpu_percent": cpu_pct,
+                    "memory_percent": mem_pct,
                     "is_suspicious": is_suspicious
                 })
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
-    except Exception:
-        pass
-    return processes[:50]   # Giới hạn 50 process
+    except Exception as e:
+        print(f"Error collecting process info: {e}", flush=True)
+
+    return processes
+
+def get_process_list():
+    """Lấy danh sách process đang chạy, ưu tiên các process suspicious."""
+    all_procs = collect_process_info()
+    suspicious_procs = [p for p in all_procs if p["is_suspicious"]]
+    normal_procs = [p for p in all_procs if not p["is_suspicious"]]
+    return (suspicious_procs + normal_procs)[:30]
 
 def get_network_connections():
-    """Lấy các kết nối mạng đang mở, đánh dấu suspicious nếu cổng đích nằm trong danh sách lạ."""
-    suspicious_ports = {4444, 1337, 31337, 6667, 23}
+    """Lấy các kết nối mạng đang mở, đánh dấu suspicious nếu cổng đích/nguồn nằm trong danh sách lạ."""
+    suspicious_ports = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
     connections = []
     try:
         for conn in psutil.net_connections(kind='inet'):
-            if conn.status == 'ESTABLISHED' or conn.status == 'LISTEN':
+            if conn.status in ('ESTABLISHED', 'LISTEN'):
                 laddr = conn.laddr
                 raddr = conn.raddr
+                src_ip = laddr.ip if laddr else "0.0.0.0"
+                src_port = laddr.port if laddr else 0
                 dst_ip = raddr.ip if raddr else "0.0.0.0"
-                dst_port = raddr.port if raddr else (laddr.port if laddr else 0)
+                dst_port = raddr.port if raddr else src_port
+
+                is_susp = (dst_port in suspicious_ports or src_port in suspicious_ports)
+
                 connections.append({
-                    "src_ip": laddr.ip if laddr else "0.0.0.0",
-                    "src_port": laddr.port if laddr else 0,
+                    "src_ip": src_ip,
+                    "src_port": src_port,
                     "dst_ip": dst_ip,
                     "dst_port": dst_port,
                     "status": conn.status,
-                    "is_suspicious": dst_port in suspicious_ports
+                    "is_suspicious": is_susp
                 })
     except Exception:
         pass
-    return connections[:30]
+
+    suspicious_conns = [c for c in connections if c["is_suspicious"]]
+    normal_conns = [c for c in connections if not c["is_suspicious"]]
+    return (suspicious_conns + normal_conns)[:20]
 
 def get_file_changes_count():
-    """Đếm số file .encrypted hoặc có thay đổi gần đây trong /tmp."""
+    """Đếm số file .encrypted hoặc có thay đổi gần đây trong /tmp (bao gồm thư mục con)."""
     count = 0
     try:
-        for f in os.listdir('/tmp'):
-            if f.endswith('.encrypted'):
-                count += 1
+        for root, dirs, files in os.walk('/tmp'):
+            for f in files:
+                if f.endswith('.encrypted') or f.endswith('.dump') or f.endswith('.bak'):
+                    count += 1
     except Exception:
         pass
     return count
+
+async def send_ws_json(websocket, message):
+    async with ws_lock:
+        await websocket.send(json.dumps(message))
+        try:
+            raw_res = await asyncio.wait_for(websocket.recv(), timeout=5)
+            return json.loads(raw_res)
+        except asyncio.TimeoutError:
+            return None
+        except Exception as e:
+            print(f"WS response read error: {e}", flush=True)
+            return None
 
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
@@ -107,13 +157,11 @@ async def execute_command(websocket, cmd):
 
 async def send_stats(websocket):
     while True:
-        stats = collect_stats()
-        message = {"type": "HEARTBEAT", "payload": stats}
-        await websocket.send(json.dumps(message))
         try:
-            response_text = await asyncio.wait_for(websocket.recv(), timeout=2)
-            response = json.loads(response_text)
-            if "pending_commands" in response:
+            stats = collect_stats()
+            message = {"type": "HEARTBEAT", "payload": stats}
+            response = await send_ws_json(websocket, message)
+            if response and isinstance(response, dict) and "pending_commands" in response:
                 for cmd in response["pending_commands"]:
                     ack_payload = await execute_command(websocket, cmd)
                     ack_message = {
@@ -125,47 +173,85 @@ async def send_stats(websocket):
                             "executed_at": datetime.now(timezone.utc).isoformat()
                         }
                     }
-                    await websocket.send(json.dumps(ack_message))
-        except asyncio.TimeoutError:
-            pass
-        await asyncio.sleep(5)
+                    await send_ws_json(websocket, ack_message)
+        except Exception as e:
+            print(f"Error in send_stats loop: {e}", flush=True)
+        await asyncio.sleep(10)
 
 async def send_risk_telemetry(websocket):
     await asyncio.sleep(2)
     while True:
         try:
             procs = get_process_list()
+            conns = get_network_connections()
             file_changes = get_file_changes_count()
             suspicious_cmds = [p["cmdline"] for p in procs if p.get("is_suspicious") and p.get("cmdline")]
+
+            cred_events = []
+            if os.path.exists("/tmp/lsass.dump"):
+                cred_events.append({"target_object": "lsass.dump", "action": "read"})
+
             payload = {
                 "agent_id": AGENT_ID,
                 "cpu_usage": psutil.cpu_percent(interval=1),
                 "process_list": procs,
-                "network_connections": get_network_connections(),
+                "network_connections": conns,
                 "file_changes_count": file_changes,
                 "suspicious_commands": suspicious_cmds,
                 "shadow_copy_deletion": False,
                 "mass_file_modification": file_changes > 20,
                 "registry_changes": [],
-                "credential_access_events": [],
+                "credential_access_events": cred_events,
                 "lateral_movement_events": [],
                 "dns_queries": [],
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             message = {"type": "TELEMETRY_RISK", "payload": payload}
-            await websocket.send(json.dumps(message))
+            print(f"[TELEMETRY_RISK] Sending payload for '{AGENT_ID}' (procs: {len(procs)}, conns: {len(conns)}, file_changes: {file_changes})", flush=True)
+            res = await send_ws_json(websocket, message)
+            if res:
+                print(f"[TELEMETRY_RISK] Server ACK response: {res}", flush=True)
         except Exception as e:
             print(f"Error sending risk telemetry: {e}", flush=True)
-        await asyncio.sleep(10)
+        await asyncio.sleep(15)
+
+async def send_process_list(websocket):
+    """
+    Gửi danh sách toàn bộ process định kỳ mỗi 15-20s tới Manager qua WebSocket message 'PROCESS_LIST'.
+    """
+    await asyncio.sleep(3)
+    while True:
+        try:
+            procs = collect_process_info()
+            message = {
+                "type": "PROCESS_LIST",
+                "payload": {
+                    "agent_id": AGENT_ID,
+                    "processes": procs,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            }
+            print(f"[PROCESS_LIST] Sending complete process list for '{AGENT_ID}' ({len(procs)} processes)", flush=True)
+            res = await send_ws_json(websocket, message)
+            if res:
+                print(f"[PROCESS_LIST] Server ACK response: {res}", flush=True)
+        except Exception as e:
+            print(f"Error sending process list: {e}", flush=True)
+        await asyncio.sleep(20)
 
 async def main_agent():
     while True:
         try:
-            async with websockets.connect(MANAGER_URL) as ws:
+            async with websockets.connect(
+                MANAGER_URL,
+                ping_interval=20,
+                ping_timeout=20,
+            ) as ws:
                 print(f"Connected to {MANAGER_URL}", flush=True)
                 await asyncio.gather(
                     send_stats(ws),
                     send_risk_telemetry(ws),
+                    send_process_list(ws),
                 )
         except Exception as e:
             print(f"Error: {e}. Retrying in 5s...", flush=True)

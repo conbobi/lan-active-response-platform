@@ -18,3 +18,13 @@ class ProcessInfoRepository(SqlAlchemyRepository[ProcessInfo]):
         stmt = select(ProcessInfo).where(ProcessInfo.is_suspicious == True)  # noqa: E712
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+        
+    async def get_by_agent(self, agent_id: str, limit: int = 500) -> List[ProcessInfo]:
+        stmt = select(ProcessInfo).where(ProcessInfo.agent_id == agent_id).order_by(ProcessInfo.created_at.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def delete_by_agent(self, agent_id: str) -> None:
+        from sqlalchemy import delete
+        stmt = delete(ProcessInfo).where(ProcessInfo.agent_id == agent_id)
+        await self.session.execute(stmt)

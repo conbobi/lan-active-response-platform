@@ -36,7 +36,7 @@ class RegistryRule(RiskRule):
                 suspicious_changes.append(f"Key: {c_dict.get('key_path')} (Value: {val_name})")
 
         if suspicious_changes:
-            score = min(40.0, len(suspicious_changes) * 25.0)
+            score = min(40.0, len(suspicious_changes) * 25.0) * self.base_score
             return score, f"Suspicious registry modification detected: {', '.join(suspicious_changes)}"
 
         return 0.0, ""

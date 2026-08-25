@@ -22,7 +22,7 @@ class InjectionRule(RiskRule):
                 injected_procs.append(f"'{name}' (PID: {pid})")
 
         if injected_procs:
-            score = min(50.0, len(injected_procs) * 40.0)
+            score = min(50.0, len(injected_procs) * 40.0) * self.base_score
             return score, f"Process injection detected in: {', '.join(injected_procs)}"
 
         return 0.0, ""

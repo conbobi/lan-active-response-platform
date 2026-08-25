@@ -31,6 +31,7 @@ class DetectionRuleService:
                     description=r.description,
                     enabled=r.enabled,
                     weight=r.weight,
+                    base_score=getattr(r, "base_score", 1.0),
                     category=getattr(r, "category", "os"),
                     config=getattr(r, "config", {})
                 )
@@ -60,6 +61,7 @@ class DetectionRuleService:
             description=dto.description,
             enabled=dto.enabled,
             weight=dto.weight,
+            base_score=dto.base_score,
             category=dto.category,
             config=dto.config
         )

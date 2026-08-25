@@ -25,8 +25,8 @@ class FileChangesRule(RiskRule):
             except Exception:
                 pass
 
-        high_score = self.config.get("high_score", 25.0)
-        medium_score = self.config.get("medium_score", 10.0)
+        high_score = self.config.get("high_score", 25.0) * self.base_score
+        medium_score = self.config.get("medium_score", 10.0) * self.base_score
 
         if file_changes >= critical_threshold and critical_threshold > 0:
             return high_score, f"Massive file modifications count ({file_changes})"

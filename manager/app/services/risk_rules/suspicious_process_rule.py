@@ -11,8 +11,8 @@ class SuspiciousProcessRule(RiskRule):
     category = "os"
 
     DEFAULT_SUSPICIOUS_NAMES = [
-        "mimikatz.exe", "mimikatz", "netcat", "nc.exe", "nmap", "chisel",
-        "psexec.exe", "procdump.exe", "bloodhound", "sharphound", "lazagne"
+        "mimikatz.exe", "mimikatz", "netcat", "nc", "nc.exe", "nc.openbsd", "nc.traditional", "nmap", "chisel",
+        "psexec.exe", "procdump.exe", "bloodhound", "sharphound", "lazagne", "vssadmin", "sleep", "ransomware_sim"
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
@@ -30,14 +30,18 @@ class SuspiciousProcessRule(RiskRule):
         for proc in processes:
             p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
             name = str(p_dict.get("name", "")).strip().lower()
+            cmdline = str(p_dict.get("cmdline", "")).strip().lower()
             is_susp = p_dict.get("is_suspicious", False)
             p_hash = p_dict.get("hash")
 
-            is_match = is_susp or any(name == s.lower() or name.endswith("/" + s.lower()) or name.endswith("\\" + s.lower()) for s in suspicious_list)
+            full_str = f"{name} {cmdline}"
+            is_match = is_susp or any(s.lower() in full_str for s in suspicious_list)
 
             if is_match:
                 suspicious_proc_count += 1
-                proc_names.append(p_dict.get("name", name))
+                display_name = p_dict.get("name") or name or "suspicious_process"
+                if display_name not in proc_names:
+                    proc_names.append(display_name)
 
             if p_hash and threat_intel_service:
                 try:
@@ -58,4 +62,7 @@ class SuspiciousProcessRule(RiskRule):
             score += 40.0
             reasons.append(f"Matched {threat_hash_count} malicious file hashes with Threat Intelligence")
 
-        return score, "; ".join(reasons)
+        if score > 0:
+            return score * self.base_score, "; ".join(reasons)
+
+        return 0.0, ""

@@ -26,7 +26,7 @@ async def get_suspicious_processes(agent_id: str, db: AsyncSession = Depends(get
 @router.post("/{agent_id}/kill", response_model=CommandOut, status_code=status.HTTP_202_ACCEPTED)
 async def kill_agent_process(
     agent_id: str,
-    payload: Dict[str, int] = Body(..., example={"pid": 1234}),
+    payload: Dict[str, Any] = Body(..., example={"pid": 1234}),
     db: AsyncSession = Depends(get_db)
 ):
     """Issue kill_process command to terminate a specified PID on an agent."""
@@ -36,5 +36,22 @@ async def kill_agent_process(
         raise BadRequestError("Field 'pid' is required.")
 
     service = ProcessTreeService(db)
-    cmd = await service.kill_process(agent_id, pid)
+    cmd = await service.kill_process(agent_id, int(pid))
+    return cmd
+
+
+@router.post("/{agent_id}/kill_tree", response_model=CommandOut, status_code=status.HTTP_202_ACCEPTED)
+async def kill_agent_process_tree(
+    agent_id: str,
+    payload: Dict[str, Any] = Body(..., example={"pid": 1234, "process_name": "nc"}),
+    db: AsyncSession = Depends(get_db)
+):
+    """Issue kill_process_tree command to terminate a process and its child processes on an agent."""
+    pid = payload.get("pid")
+    if not pid:
+        from app.core.exceptions import BadRequestError
+        raise BadRequestError("Field 'pid' is required.")
+
+    service = ProcessTreeService(db)
+    cmd = await service.kill_process_tree(agent_id, int(pid), process_name=payload.get("process_name"))
     return cmd

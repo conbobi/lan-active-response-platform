@@ -2,7 +2,8 @@
 import React, { useRef } from 'react';
 import useTopology from '../hooks/useTopology';
 import NetworkToolbar from '../components/network/NetworkToolbar';
-import NetworkTopology3D from '../components/network/NetworkTopology3D';
+const NetworkTopology3D = React.lazy(() => import('../components/network/NetworkTopology3D'));
+
 import { FiActivity, FiGlobe, FiRadio, FiAlertTriangle, FiXCircle, FiCheckCircle } from 'react-icons/fi';
 
 export default function Network() {

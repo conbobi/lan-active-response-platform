@@ -11,6 +11,8 @@ import {
 
 const DEFAULT_SETTINGS = {
   risk_thresholds: {
+    incident_creation_threshold: 50,
+    auto_kill_threshold: 85,
     auto_isolate: 85,
     alert_with_buttons: 70,
     alert: 50,

@@ -46,6 +46,7 @@ class RiskRuleRegistry:
         rule_id: str,
         enabled: Optional[bool] = None,
         weight: Optional[float] = None,
+        base_score: Optional[float] = None,
         config: Optional[Dict[str, Any]] = None
     ) -> bool:
         """Update existing registered rule settings."""
@@ -56,6 +57,8 @@ class RiskRuleRegistry:
             rule.enabled = enabled
         if weight is not None:
             rule.weight = weight
+        if base_score is not None:
+            rule.base_score = base_score
         if config is not None:
             rule.config = {**getattr(rule, "config", {}), **config}
         return True
@@ -72,6 +75,7 @@ class RiskRuleRegistry:
             if rule:
                 rule.enabled = getattr(record, "enabled", rule.enabled)
                 rule.weight = getattr(record, "weight", rule.weight)
+                rule.base_score = getattr(record, "base_score", getattr(rule, "base_score", 1.0))
                 rule.category = getattr(record, "category", getattr(rule, "category", "os"))
                 rec_cfg = getattr(record, "config", None)
                 if rec_cfg and isinstance(rec_cfg, dict):

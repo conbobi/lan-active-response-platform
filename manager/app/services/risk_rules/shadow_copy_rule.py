@@ -40,6 +40,6 @@ class ShadowCopyRule(RiskRule):
                 detected.append(f"Process cmdline: '{p_dict.get('cmdline')}'")
 
         if detected:
-            return 50.0, f"Volume Shadow Copy deletion detected: {', '.join(detected)}"
+            return 50.0 * self.base_score, f"Volume Shadow Copy deletion detected: {', '.join(detected)}"
 
         return 0.0, ""

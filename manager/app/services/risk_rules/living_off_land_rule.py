@@ -53,7 +53,7 @@ class LivingOffLandRule(RiskRule):
                         lol_matches.append(match_str)
 
         if lol_matches:
-            score = min(45.0, len(lol_matches) * 30.0)
+            score = min(45.0, len(lol_matches) * 30.0) * self.base_score
             return score, f"LOLBin execution detected: {', '.join(lol_matches)}"
 
         return 0.0, ""

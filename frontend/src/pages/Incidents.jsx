@@ -1,259 +1,943 @@
 // src/pages/Incidents.jsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import useIncidents from '../hooks/useIncidents';
-import Badge from '../components/ui/Badge';
-import FilterTabs from '../components/ui/FilterTabs';
-import SearchBar from '../components/ui/SearchBar';
-import Pagination from '../components/ui/Pagination';
-import Modal from '../components/ui/Modal';
+import { useAgents } from '../hooks/useAgents';
+import { getIncidentNotes } from '../api/incidents';
 import Button from '../components/ui/Button';
-import { FiAlertTriangle, FiCheckCircle, FiUserCheck, FiEye, FiClock } from 'react-icons/fi';
+import Badge from '../components/ui/Badge';
+import Modal from '../components/ui/Modal';
+import FilterTabs from '../components/ui/FilterTabs';
+import Dropdown from '../components/ui/Dropdown';
+import {
+  FiAlertTriangle,
+  FiCheckCircle,
+  FiShield,
+  FiClock,
+  FiUser,
+  FiSearch,
+  FiFilter,
+  FiEye,
+  FiUserPlus,
+  FiLayers,
+  FiRotateCw,
+  FiLock,
+  FiUnlock,
+  FiSlash,
+  FiFileText,
+  FiActivity,
+  FiBarChart2,
+  FiPieChart,
+  FiXCircle,
+  FiCornerDownRight,
+  FiSend,
+  FiGlobe,
+  FiTrendingUp
+} from 'react-icons/fi';
 
-const PAGE_SIZE = 8;
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
 
-const STATUS_TABS = [
-  { value: 'all', label: 'All' },
-  { value: 'open', label: 'Open' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'resolved', label: 'Resolved' },
-];
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 export default function Incidents() {
-  const { incidents, loading, handleAssign, handleResolve, refreshIncidents } = useIncidents();
-  const [search, setSearch] = useState('');
+  const {
+    incidents,
+    loading,
+    actionLoading,
+    refreshIncidents,
+    handleAssign,
+    handleUpdateStatus,
+    handleAddNote,
+    handleExecuteAction,
+  } = useIncidents();
+
+  const { agents } = useAgents();
+
+  // Filter States
+  const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [page, setPage] = useState(1);
+  const [severityFilter, setSeverityFilter] = useState('all');
+  const [agentFilter, setAgentFilter] = useState('all');
+  const [timeFilter, setTimeFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 8;
+
+  // Modals
   const [selectedIncident, setSelectedIncident] = useState(null);
-  const [assignModalIncident, setAssignModalIncident] = useState(null);
+  const [assignModalInc, setAssignModalInc] = useState(null);
   const [assigneeInput, setAssigneeInput] = useState('');
 
-  const filteredIncidents = useMemo(() => {
-    return incidents.filter((inc) => {
-      const matchStatus = statusFilter === 'all' || inc.status === statusFilter;
-      const matchSearch =
-        !search ||
-        inc.id.toLowerCase().includes(search.toLowerCase()) ||
-        inc.title.toLowerCase().includes(search.toLowerCase()) ||
-        inc.agentId.toLowerCase().includes(search.toLowerCase()) ||
-        inc.description.toLowerCase().includes(search.toLowerCase());
-      return matchStatus && matchSearch;
+  // Incident Notes & Quick Action State within Detail Modal
+  const [detailTab, setDetailTab] = useState('overview'); // 'overview', 'notes', 'actions'
+  const [incidentNotes, setIncidentNotes] = useState([]);
+  const [loadingNotes, setLoadingNotes] = useState(false);
+  const [newNoteContent, setNewNoteContent] = useState('');
+  const [quickActionPID, setQuickActionPID] = useState('');
+  const [quickActionIP, setQuickActionIP] = useState('');
+  const [actionSuccessMsg, setActionSuccessMsg] = useState('');
+
+  // Load Notes when selectedIncident opens or changes
+  useEffect(() => {
+    if (selectedIncident) {
+      setLoadingNotes(true);
+      setActionSuccessMsg('');
+      getIncidentNotes(selectedIncident.id)
+        .then((notes) => setIncidentNotes(notes))
+        .catch(() => setIncidentNotes([]))
+        .finally(() => setLoadingNotes(false));
+    }
+  }, [selectedIncident]);
+
+  // KPI Calculations
+  const kpis = useMemo(() => {
+    const total = incidents.length;
+    const openCount = incidents.filter((i) => i.status === 'open' || i.status === 'investigating').length;
+    const containedCount = incidents.filter((i) => i.status === 'contained').length;
+    const resolvedCount = incidents.filter((i) => i.status === 'resolved').length;
+    const falsePositiveCount = incidents.filter((i) => i.status === 'false_positive').length;
+    const closedCount = incidents.filter((i) => i.status === 'closed').length;
+
+    return { total, openCount, containedCount, resolvedCount, falsePositiveCount, closedCount };
+  }, [incidents]);
+
+  // LineChart Data & Aggregation
+  const chartData = useMemo(() => {
+    const dates = [];
+    const dateMap = {};
+
+    // Generate last 7 days window
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const dateStr = d.toISOString().split('T')[0];
+      dates.push(dateStr);
+      dateMap[dateStr] = {
+        open: 0,
+        contained: 0,
+        resolved: 0,
+        false_positive: 0,
+        closed: 0,
+      };
+    }
+
+    incidents.forEach((inc) => {
+      if (!inc.createdAt) return;
+      const dStr = new Date(inc.createdAt).toISOString().split('T')[0];
+      if (!dateMap[dStr]) {
+        dateMap[dStr] = { open: 0, contained: 0, resolved: 0, false_positive: 0, closed: 0 };
+        if (!dates.includes(dStr)) dates.push(dStr);
+      }
+      let st = inc.status;
+      if (st === 'investigating') st = 'open';
+      if (dateMap[dStr] && dateMap[dStr][st] !== undefined) {
+        dateMap[dStr][st] += 1;
+      }
     });
-  }, [incidents, search, statusFilter]);
 
-  const totalPages = Math.ceil(filteredIncidents.length / PAGE_SIZE) || 1;
-  const paginated = filteredIncidents.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    dates.sort();
 
-  const tabsWithCount = STATUS_TABS.map((t) => ({
-    ...t,
-    count: t.value === 'all' ? incidents.length : incidents.filter((i) => i.status === t.value).length,
-  }));
+    const labels = dates.map((d) => {
+      const parts = d.split('-');
+      return `${parts[1]}/${parts[2]}`;
+    });
 
-  const openCount = incidents.filter((i) => i.status === 'open').length;
-  const inProgressCount = incidents.filter((i) => i.status === 'in_progress').length;
-  const resolvedCount = incidents.filter((i) => i.status === 'resolved').length;
+    const colorConfig = {
+      open: { label: 'Open / Active', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)' },
+      contained: { label: 'Contained', color: '#f97316', bg: 'rgba(249, 115, 22, 0.15)' },
+      resolved: { label: 'Resolved', color: '#22c55e', bg: 'rgba(34, 197, 94, 0.15)' },
+      false_positive: { label: 'False Positive', color: '#a855f7', bg: 'rgba(168, 85, 247, 0.15)' },
+      closed: { label: 'Closed', color: '#6b7280', bg: 'rgba(107, 114, 128, 0.15)' },
+    };
 
-  const onAssignSubmit = async (e) => {
-    e.preventDefault();
-    if (!assignModalIncident || !assigneeInput.trim()) return;
-    await handleAssign(assignModalIncident.id, assigneeInput.trim());
-    setAssignModalIncident(null);
-    setAssigneeInput('');
+    const datasets = [];
+
+    if (statusFilter === 'all') {
+      Object.keys(colorConfig).forEach((key) => {
+        datasets.push({
+          label: colorConfig[key].label,
+          data: dates.map((d) => dateMap[d][key] || 0),
+          borderColor: colorConfig[key].color,
+          backgroundColor: colorConfig[key].bg,
+          borderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          tension: 0.3,
+          fill: true,
+        });
+      });
+    } else {
+      const key = statusFilter === 'investigating' ? 'open' : statusFilter;
+      const cfg = colorConfig[key] || { label: statusFilter, color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.15)' };
+      datasets.push({
+        label: cfg.label,
+        data: dates.map((d) => dateMap[d][key] || 0),
+        borderColor: cfg.color,
+        backgroundColor: cfg.bg,
+        borderWidth: 2.5,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        tension: 0.35,
+        fill: true,
+      });
+    }
+
+    return { labels, datasets };
+  }, [incidents, statusFilter]);
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: {
+          color: 'var(--text-secondary)',
+          font: { size: 12, weight: '500' },
+          usePointStyle: true,
+          padding: 15,
+        },
+      },
+      tooltip: {
+        mode: 'index',
+        intersect: false,
+        backgroundColor: 'var(--bg-secondary)',
+        titleColor: 'var(--text-primary)',
+        bodyColor: 'var(--text-secondary)',
+        borderColor: 'var(--border)',
+        borderWidth: 1,
+      },
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { color: 'var(--text-tertiary)' },
+      },
+      y: {
+        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { color: 'var(--text-tertiary)', precision: 0 },
+        beginAtZero: true,
+      },
+    },
   };
 
-  if (loading) {
-    return (
-      <div>
-        <div className="page-header">
-          <h1 className="page-title">Incidents Management</h1>
-        </div>
-        <div className="card skeleton" style={{ height: '400px' }} />
-      </div>
-    );
-  }
+  // Filter Tab Definitions
+  const statusTabs = [
+    { id: 'all', label: `All (${incidents.length})` },
+    { id: 'open', label: `Open / Active (${kpis.openCount})` },
+    { id: 'contained', label: `Contained (${kpis.containedCount})` },
+    { id: 'resolved', label: `Resolved (${kpis.resolvedCount})` },
+    { id: 'false_positive', label: `False Positive (${kpis.falsePositiveCount})` },
+    { id: 'closed', label: `Closed (${kpis.closedCount})` },
+  ];
+
+  // Agent Dropdown Options
+  const agentOptions = useMemo(() => {
+    const opts = [{ value: 'all', label: 'All Agents' }];
+    agents.forEach((a) => {
+      opts.push({ value: a.id, label: `${a.name || a.hostname} (${a.id})` });
+    });
+    return opts;
+  }, [agents]);
+
+  const severityOptions = [
+    { value: 'all', label: 'All Severities' },
+    { value: 'critical', label: 'Critical Severity' },
+    { value: 'high', label: 'High Severity' },
+    { value: 'medium', label: 'Medium Severity' },
+    { value: 'low', label: 'Low Severity' },
+  ];
+
+  const timeOptions = [
+    { value: 'all', label: 'All Time' },
+    { value: 'today', label: 'Today' },
+    { value: '7days', label: 'Last 7 Days' },
+    { value: '30days', label: 'Last 30 Days' },
+  ];
+
+  // Filtering Logic
+  const filteredIncidents = useMemo(() => {
+    return incidents.filter((inc) => {
+      // Search
+      const search = searchTerm.toLowerCase();
+      const matchSearch =
+        !search ||
+        (inc.id && inc.id.toLowerCase().includes(search)) ||
+        (inc.title && inc.title.toLowerCase().includes(search)) ||
+        (inc.agentId && inc.agentId.toLowerCase().includes(search)) ||
+        (inc.description && inc.description.toLowerCase().includes(search));
+
+      // Status
+      let matchStatus = true;
+      if (statusFilter === 'open') {
+        matchStatus = inc.status === 'open' || inc.status === 'investigating';
+      } else if (statusFilter !== 'all') {
+        matchStatus = inc.status === statusFilter;
+      }
+
+      // Severity
+      const matchSeverity = severityFilter === 'all' || inc.severity === severityFilter;
+
+      // Agent
+      const matchAgent = agentFilter === 'all' || inc.agentId === agentFilter;
+
+      // Time Range
+      let matchTime = true;
+      if (timeFilter !== 'all') {
+        const createdMs = new Date(inc.createdAt).getTime();
+        const nowMs = Date.now();
+        if (timeFilter === 'today') {
+          matchTime = nowMs - createdMs <= 86400000;
+        } else if (timeFilter === '7days') {
+          matchTime = nowMs - createdMs <= 7 * 86400000;
+        } else if (timeFilter === '30days') {
+          matchTime = nowMs - createdMs <= 30 * 86400000;
+        }
+      }
+
+      return matchSearch && matchStatus && matchSeverity && matchAgent && matchTime;
+    });
+  }, [incidents, searchTerm, statusFilter, severityFilter, agentFilter, timeFilter]);
+
+  // Pagination
+  const totalPages = Math.ceil(filteredIncidents.length / itemsPerPage) || 1;
+  const paginatedIncidents = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredIncidents.slice(start, start + itemsPerPage);
+  }, [filteredIncidents, currentPage]);
+
+  // Handlers
+  const openAssignModal = (inc, e) => {
+    if (e) e.stopPropagation();
+    setAssignModalInc(inc);
+    setAssigneeInput(inc.assignedTo !== 'Unassigned' ? inc.assignedTo : '');
+  };
+
+  const submitAssign = async (e) => {
+    e.preventDefault();
+    if (!assignModalInc || !assigneeInput.trim()) return;
+    await handleAssign(assignModalInc.id, assigneeInput.trim());
+    setAssignModalInc(null);
+  };
+
+  const onQuickStatusChange = async (incId, newStatus, e) => {
+    if (e) e.stopPropagation();
+    await handleUpdateStatus(incId, newStatus);
+    if (selectedIncident && selectedIncident.id === incId) {
+      setSelectedIncident((prev) => (prev ? { ...prev, status: newStatus } : null));
+    }
+  };
+
+  const onAddNoteSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedIncident || !newNoteContent.trim()) return;
+    try {
+      await handleAddNote(selectedIncident.id, newNoteContent.trim(), 'SOC Analyst');
+      setNewNoteContent('');
+      const updatedNotes = await getIncidentNotes(selectedIncident.id);
+      setIncidentNotes(updatedNotes);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const onRunAction = async (actionType, params = {}) => {
+    if (!selectedIncident) return;
+    try {
+      const res = await handleExecuteAction(selectedIncident.id, actionType, params, 'SOC Lead');
+      setActionSuccessMsg(res.message || `Action ${actionType} executed successfully.`);
+      const updatedNotes = await getIncidentNotes(selectedIncident.id);
+      setIncidentNotes(updatedNotes);
+    } catch (err) {
+      setActionSuccessMsg(`Action failed: ${err.message || 'Execution error'}`);
+    }
+  };
+
+  const renderStatusBadge = (status) => {
+    switch (status) {
+      case 'open':
+        return <Badge status="danger" label="Open" />;
+      case 'investigating':
+        return <Badge status="warning" label="Investigating" />;
+      case 'contained':
+        return <Badge status="info" label="Contained" />;
+      case 'resolved':
+        return <Badge status="success" label="Resolved" />;
+      case 'false_positive':
+        return <Badge status="neutral" label="False Positive" />;
+      case 'closed':
+        return <Badge status="neutral" label="Closed" />;
+      default:
+        return <Badge status="neutral" label={status} />;
+    }
+  };
+
+  const renderSeverityBadge = (sev) => {
+    const s = sev ? sev.toLowerCase() : 'medium';
+    if (s === 'critical') return <Badge status="critical" label="CRITICAL" />;
+    if (s === 'high') return <Badge status="danger" label="HIGH" />;
+    if (s === 'medium') return <Badge status="warning" label="MEDIUM" />;
+    return <Badge status="info" label="LOW" />;
+  };
 
   return (
     <div>
+      {/* Header */}
       <div className="page-header">
         <div>
-          <h1 className="page-title">Incidents Management</h1>
-          <p className="page-subtitle">Track, assign, and resolve active security incidents across agents</p>
+          <h1 className="page-title">Incident Management & SOC Response</h1>
+          <p className="page-subtitle">Track, triage, investigate, and orchestrate automated response actions across security incidents</p>
         </div>
-        <Button variant="outline" iconLeft={<FiClock size={15} />} onClick={refreshIncidents}>
-          Refresh
-        </Button>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshIncidents} disabled={loading}>
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div className="card" style={{ padding: '1rem 1.25rem' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Total Incidents</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.2rem' }}>
-            {incidents.length}
-          </div>
+      <div className="stats-grid" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(6, 1fr)' }}>
+        <div className="stat-card">
+          <div className="stat-label">Total Incidents</div>
+          <div className="stat-value">{kpis.total}</div>
         </div>
-
-        <div className="card" style={{ padding: '1rem 1.25rem' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Open</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--error)', marginTop: '0.2rem' }}>
-            {openCount}
-          </div>
+        <div className="stat-card" style={{ borderLeft: '3px solid var(--error)' }}>
+          <div className="stat-label" style={{ color: 'var(--error)' }}>Active / Open</div>
+          <div className="stat-value" style={{ color: 'var(--error)' }}>{kpis.openCount}</div>
         </div>
-
-        <div className="card" style={{ padding: '1rem 1.25rem' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>In Progress</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--warning)', marginTop: '0.2rem' }}>
-            {inProgressCount}
-          </div>
+        <div className="stat-card" style={{ borderLeft: '3px solid var(--info)' }}>
+          <div className="stat-label" style={{ color: 'var(--info)' }}>Contained</div>
+          <div className="stat-value" style={{ color: 'var(--info)' }}>{kpis.containedCount}</div>
         </div>
-
-        <div className="card" style={{ padding: '1rem 1.25rem' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Resolved</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--success)', marginTop: '0.2rem' }}>
-            {resolvedCount}
-          </div>
+        <div className="stat-card" style={{ borderLeft: '3px solid var(--success)' }}>
+          <div className="stat-label" style={{ color: 'var(--success)' }}>Resolved</div>
+          <div className="stat-value" style={{ color: 'var(--success)' }}>{kpis.resolvedCount}</div>
+        </div>
+        <div className="stat-card" style={{ borderLeft: '3px solid var(--warning)' }}>
+          <div className="stat-label">False Positive</div>
+          <div className="stat-value">{kpis.falsePositiveCount}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Closed</div>
+          <div className="stat-value">{kpis.closedCount}</div>
         </div>
       </div>
 
-      {/* Main Table Card */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          <FilterTabs tabs={tabsWithCount} active={statusFilter} onChange={(v) => { setStatusFilter(v); setPage(1); }} />
-          <div style={{ marginLeft: 'auto' }}>
-            <SearchBar value={search} onChange={(v) => { setSearch(v); setPage(1); }} placeholder="Search incidents..." style={{ width: 240 }} />
+      {/* Incident Analytics Line Chart */}
+      <div className="card" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiTrendingUp size={18} color="var(--primary)" />
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+              Incident Timeline & Trends ({statusFilter.toUpperCase()})
+            </h3>
           </div>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Updated in real-time</span>
+        </div>
+        <div style={{ height: 220, position: 'relative' }}>
+          <Line data={chartData} options={chartOptions} />
+        </div>
+      </div>
+
+      {/* Filter Tabs & Advanced Filters */}
+      <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
+        <div style={{ marginBottom: '1rem' }}>
+          <FilterTabs tabs={statusTabs} activeTab={statusFilter} onChange={(tab) => { setStatusFilter(tab); setCurrentPage(1); }} />
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
-            <thead>
-              <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                <th style={{ padding: '0.85rem 1.25rem' }}>Incident ID</th>
-                <th style={{ padding: '0.85rem 1.25rem' }}>Title & Agent</th>
-                <th style={{ padding: '0.85rem 1.25rem' }}>Severity</th>
-                <th style={{ padding: '0.85rem 1.25rem' }}>Status</th>
-                <th style={{ padding: '0.85rem 1.25rem' }}>Assigned To</th>
-                <th style={{ padding: '0.85rem 1.25rem' }}>Created At</th>
-                <th style={{ padding: '0.85rem 1.25rem', textAlign: 'right' }}>Actions</th>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '0.75rem', alignItems: 'center' }}>
+          {/* Search Input */}
+          <div style={{ position: 'relative' }}>
+            <FiSearch style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+            <input
+              type="text"
+              placeholder="Search by ID, title, agent, or details..."
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              style={{
+                width: '100%',
+                paddingLeft: '2.4rem',
+                paddingRight: '0.75rem',
+                paddingTop: '0.55rem',
+                paddingBottom: '0.55rem',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                fontSize: '0.875rem',
+              }}
+            />
+          </div>
+
+          {/* Severity Dropdown */}
+          <Dropdown
+            options={severityOptions}
+            value={severityFilter}
+            onChange={(val) => { setSeverityFilter(val); setCurrentPage(1); }}
+          />
+
+          {/* Agent Dropdown */}
+          <Dropdown
+            options={agentOptions}
+            value={agentFilter}
+            onChange={(val) => { setAgentFilter(val); setCurrentPage(1); }}
+          />
+
+          {/* Timeframe Dropdown */}
+          <Dropdown
+            options={timeOptions}
+            value={timeFilter}
+            onChange={(val) => { setTimeFilter(val); setCurrentPage(1); }}
+          />
+        </div>
+      </div>
+
+      {/* Incidents Table */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Incident ID</th>
+              <th>Title & Telemetry Summary</th>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Assigned To</th>
+              <th>Risk Score</th>
+              <th>Created At</th>
+              <th style={{ textAlign: 'right' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>
+                  <div className="skeleton" style={{ height: '120px' }} />
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {paginated.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                    No incidents match criteria
+            ) : paginatedIncidents.length === 0 ? (
+              <tr>
+                <td colSpan="8" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-tertiary)' }}>
+                  No security incidents match the selected filter criteria.
+                </td>
+              </tr>
+            ) : (
+              paginatedIncidents.map((inc) => (
+                <tr
+                  key={inc.id}
+                  onClick={() => setSelectedIncident(inc)}
+                  style={{ cursor: 'pointer', transition: 'background 0.2s' }}
+                >
+                  <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--primary)' }}>
+                    {inc.id}
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
+                      {inc.title}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+                      <span>Agent: <strong>{inc.agentId}</strong></span>
+                    </div>
+                  </td>
+                  <td>{renderSeverityBadge(inc.severity)}</td>
+                  <td>{renderStatusBadge(inc.status)}</td>
+                  <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    {inc.assignedTo !== 'Unassigned' ? (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--primary)', fontWeight: 600 }}>
+                        <FiUser size={13} /> {inc.assignedTo}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Unassigned</span>
+                    )}
+                  </td>
+                  <td>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        fontFamily: 'monospace',
+                        color: inc.riskScore >= 80 ? 'var(--error)' : inc.riskScore >= 50 ? 'var(--warning)' : 'var(--success)',
+                      }}
+                    >
+                      {inc.riskScore} / 100
+                    </span>
+                  </td>
+                  <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+                    {new Date(inc.createdAt).toLocaleString()}
+                  </td>
+                  <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem' }}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconLeft={<FiEye size={13} />}
+                        onClick={() => setSelectedIncident(inc)}
+                        title="View Details"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        iconLeft={<FiUserPlus size={13} />}
+                        onClick={(e) => openAssignModal(inc, e)}
+                        title="Assign Analyst"
+                      >
+                        Assign
+                      </Button>
+                      {inc.status !== 'contained' && inc.status !== 'resolved' && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          iconLeft={<FiLock size={13} />}
+                          onClick={(e) => onQuickStatusChange(inc.id, 'contained', e)}
+                          title="Quick Contain"
+                        >
+                          Contain
+                        </Button>
+                      )}
+                      {inc.status !== 'resolved' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          iconLeft={<FiCheckCircle size={13} color="var(--success)" />}
+                          onClick={(e) => onQuickStatusChange(inc.id, 'resolved', e)}
+                          title="Quick Resolve"
+                        >
+                          Resolve
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
-              ) : (
-                paginated.map((inc) => (
-                  <tr key={inc.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.15s ease' }}>
-                    <td style={{ padding: '0.85rem 1.25rem', fontWeight: 600, color: 'var(--primary)' }}>
-                      {inc.id}
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem' }}>
-                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{inc.title}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>Agent: {inc.agentId}</div>
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem' }}>
-                      <Badge status={inc.severity.toLowerCase()} label={inc.severity} />
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem' }}>
-                      <Badge
-                        status={inc.status === 'open' ? 'critical' : inc.status === 'in_progress' ? 'warning' : 'online'}
-                        label={inc.status.replace('_', ' ').toUpperCase()}
-                      />
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem', color: 'var(--text-secondary)' }}>
-                      {inc.assignedTo}
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
-                      {new Date(inc.createdAt).toLocaleString()}
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem', textAlign: 'right' }}>
-                      <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                        <Button variant="ghost" size="sm" iconLeft={<FiEye size={14} />} onClick={() => setSelectedIncident(inc)}>
-                          View
-                        </Button>
-                        {inc.status !== 'resolved' && (
-                          <>
-                            <Button variant="outline" size="sm" iconLeft={<FiUserCheck size={14} />} onClick={() => { setAssignModalIncident(inc); setAssigneeInput(inc.assignedTo !== 'Unassigned' ? inc.assignedTo : ''); }}>
-                              Assign
-                            </Button>
-                            <Button variant="success" size="sm" iconLeft={<FiCheckCircle size={14} />} onClick={() => handleResolve(inc.id)}>
-                              Resolve
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+              ))
+            )}
+          </tbody>
+        </table>
 
-        <div style={{ padding: '1rem 1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)' }}>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-            Showing {Math.min((page - 1) * PAGE_SIZE + 1, filteredIncidents.length)}–{Math.min(page * PAGE_SIZE, filteredIncidents.length)} of {filteredIncidents.length}
-          </span>
-          <Pagination current={page} total={totalPages} onChange={setPage} />
-        </div>
+        {/* Pagination Footer */}
+        {totalPages > 1 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderTop: '1px solid var(--border)' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>
+              Showing {paginatedIncidents.length} of {filteredIncidents.length} incidents (Page {currentPage} of {totalPages})
+            </span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <Button variant="ghost" size="sm" disabled={currentPage === 1} onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}>
+                Previous
+              </Button>
+              <Button variant="ghost" size="sm" disabled={currentPage === totalPages} onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}>
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* View Detail Modal */}
-      <Modal isOpen={!!selectedIncident} onClose={() => setSelectedIncident(null)} title="Incident Detail">
+      {/* Comprehensive Incident Detail & SOC Action Modal */}
+      <Modal
+        isOpen={!!selectedIncident}
+        onClose={() => setSelectedIncident(null)}
+        title={selectedIncident ? `Incident Investigation: ${selectedIncident.id}` : ''}
+      >
         {selectedIncident && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {[
-              ['Incident ID', selectedIncident.id],
-              ['Title', selectedIncident.title],
-              ['Description', selectedIncident.description],
-              ['Agent ID', selectedIncident.agentId],
-              ['Severity', selectedIncident.severity],
-              ['Status', selectedIncident.status],
-              ['Assigned To', selectedIncident.assignedTo],
-              ['Created At', new Date(selectedIncident.createdAt).toLocaleString()],
-              ['Updated At', new Date(selectedIncident.updatedAt).toLocaleString()],
-            ].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border)', fontSize: '0.875rem' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>{k}</span>
-                <span style={{ fontWeight: 500, color: 'var(--text-primary)', maxWidth: '60%', textAlign: 'right' }}>{v}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', width: '100%', maxWidth: 780 }}>
+            {/* Modal Sub-Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: 'var(--bg-secondary)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+              <div>
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.3rem' }}>
+                  {selectedIncident.title}
+                </h3>
+                <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.82rem', color: 'var(--text-tertiary)' }}>
+                  <span>Agent ID: <strong style={{ color: 'var(--primary)' }}>{selectedIncident.agentId}</strong></span>
+                  <span>Assigned: <strong>{selectedIncident.assignedTo}</strong></span>
+                  <span>Created: <strong>{new Date(selectedIncident.createdAt).toLocaleString()}</strong></span>
+                </div>
               </div>
-            ))}
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                {renderSeverityBadge(selectedIncident.severity)}
+                {renderStatusBadge(selectedIncident.status)}
+              </div>
+            </div>
+
+            {/* Modal Tabs */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', gap: '1rem' }}>
+              <button
+                onClick={() => setDetailTab('overview')}
+                style={{
+                  padding: '0.5rem 0.85rem',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: detailTab === 'overview' ? '2px solid var(--primary)' : 'none',
+                  color: detailTab === 'overview' ? 'var(--primary)' : 'var(--text-secondary)',
+                  fontWeight: detailTab === 'overview' ? 700 : 500,
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+              >
+                <FiFileText size={14} /> Overview & Telemetry
+              </button>
+              <button
+                onClick={() => setDetailTab('notes')}
+                style={{
+                  padding: '0.5rem 0.85rem',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: detailTab === 'notes' ? '2px solid var(--primary)' : 'none',
+                  color: detailTab === 'notes' ? 'var(--primary)' : 'var(--text-secondary)',
+                  fontWeight: detailTab === 'notes' ? 700 : 500,
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+              >
+                <FiActivity size={14} /> Audit Trail & Notes ({incidentNotes.length})
+              </button>
+              <button
+                onClick={() => setDetailTab('actions')}
+                style={{
+                  padding: '0.5rem 0.85rem',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: detailTab === 'actions' ? '2px solid var(--primary)' : 'none',
+                  color: detailTab === 'actions' ? 'var(--primary)' : 'var(--text-secondary)',
+                  fontWeight: detailTab === 'actions' ? 700 : 500,
+                  cursor: 'pointer',
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+              >
+                <FiShield size={14} color="var(--error)" /> Quick Mitigation Response
+              </button>
+            </div>
+
+            {/* TAB 1: OVERVIEW */}
+            {detailTab === 'overview' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                    Detailed Incident Description
+                  </h4>
+                  <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', whiteSpace: 'pre-wrap' }}>
+                    {selectedIncident.description}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Risk Score Assessment</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: selectedIncident.riskScore >= 80 ? 'var(--error)' : 'var(--primary)', marginTop: '0.2rem' }}>
+                      {selectedIncident.riskScore} / 100
+                    </div>
+                  </div>
+
+                  <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Target Host Agent</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)', marginTop: '0.2rem' }}>
+                      {selectedIncident.agentId}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status Transition Quick Bar */}
+                <div style={{ marginTop: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
+                    Change Incident Lifecycle Status:
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <Button variant={selectedIncident.status === 'contained' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'contained')}>
+                      Mark Contained
+                    </Button>
+                    <Button variant={selectedIncident.status === 'resolved' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'resolved')}>
+                      Mark Resolved
+                    </Button>
+                    <Button variant={selectedIncident.status === 'false_positive' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'false_positive')}>
+                      Mark False Positive
+                    </Button>
+                    <Button variant={selectedIncident.status === 'closed' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'closed')}>
+                      Close Incident
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: AUDIT TRAIL & NOTES */}
+            {detailTab === 'notes' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem', paddingRight: '0.3rem' }}>
+                  {loadingNotes ? (
+                    <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading audit trail...</div>
+                  ) : incidentNotes.length === 0 ? (
+                    <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                      No analyst notes or audit logs recorded yet.
+                    </div>
+                  ) : (
+                    incidentNotes.map((note) => (
+                      <div
+                        key={note.id || Math.random()}
+                        style={{
+                          padding: '0.65rem 0.85rem',
+                          background: 'var(--bg-secondary)',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          fontSize: '0.85rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                          <span style={{ fontWeight: 700, color: 'var(--primary)' }}>[{note.user || 'system'}]</span>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                            {note.created_at ? new Date(note.created_at).toLocaleString() : ''}
+                          </span>
+                        </div>
+                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{note.content}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Add Note Form */}
+                <form onSubmit={onAddNoteSubmit} style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  <input
+                    type="text"
+                    placeholder="Type an analyst note or investigation log comment..."
+                    value={newNoteContent}
+                    onChange={(e) => setNewNoteContent(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '0.55rem 0.8rem',
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.875rem',
+                    }}
+                  />
+                  <Button type="submit" variant="primary" iconLeft={<FiSend size={14} />}>
+                    Add Note
+                  </Button>
+                </form>
+              </div>
+            )}
+
+            {/* TAB 3: QUICK MITIGATION RESPONSE */}
+            {detailTab === 'actions' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {actionSuccessMsg && (
+                  <div style={{ padding: '0.6rem 0.85rem', background: 'rgba(34,197,94,0.1)', border: '1px solid var(--success)', borderRadius: 'var(--radius-sm)', color: 'var(--success)', fontSize: '0.85rem' }}>
+                    {actionSuccessMsg}
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  {/* Action 1: Isolate Agent */}
+                  <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <div>
+                      <h4 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                        <FiLock size={16} /> Isolate Host Network
+                      </h4>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                        Immediately isolate agent <strong>{selectedIncident.agentId}</strong> from network communications to prevent lateral movement.
+                      </p>
+                    </div>
+                    <Button variant="danger" size="sm" style={{ marginTop: '0.75rem' }} disabled={actionLoading} onClick={() => onRunAction('isolate')}>
+                      Isolate Host ({selectedIncident.agentId})
+                    </Button>
+                  </div>
+
+                  {/* Action 2: Kill Process Tree */}
+                  <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <div>
+                      <h4 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
+                        <FiLayers size={16} /> Terminate Process Tree
+                      </h4>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
+                        Dispatch kill_process_tree command to recursively kill malicious process and its children.
+                      </p>
+                      <input
+                        type="number"
+                        placeholder="Enter Target PID (e.g. 4444)..."
+                        value={quickActionPID}
+                        onChange={(e) => setQuickActionPID(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.45rem 0.6rem',
+                          background: 'var(--bg-primary)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 'var(--radius-sm)',
+                          color: 'var(--text-primary)',
+                          fontSize: '0.8rem',
+                        }}
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      style={{ marginTop: '0.75rem' }}
+                      disabled={actionLoading || !quickActionPID}
+                      onClick={() => onRunAction('kill_process_tree', { pid: quickActionPID })}
+                    >
+                      Kill Process Tree (PID {quickActionPID || '...'})
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Modal>
 
-      {/* Assign Modal */}
-      <Modal isOpen={!!assignModalIncident} onClose={() => setAssignModalIncident(null)} title="Assign Incident">
-        {assignModalIncident && (
-          <form onSubmit={onAssignSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                Assigning <strong>{assignModalIncident.id}</strong>: {assignModalIncident.title}
-              </p>
-              <input
-                type="text"
-                placeholder="Enter Analyst Name or ID..."
-                value={assigneeInput}
-                onChange={(e) => setAssigneeInput(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '0.65rem 0.8rem',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.9rem',
-                }}
-                required
-              />
-            </div>
+      {/* Assign Analyst Modal */}
+      <Modal
+        isOpen={!!assignModalInc}
+        onClose={() => setAssignModalInc(null)}
+        title="Assign Incident Analyst"
+      >
+        {assignModalInc && (
+          <form onSubmit={submitAssign} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+              Assign incident <strong>{assignModalInc.id}</strong> ({assignModalInc.title}) to an operator or SOC analyst:
+            </p>
+            <input
+              type="text"
+              placeholder="Analyst Name or Operator ID (e.g. Analyst 1, SOC Lead)..."
+              value={assigneeInput}
+              onChange={(e) => setAssigneeInput(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.65rem 0.8rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+                fontSize: '0.9rem',
+              }}
+              required
+            />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              <Button variant="ghost" onClick={() => setAssignModalIncident(null)}>
+              <Button variant="ghost" onClick={() => setAssignModalInc(null)}>
                 Cancel
               </Button>
-              <Button variant="primary" type="submit">
+              <Button variant="primary" type="submit" disabled={actionLoading}>
                 Confirm Assign
               </Button>
             </div>

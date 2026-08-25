@@ -28,15 +28,26 @@ class SettingService:
         thresholds = await self.get_setting("risk_thresholds")
         if isinstance(thresholds, dict):
             return {
+                "incident_creation_threshold": float(thresholds.get("incident_creation_threshold", 50.0)),
+                "auto_kill_threshold": float(thresholds.get("auto_kill_threshold", 85.0)),
                 "auto_isolate": float(thresholds.get("auto_isolate", 85.0)),
                 "alert_with_buttons": float(thresholds.get("alert_with_buttons", 70.0)),
                 "alert": float(thresholds.get("alert", 50.0)),
                 "log": float(thresholds.get("log", 20.0)),
             }
-        return {"auto_isolate": 85.0, "alert_with_buttons": 70.0, "alert": 50.0, "log": 20.0}
+        return {
+            "incident_creation_threshold": 50.0,
+            "auto_kill_threshold": 85.0,
+            "auto_isolate": 85.0,
+            "alert_with_buttons": 70.0,
+            "alert": 50.0,
+            "log": 20.0,
+        }
 
     async def update_risk_thresholds(self, thresholds: Dict[str, Any]) -> Dict[str, float]:
         val = {
+            "incident_creation_threshold": float(thresholds.get("incident_creation_threshold", 50.0)),
+            "auto_kill_threshold": float(thresholds.get("auto_kill_threshold", 85.0)),
             "auto_isolate": float(thresholds.get("auto_isolate", 85.0)),
             "alert_with_buttons": float(thresholds.get("alert_with_buttons", 70.0)),
             "alert": float(thresholds.get("alert", 50.0)),
