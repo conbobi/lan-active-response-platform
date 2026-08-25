@@ -29,9 +29,9 @@ class ProcessTreeService:
         Fetch latest process telemetry for an agent, construct a directed graph (DiGraph),
         and format process hierarchy into a structured JSON tree.
         """
-        processes = await self.process_repo.get_by_agent(agent_id, limit=200)
+        processes = await self.process_repo.get_by_agent(agent_id, limit=500)
         if not processes:
-            return {"agent_id": agent_id, "nodes": [], "edges": [], "tree": []}
+            return {"agent_id": agent_id, "total_processes": 0, "root_count": 0, "tree": []}
 
         G = nx.DiGraph()
         proc_dict = {}
@@ -52,15 +52,20 @@ class ProcessTreeService:
             G.add_node(p.pid, **proc_dict[p.pid])
 
         for p in processes:
-            if p.parent_pid and p.parent_pid in proc_dict:
+            if p.parent_pid and p.parent_pid in proc_dict and p.parent_pid != p.pid:
                 G.add_edge(p.parent_pid, p.pid)
 
         # Build root nodes (nodes with in-degree 0 or parent not in snapshot)
         roots = [n for n in G.nodes() if G.in_degree(n) == 0]
 
+        visited = set()
+
         def get_subtree(node_id):
-            node_data = proc_dict.get(node_id, {"pid": node_id})
-            children = [get_subtree(child) for child in G.successors(node_id)]
+            if node_id in visited:
+                return dict(proc_dict.get(node_id, {"pid": node_id, "children": []}))
+            visited.add(node_id)
+            node_data = dict(proc_dict.get(node_id, {"pid": node_id}))
+            children = [get_subtree(child) for child in G.successors(node_id) if child not in visited]
             node_data["children"] = children
             return node_data
 
@@ -77,7 +82,7 @@ class ProcessTreeService:
         """
         Identify suspicious processes for an agent and trace their parent execution chain.
         """
-        processes = await self.process_repo.get_by_agent(agent_id, limit=200)
+        processes = await self.process_repo.get_by_agent(agent_id, limit=500)
         proc_map = {p.pid: p for p in processes}
 
         suspicious_list = []
@@ -97,13 +102,21 @@ class ProcessTreeService:
                     curr_ppid = parent_proc.parent_pid
                     depth += 1
 
+                reason = "Suspicious binary pattern / cmdline flagged"
+                if p.exe and ("/tmp/" in p.exe or "/dev/shm" in p.exe):
+                    reason = "Process executing from temporary directory (/tmp or /dev/shm)"
+
                 suspicious_list.append({
                     "pid": p.pid,
                     "parent_pid": p.parent_pid,
                     "name": p.name,
                     "exe": p.exe or p.exe_path or "",
+                    "path": p.exe or p.exe_path or "",
                     "cmdline": p.cmdline,
+                    "cpu_percent": p.cpu_percent,
+                    "memory_percent": p.memory_percent,
                     "hash": p.hash,
+                    "reason": reason,
                     "parent_chain": chain
                 })
 
@@ -125,4 +138,28 @@ class ProcessTreeService:
         await command_dispatcher.push_command(cmd.id, agent_id)
         await self.session.flush()
         logger.info(f"Pushed kill_process command for PID {pid} on agent '{agent_id}'.")
+        return cmd
+
+    async def kill_process_tree(
+        self, agent_id: str, pid: int, process_name: Optional[str] = None, reason: Optional[str] = None
+    ) -> Command:
+        """
+        Generate and push a 'kill_process_tree' command to terminate a process and all its children on an agent.
+        """
+        cmd_repo = CommandRepository(self.session)
+        cmd = Command(
+            id=f"cmd_{uuid.uuid4().hex[:12]}",
+            agent_id=agent_id,
+            action="kill_process_tree",
+            payload={
+                "pid": pid,
+                "process_name": process_name,
+                "reason": reason or "Terminated by Process Tree / Risk Assessment"
+            },
+            status=CommandStatus.PENDING
+        )
+        await cmd_repo.add(cmd)
+        await command_dispatcher.push_command(cmd.id, agent_id)
+        await self.session.flush()
+        logger.info(f"Pushed kill_process_tree command for PID {pid} ({process_name}) on agent '{agent_id}'.")
         return cmd

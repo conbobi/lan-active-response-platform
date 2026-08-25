@@ -149,8 +149,74 @@ class RiskAssessmentService:
             logger.info(f"Agent '{agent_id}' process matched Whitelist. Auto-isolation suppressed.")
             return record
 
+        # Fetch thresholds
+        thresholds = await self.setting_service.get_risk_thresholds()
+        incident_creation_th = thresholds.get("incident_creation_threshold", 50.0)
+        auto_kill_th = thresholds.get("auto_kill_threshold", 85.0)
+
+        # 1. Automated Incident Creation if score >= incident_creation_threshold
+        if score >= incident_creation_th:
+            incident_service = IncidentService(self.session)
+            inc = await incident_service.create_from_risk(agent_id, score, factors)
+            logger.info(f"Automated incident '{inc.id}' evaluated for agent '{agent_id}' (score: {score} >= threshold: {incident_creation_th})")
+
+        # 2. Automated Process Tree Termination if score >= auto_kill_threshold
+        if score >= auto_kill_th and not is_whitelisted:
+            logger.warning(
+                f"High risk score ({score} >= {auto_kill_th}) for agent '{agent_id}'. "
+                f"Triggering Automated Process Tree Termination!"
+            )
+            cmd_repo = CommandRepository(self.session)
+            suspicious_procs = []
+            
+            suspect_keywords = [
+                "nc", "netcat", "mimikatz", "nmap", "chisel", "psexec", "procdump",
+                "ransomware_sim", "backdoor_sim", "credential_dump", "sleep", "shadow"
+            ]
+            
+            for proc in processes:
+                p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
+                is_susp = p_dict.get("is_suspicious", False)
+                name = str(p_dict.get("name", "")).strip().lower()
+                cmdline = str(p_dict.get("cmdline", "")).strip().lower()
+                full_str = f"{name} {cmdline}"
+                
+                if is_susp or any(k in full_str for k in suspect_keywords):
+                    pid = p_dict.get("pid")
+                    p_name = p_dict.get("name") or name or "suspicious_process"
+                    if pid and not any(sp["pid"] == pid for sp in suspicious_procs):
+                        suspicious_procs.append({"pid": pid, "name": p_name, "cmdline": cmdline})
+
+            killed_details = []
+            for sproc in suspicious_procs:
+                kill_cmd = Command(
+                    id=f"cmd_{uuid.uuid4().hex[:12]}",
+                    agent_id=agent_id,
+                    action="kill_process_tree",
+                    payload={
+                        "pid": sproc["pid"],
+                        "process_name": sproc["name"],
+                        "reason": f"Automated Process Tree Kill triggered by Risk Score {score} (threshold: {auto_kill_th})"
+                    },
+                    status=CommandStatus.PENDING
+                )
+                await cmd_repo.add(kill_cmd)
+                await command_dispatcher.push_command(kill_cmd.id, agent_id)
+                killed_details.append(f"PID {sproc['pid']} ({sproc['name']})")
+                logger.info(f"Dispatched kill_process_tree for PID {sproc['pid']} ({sproc['name']}) on agent '{agent_id}'")
+
+            if killed_details:
+                msg = (
+                    f"⚔️ <b>AUTOMATED PROCESS TREE KILLED</b> ⚔️\n"
+                    f"<b>Agent ID:</b> {agent_id}\n"
+                    f"<b>Risk Score:</b> {score}/100 (Threshold: {auto_kill_th})\n"
+                    f"<b>Terminated Process Trees:</b> {', '.join(killed_details)}"
+                )
+                await self.notification_service.send_alert(msg)
+
+        # 3. Network Auto-Isolation
         if action == "auto_isolate":
-            logger.warning(f"High risk score ({score}) for agent '{agent_id}'. Triggering auto-isolation!")
+            logger.warning(f"Critical risk score ({score}) for agent '{agent_id}'. Triggering auto-isolation!")
             agent.isolate()
 
             # Create isolate command
@@ -165,17 +231,12 @@ class RiskAssessmentService:
             await cmd_repo.add(cmd)
             await command_dispatcher.push_command(cmd.id, agent_id)
 
-            # Automated Incident Creation
-            incident_service = IncidentService(self.session)
-            inc = await incident_service.create_from_risk(agent_id, score, factors)
-
             # Send critical Telegram notification
             msg = (
                 f"🚨 <b>CRITICAL RISK ALERT</b> 🚨\n"
                 f"<b>Agent ID:</b> {agent_id}\n"
                 f"<b>Hostname:</b> {agent.hostname}\n"
                 f"<b>Risk Score:</b> {score}/100\n"
-                f"<b>Incident Created:</b> {inc.id}\n"
                 f"<b>Action:</b> 🛡️ Automated Network Isolation Executed\n"
                 f"<b>Factors:</b> {factors}"
             )

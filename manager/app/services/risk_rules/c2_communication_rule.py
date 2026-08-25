@@ -46,7 +46,7 @@ class C2CommunicationRule(RiskRule):
                 c2_indicators.append(f"Direct connection to C2 port {dst_port} (IP: {dst_ip})")
 
         if c2_indicators:
-            score = min(45.0, len(c2_indicators) * 35.0)
+            score = min(45.0, len(c2_indicators) * 35.0) * self.base_score
             return score, f"C2 communication indicator detected: {', '.join(c2_indicators)}"
 
         return 0.0, ""

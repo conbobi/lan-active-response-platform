@@ -14,6 +14,7 @@ export default function Settings() {
     updateFileChangesThresholds,
   } = useSettings();
 
+  const [autoKillThreshold, setAutoKillThreshold] = useState(90);
   const [autoIsolate, setAutoIsolate] = useState(85);
   const [alertWithButtons, setAlertWithButtons] = useState(70);
   const [alertThreshold, setAlertThreshold] = useState(50);
@@ -29,6 +30,7 @@ export default function Settings() {
 
   useEffect(() => {
     if (settings && settings.risk_thresholds) {
+      setAutoKillThreshold(settings.risk_thresholds.auto_kill_threshold ?? 90);
       setAutoIsolate(settings.risk_thresholds.auto_isolate ?? 85);
       setAlertWithButtons(settings.risk_thresholds.alert_with_buttons ?? 70);
       setAlertThreshold(settings.risk_thresholds.alert ?? 50);
@@ -47,6 +49,7 @@ export default function Settings() {
 
   const handleSaveAll = async () => {
     await updateRiskThresholds({
+      auto_kill_threshold: Number(autoKillThreshold),
       auto_isolate: Number(autoIsolate),
       alert_with_buttons: Number(alertWithButtons),
       alert: Number(alertThreshold),
@@ -107,6 +110,20 @@ export default function Settings() {
 
       {/* Risk Thresholds Policy */}
       <Section title="Risk Threshold Escalation Policy" desc="Configure exact risk score cutoffs for automated response and alerts.">
+        <Row label="Auto Kill Process Tree Threshold" desc="Automatically terminate suspicious process tree on agent when risk score exceeds this value">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <input
+              type="range"
+              min={50}
+              max={100}
+              value={autoKillThreshold}
+              onChange={(e) => setAutoKillThreshold(+e.target.value)}
+              style={{ width: 140, accentColor: '#ff4d4f' }}
+            />
+            <span style={{ fontWeight: 700, color: '#ff4d4f', minWidth: 32, textAlign: 'right' }}>{autoKillThreshold}</span>
+          </div>
+        </Row>
+
         <Row label="Auto Isolation Threshold" desc="Automatically isolate agent network link when score exceeds this value">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <input

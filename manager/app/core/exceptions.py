@@ -39,3 +39,6 @@ class CommandExecutionError(AppException):
 class LockAcquisitionError(AppException):
     def __init__(self, lock_key: str):
         super().__init__(message=f"Failed to acquire lock for key '{lock_key}'.", status_code=503)
+class BadRequestError(AppException):
+    def __init__(self, message: str = "Bad request."):
+        super().__init__(message=message, status_code=400)

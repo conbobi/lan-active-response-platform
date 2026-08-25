@@ -10,7 +10,7 @@ class NetworkConnectionRule(RiskRule):
     weight = 1.0
     category = "network"
 
-    DEFAULT_SUSPICIOUS_PORTS = {4444, 1337, 31337, 6667, 23}
+    DEFAULT_SUSPICIOUS_PORTS = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         connections = telemetry.get("network_connections", [])
@@ -26,9 +26,11 @@ class NetworkConnectionRule(RiskRule):
         for conn in connections:
             c_dict = conn if isinstance(conn, dict) else conn.model_dump() if hasattr(conn, "model_dump") else getattr(conn, "__dict__", {})
             dst_port = c_dict.get("dst_port", 0)
+            src_port = c_dict.get("src_port", 0)
             dst_ip = c_dict.get("dst_ip")
+            is_susp = c_dict.get("is_suspicious", False)
 
-            if dst_port in suspicious_ports:
+            if is_susp or dst_port in suspicious_ports or src_port in suspicious_ports:
                 suspicious_conns += 1
 
             if dst_ip and threat_intel_service:
@@ -50,4 +52,7 @@ class NetworkConnectionRule(RiskRule):
             score += 30.0
             reasons.append(f"Detected {threat_ip_count} connections to malicious IPs")
 
-        return score, "; ".join(reasons)
+        if score > 0:
+            return score * self.base_score, "; ".join(reasons)
+
+        return 0.0, ""

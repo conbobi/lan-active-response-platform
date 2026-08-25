@@ -29,14 +29,20 @@ class LateralMovementRule(RiskRule):
             c_dict = conn if isinstance(conn, dict) else conn.model_dump() if hasattr(conn, "model_dump") else getattr(conn, "__dict__", {})
             dst_port = c_dict.get("dst_port", 0)
             dst_ip = str(c_dict.get("dst_ip", ""))
-            if dst_port in admin_ports and (dst_ip.startswith("10.") or dst_ip.startswith("192.168.") or dst_ip.startswith("172.")):
+            if dst_port in admin_ports:
                 internal_targets.add(f"{dst_ip}:{dst_port}")
 
-        if len(internal_targets) >= 3:
-            events_found.append(f"Multiple internal admin port connections ({len(internal_targets)} targets)")
+        if len(internal_targets) >= 1:
+            events_found.append(f"Internal admin port connection sweep ({len(internal_targets)} target(s): {', '.join(internal_targets)})")
+
+        commands = telemetry.get("suspicious_commands", [])
+        for cmd in commands:
+            cmd_lower = cmd.lower()
+            if "nmap" in cmd_lower or "lateral" in cmd_lower:
+                events_found.append(f"Lateral movement command: {cmd}")
 
         if events_found:
-            score = min(45.0, len(events_found) * 35.0)
+            score = min(45.0, len(events_found) * 35.0) * self.base_score
             return score, f"Lateral movement activity detected: {', '.join(events_found)}"
 
         return 0.0, ""

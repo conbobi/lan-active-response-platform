@@ -1,103 +1,102 @@
 // src/hooks/useProcessTree.js
 import { useState, useEffect, useCallback } from 'react';
-import { getProcessTree, getSuspiciousProcesses, killProcess } from '../api/process';
+import { getProcessTree, getSuspiciousProcesses, killProcess, killProcessTree } from '../api/process';
+import { useDashboardSocket } from './useDashboardSocket';
 
-export const useProcessTree = (initialAgentId = '') => {
-  const [selectedAgentId, setSelectedAgentId] = useState(initialAgentId);
+export const useProcessTree = (agentId = '') => {
+  const [selectedAgentId, setSelectedAgentId] = useState(agentId);
   const [processTree, setProcessTree] = useState(null);
   const [suspiciousProcesses, setSuspiciousProcesses] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [killing, setKilling] = useState(false);
   const [error, setError] = useState(null);
 
-  const fetchProcessData = useCallback(async (agentId) => {
-    if (!agentId) return;
-    setLoading(true);
+  // Sync internal selectedAgentId if passed agentId changes from outside
+  useEffect(() => {
+    if (agentId) {
+      setSelectedAgentId(agentId);
+    }
+  }, [agentId]);
+
+  const fetchData = useCallback(async (targetAgentId = selectedAgentId, showLoading = true) => {
+    if (!targetAgentId) return;
+    if (showLoading) setLoading(true);
     setError(null);
+
     try {
-      const [tree, suspicious] = await Promise.all([
-        getProcessTree(agentId).catch(() => null),
-        getSuspiciousProcesses(agentId).catch(() => []),
+      const [treeData, suspiciousData] = await Promise.all([
+        getProcessTree(targetAgentId).catch((err) => {
+          console.warn(`Failed to fetch process tree for ${targetAgentId}:`, err);
+          return null;
+        }),
+        getSuspiciousProcesses(targetAgentId).catch((err) => {
+          console.warn(`Failed to fetch suspicious processes for ${targetAgentId}:`, err);
+          return [];
+        }),
       ]);
 
-      if (tree) {
-        setProcessTree(tree);
-      } else {
-        // Fallback demo tree if backend endpoint empty
-        setProcessTree({
-          pid: 1,
-          name: 'systemd',
-          path: '/sbin/init',
-          cpu: 0.1,
-          is_suspicious: false,
-          children: [
-            {
-              pid: 412,
-              name: 'networkd',
-              path: '/lib/systemd/systemd-networkd',
-              cpu: 0.5,
-              is_suspicious: false,
-              children: [],
-            },
-            {
-              pid: 1042,
-              name: 'larp-agent',
-              path: '/usr/local/bin/larp-agent',
-              cpu: 2.4,
-              is_suspicious: false,
-              children: [
-                {
-                  pid: 2841,
-                  name: 'nc',
-                  path: '/usr/bin/nc',
-                  cpu: 18.5,
-                  is_suspicious: true,
-                  reason: 'Reverse shell connection established',
-                  children: [],
-                },
-                {
-                  pid: 3105,
-                  name: 'vssadmin.exe',
-                  path: 'C:\\Windows\\System32\\vssadmin.exe',
-                  cpu: 45.0,
-                  is_suspicious: true,
-                  reason: 'Attempting to delete volume shadow copies',
-                  children: [],
-                },
-              ],
-            },
-          ],
-        });
-      }
-
-      if (suspicious && suspicious.length > 0) {
-        setSuspiciousProcesses(suspicious);
-      } else {
-        setSuspiciousProcesses([
-          { pid: 2841, name: 'nc', path: '/usr/bin/nc', cpu: 18.5, reason: 'Reverse shell connection established', hash: 'e3b0c44298fc1c149afbf4c8996fb924' },
-          { pid: 3105, name: 'vssadmin.exe', path: 'C:\\Windows\\System32\\vssadmin.exe', cpu: 45.0, reason: 'Shadow copy deletion attempt', hash: '8f34b2c12a890e00115599aa' },
-        ]);
-      }
+      setProcessTree(treeData);
+      setSuspiciousProcesses(Array.isArray(suspiciousData) ? suspiciousData : []);
     } catch (err) {
-      setError(err.message || 'Failed to fetch process tree');
+      console.error('Error in useProcessTree fetchData:', err);
+      setError(err.message || 'Failed to fetch process tree telemetry');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
-  }, []);
+  }, [selectedAgentId]);
 
+  // Initial fetch and auto-polling every 5 seconds
   useEffect(() => {
     if (selectedAgentId) {
-      fetchProcessData(selectedAgentId);
+      fetchData(selectedAgentId, true);
+
+      const interval = setInterval(() => {
+        fetchData(selectedAgentId, false);
+      }, 5000);
+
+      return () => clearInterval(interval);
     }
-  }, [selectedAgentId, fetchProcessData]);
+  }, [selectedAgentId, fetchData]);
+
+  // Realtime WebSocket updates if PROCESS_LIST arrives for this agent
+  useDashboardSocket(
+    useCallback((msg) => {
+      if (msg && (msg.type === 'PROCESS_LIST' || msg.type === 'TELEMETRY_RISK')) {
+        const msgAgentId = msg.payload?.agent_id || msg.agent_id;
+        if (!selectedAgentId || msgAgentId === selectedAgentId) {
+          fetchData(selectedAgentId, false);
+        }
+      }
+    }, [selectedAgentId, fetchData])
+  );
 
   const handleKillProcess = async (pid) => {
-    if (!selectedAgentId) return;
+    const targetAgent = selectedAgentId || agentId;
+    if (!targetAgent || !pid) return;
+    setKilling(true);
     try {
-      await killProcess(selectedAgentId, pid);
-      await fetchProcessData(selectedAgentId);
+      await killProcess(targetAgent, pid, false);
+      await fetchData(targetAgent, false);
     } catch (err) {
-      console.warn(`Local kill UI update for PID ${pid}`);
+      console.warn(`Kill process PID ${pid} fallback local UI update`);
       setSuspiciousProcesses((prev) => prev.filter((p) => p.pid !== pid));
+    } finally {
+      setKilling(false);
+    }
+  };
+
+  const handleKillProcessTree = async (pid, processName = null) => {
+    const targetAgent = selectedAgentId || agentId;
+    if (!targetAgent || !pid) return;
+    setKilling(true);
+    try {
+      await killProcess(targetAgent, pid, true, processName);
+      await fetchData(targetAgent, false);
+    } catch (err) {
+      console.warn(`Kill process tree PID ${pid} fallback local UI update`);
+      setSuspiciousProcesses((prev) => prev.filter((p) => p.pid !== pid));
+    } finally {
+      setKilling(false);
     }
   };
 
@@ -107,9 +106,12 @@ export const useProcessTree = (initialAgentId = '') => {
     processTree,
     suspiciousProcesses,
     loading,
+    killing,
     error,
-    refreshProcessData: () => fetchProcessData(selectedAgentId),
+    fetchData: () => fetchData(selectedAgentId, true),
+    refreshProcessData: () => fetchData(selectedAgentId, true),
     handleKillProcess,
+    handleKillProcessTree,
   };
 };
 

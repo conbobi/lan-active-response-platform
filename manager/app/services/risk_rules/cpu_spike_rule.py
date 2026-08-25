@@ -13,9 +13,9 @@ class CpuSpikeRule(RiskRule):
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         cpu = telemetry.get("cpu_usage", 0.0)
         high_threshold = self.config.get("high_threshold", 85.0)
-        high_score = self.config.get("high_score", 30.0)
+        high_score = self.config.get("high_score", 30.0) * self.base_score
         medium_threshold = self.config.get("medium_threshold", 70.0)
-        medium_score = self.config.get("medium_score", 15.0)
+        medium_score = self.config.get("medium_score", 15.0) * self.base_score
 
         if cpu > high_threshold:
             return high_score, f"Critical CPU spike ({cpu}%)"

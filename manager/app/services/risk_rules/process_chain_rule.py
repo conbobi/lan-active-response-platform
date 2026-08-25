@@ -50,7 +50,7 @@ class ProcessChainRule(RiskRule):
                     anomalies.append(anomaly_desc)
 
         if anomalies:
-            score = min(50.0, len(anomalies) * 35.0)
+            score = min(50.0, len(anomalies) * 35.0) * self.base_score
             return score, f"Process chain anomaly detected: {', '.join(anomalies)}"
 
         return 0.0, ""

@@ -21,11 +21,28 @@ export const getSuspiciousProcesses = async (agentId) => {
   }
 };
 
-export const killProcess = async (agentId, pid) => {
+export const killProcess = async (agentId, pid, killTree = false, processName = null) => {
   try {
+    if (killTree) {
+      return await api.post(`/process/${agentId}/kill_tree`, {
+        pid: Number(pid),
+        process_name: processName,
+      });
+    }
     return await api.post(`/process/${agentId}/kill`, { pid: Number(pid) });
   } catch (error) {
-    console.error(`API Error killing process PID ${pid} on ${agentId}:`, error);
+    console.error(`API Error killing process (PID: ${pid}, killTree: ${killTree}) on ${agentId}:`, error);
     throw error;
   }
+};
+
+export const killProcessTree = async (agentId, pid, processName = null) => {
+  return await killProcess(agentId, pid, true, processName);
+};
+
+export default {
+  getProcessTree,
+  getSuspiciousProcesses,
+  killProcess,
+  killProcessTree,
 };

@@ -23,7 +23,10 @@ class Agent(Base, TimestampMixin):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
-
+    def activate(self):
+        self.is_isolated = False
+        self.status = AgentStatus.ACTIVE
+        
     def update_heartbeat(
         self, cpu: float, ram: float, disk: float, timestamp: Optional[datetime] = None,ip_address: str = None, mac_address: str = None
     ) -> None:

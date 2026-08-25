@@ -10,6 +10,7 @@ class DetectionRuleBase(BaseModel):
     description: str = ""
     enabled: bool = True
     weight: float = 1.0
+    base_score: float = 1.0
     category: str = "os"
     config: Dict[str, Any] = Field(default_factory=dict)
 
@@ -23,6 +24,7 @@ class DetectionRuleUpdate(BaseModel):
     description: Optional[str] = None
     enabled: Optional[bool] = None
     weight: Optional[float] = None
+    base_score: Optional[float] = None
     category: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
 
@@ -34,6 +36,7 @@ class DetectionRuleOut(ORMBaseModel):
     description: str
     enabled: bool
     weight: float
+    base_score: float
     category: str
     config: Dict[str, Any]
     created_at: datetime
