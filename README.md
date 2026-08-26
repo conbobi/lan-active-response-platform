@@ -266,7 +266,7 @@ Adjust risk escalation thresholds, file change thresholds, and automation settin
 1. **Clone the repository**
 
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/conbobi/lan-active-response-platform.git
    cd larp
 Start all services
 
