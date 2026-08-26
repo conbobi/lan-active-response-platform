@@ -29,14 +29,16 @@ class RegistryRule(RiskRule):
 
         for change in registry_changes:
             c_dict = change if isinstance(change, dict) else change.model_dump() if hasattr(change, "model_dump") else getattr(change, "__dict__", {})
-            key_path = str(c_dict.get("key_path", "")).lower()
+            key_path = str(c_dict.get("key_path") or c_dict.get("key") or c_dict.get("path") or "").lower()
 
             if any(p_key in key_path for p_key in persistence_keys):
-                val_name = c_dict.get("value_name", "")
-                suspicious_changes.append(f"Key: {c_dict.get('key_path')} (Value: {val_name})")
+                val_name = c_dict.get("value_name") or c_dict.get("value") or ""
+                disp_key = c_dict.get("key_path") or c_dict.get("key") or c_dict.get("path") or "unknown_key"
+                suspicious_changes.append(f"Key: {disp_key} (Value: {val_name})")
 
         if suspicious_changes:
             score = min(40.0, len(suspicious_changes) * 25.0) * self.base_score
             return score, f"Suspicious registry modification detected: {', '.join(suspicious_changes)}"
+
 
         return 0.0, ""

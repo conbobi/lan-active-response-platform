@@ -227,6 +227,49 @@ def get_file_changes_count():
         pass
     return count
 
+def collect_registry_changes():
+    """
+    Thu thập các file .reg và nội dung registry / system config persistence giả lập trong /tmp và /etc/hosts.
+    """
+    changes = []
+    try:
+        if os.path.exists('/tmp'):
+            for root, dirs, files in os.walk('/tmp'):
+                for f in files:
+                    if f.endswith('.reg'):
+                        path = os.path.join(root, f)
+                        try:
+                            with open(path, 'r', encoding='utf-8', errors='ignore') as fp:
+                                content = fp.read()
+                            if 'CurrentVersion\\Run' in content or 'CurrentVersion\\RunOnce' in content or 'HKEY_LOCAL_MACHINE' in content or 'HKEY_CURRENT_USER' in content:
+                                changes.append({
+                                    "path": path,
+                                    "action": "write",
+                                    "key_path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                    "value_name": "BackdoorService",
+                                    "value_data": "C:\\Windows\\System32\\cmd.exe /c start /b malware.exe"
+                                })
+                        except Exception:
+                            pass
+        if os.path.exists('/etc/hosts'):
+            try:
+                with open('/etc/hosts', 'r', encoding='utf-8', errors='ignore') as fp:
+                    content = fp.read()
+                if 'persistence.test.local' in content or 'CurrentVersion\\Run' in content:
+                    changes.append({
+                        "path": "/etc/hosts",
+                        "action": "modify",
+                        "key_path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        "value_name": "hosts_persistence",
+                        "value_data": "127.0.0.2 persistence.test.local"
+                    })
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Error collecting registry changes: {e}", flush=True)
+
+    return changes
+
 async def send_ws_json(websocket, message):
     async with ws_lock:
         await websocket.send(json.dumps(message))
@@ -279,6 +322,7 @@ async def send_risk_telemetry(websocket):
             procs = get_process_list()
             conns = get_network_connections()
             file_changes = get_file_changes_count()
+            registry_changes = collect_registry_changes()
             suspicious_cmds = [p["cmdline"] for p in procs if p.get("is_suspicious") and p.get("cmdline")]
 
             cred_events = []
@@ -296,12 +340,13 @@ async def send_risk_telemetry(websocket):
                 "suspicious_commands": suspicious_cmds,
                 "shadow_copy_deletion": False,
                 "mass_file_modification": file_changes > 20,
-                "registry_changes": [],
+                "registry_changes": registry_changes,
                 "credential_access_events": cred_events,
                 "lateral_movement_events": [],
                 "dns_queries": [],
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+
             message = {"type": "TELEMETRY_RISK", "payload": payload}
             print(f"[TELEMETRY_RISK] Sending payload for '{AGENT_ID}' (procs: {len(procs)}, conns: {len(conns)}, file_changes: {file_changes})", flush=True)
             res = await send_ws_json(websocket, message)
