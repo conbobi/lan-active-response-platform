@@ -85,6 +85,7 @@ The frontend is built with **React 19**, **Vite**, and **Chart.js**. It provides
 ---
 
 ## Project Structure
+```
 larp/
 ├── agent/ # Lightweight Python agent
 │ ├── agent.py
@@ -124,8 +125,7 @@ larp/
 ├── asset/ # Screenshots used in this README
 ├── docker-compose.yml
 └── README.md
-
-text
+```
 
 ---
 
