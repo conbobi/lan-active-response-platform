@@ -298,7 +298,7 @@ Or any other script in /app/malware_sim/.
 
 API Documentation
 The backend exposes a comprehensive REST API under /api/v1. Main endpoint groups:
-
+```
 Group	Endpoints
 Agents	/agents, /agents/{id}, /agents/{id}/isolate, /agents/{id}/unisolate, /agents/{id}/history
 Incidents	/incidents, /incidents/{id}, /incidents/{id}/assign, /incidents/{id}/contain, /incidents/{id}/resolve
@@ -312,6 +312,7 @@ Reports	/reports, /reports/generate, /reports/{report_id}/download
 Whitelist	/whitelist, /whitelist/{entry_id}
 Settings	/settings, /settings/risk_thresholds, /settings/file_changes_thresholds
 Full OpenAPI specification is available at /docs or /openapi.json.
+```
 
 Testing
 Backend tests are written with pytest and can be run from the manager/ directory:
