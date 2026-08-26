@@ -54,7 +54,7 @@ services:
       - NET_ADMIN
     mem_limit: 2g # Giới hạn tối đa 2GB RAM
     mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 0.5 # Giới hạn CPU (tùy chọn)
+    #cpus: 4.0 # Giới hạn CPU (tùy chọn)
   client2:
     build: ./agent
     hostname: client2
@@ -70,7 +70,7 @@ services:
       - NET_ADMIN
     mem_limit: 2g # Giới hạn tối đa 2GB RAM
     mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 0.5 # Giới hạn CPU (tùy chọn) 
+    cpus: 2.0 # Giới hạn CPU (tùy chọn) 
   client3:
     build: ./agent
     hostname: client3
@@ -86,7 +86,7 @@ services:
       - NET_ADMIN
     mem_limit: 2g # Giới hạn tối đa 2GB RAM
     mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 0.5 # Giớ i hạn CPU (tùy chọn) 
+    cpus: 2.0 # Giớ i hạn CPU (tùy chọn) 
   client4:
     build: ./agent
     hostname: client4
@@ -102,7 +102,7 @@ services:
       - NET_ADMIN
     mem_limit: 2g # Giới hạn tối đa 2GB RAM
     mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 0.5 # Giới hạn CPU (tùy chọn) 
+    cpus: 2.0 # Giới hạn CPU (tùy chọn) 
   attacker:
     build: ./agent
     hostname: attacker

@@ -58,6 +58,12 @@ class RiskAssessmentService:
         else:
             telemetry = getattr(data, "__dict__", {})
 
+        # Log telemetry trước khi evaluate
+        logger.info(f"[EVALUATE] Agent {agent_id} - CPU: {telemetry.get('cpu_usage')}, "
+                    f"RAM: {telemetry.get('ram_usage')}, "
+                    f"processes: {len(telemetry.get('process_list', []))}, "
+                    f"file_changes: {telemetry.get('file_changes_count', 0)}")
+
         # Try to sync rule configurations from database
         try:
             await self.detection_rule_service.sync_registry(self.registry)
@@ -83,11 +89,13 @@ class RiskAssessmentService:
                     weighted_score = rule_score * getattr(rule, "weight", 1.0)
                     score += weighted_score
                     factors[rule.rule_id] = reason
+                    logger.info(f"[EVALUATE] Agent {agent_id} - Rule {rule.rule_id}: score={rule_score}, weighted={weighted_score}")
             except Exception as exc:
-                logger.error(f"Error evaluating rule '{rule.rule_id}': {exc}", exc_info=True)
+                logger.error(f"Error evaluating rule '{rule.rule_id}' for agent {agent_id}: {exc}", exc_info=True)
 
         final_score = min(100.0, round(score, 2))
         factors["total_score"] = final_score
+        logger.info(f"[EVALUATE] Agent {agent_id} - Final score: {final_score}")
         return final_score, factors
 
     async def determine_action(self, score: float) -> str:

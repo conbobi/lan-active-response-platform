@@ -3,7 +3,13 @@ FROM python:3.12-slim
 
 # Cài đặt các gói hệ thống để hỗ trợ giám sát (tường lửa, tiến trình, công cụ mô phỏng)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ufw procps net-tools hping3 iptables nano nmap curl netcat-openbsd && \
+    apt-get install -y --no-install-recommends \
+    ufw procps net-tools hping3 iptables nano nmap curl netcat-openbsd \
+    stress openssh-client openssh-server cron at \
+    socat tcpdump tshark dnsutils \
+    python3-venv gcc make \
+    sudo \
+    && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

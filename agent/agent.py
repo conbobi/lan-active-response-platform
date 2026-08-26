@@ -8,11 +8,105 @@ import psutil
 import websockets
 from datetime import datetime, timezone
 from commands import COMMAND_HANDLERS
+import time
 
 MANAGER_URL = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
 
 ws_lock = asyncio.Lock()
+def get_container_cpu_percent():
+    """
+    Tính CPU % sử dụng của container dựa trên cgroup v1/v2.
+    Hỗ trợ cả cgroup v1 và v2.
+    """
+    try:
+        # Thử cgroup v1 trước
+        with open('/sys/fs/cgroup/cpu/cpuacct.usage', 'r') as f:
+            usage = int(f.read().strip())
+        with open('/sys/fs/cgroup/cpu/cpu.cfs_period_us', 'r') as f:
+            period = int(f.read().strip())
+        with open('/sys/fs/cgroup/cpu/cpu.cfs_quota_us', 'r') as f:
+            quota = int(f.read().strip())
+        if quota <= 0:  # Không giới hạn
+            return psutil.cpu_percent(interval=0.1)
+    except FileNotFoundError:
+        # Thử cgroup v2
+        try:
+            with open('/sys/fs/cgroup/cpu.max', 'r') as f:
+                line = f.read().strip()
+                parts = line.split()
+                if len(parts) == 2:
+                    quota = parts[0]
+                    period = parts[1]
+                    if quota == "max":
+                        return psutil.cpu_percent(interval=0.1)
+                    quota = int(quota)
+                    period = int(period)
+                    # Đọc cpuacct.usage trong cgroup v2
+                    with open('/sys/fs/cgroup/cpu.stat', 'r') as f2:
+                        for line2 in f2:
+                            if line2.startswith('usage_usec'):
+                                usage_usec = int(line2.split()[1])
+                                usage = usage_usec * 1000  # chuyển sang nanoseconds
+                                break
+        except Exception:
+            return psutil.cpu_percent(interval=0.1)
+
+    # Lần đầu, lưu giá trị
+    now = time.time()
+    if not hasattr(get_container_cpu_percent, 'prev_usage'):
+        get_container_cpu_percent.prev_usage = usage
+        get_container_cpu_percent.prev_time = now
+        return 0.0
+
+    prev_usage = get_container_cpu_percent.prev_usage
+    prev_time = get_container_cpu_percent.prev_time
+    delta_usage = usage - prev_usage
+    delta_time = now - prev_time
+    if delta_time <= 0:
+        return 0.0
+
+    # Tính số cores = quota / period
+    cores = quota / period
+    # CPU % = (delta_usage / 1e9) / (delta_time * cores) * 100
+    cpu_percent = (delta_usage / 1e9) / (delta_time * cores) * 100
+    get_container_cpu_percent.prev_usage = usage
+    get_container_cpu_percent.prev_time = now
+    return cpu_percent
+
+def get_container_memory_percent():
+    """Lấy % RAM sử dụng của container từ cgroup v1/v2."""
+    try:
+        # cgroup v1
+        with open('/sys/fs/cgroup/memory/memory.usage_in_bytes', 'r') as f:
+            usage = int(f.read().strip())
+        with open('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'r') as f:
+            limit = int(f.read().strip())
+        if limit > 0:
+            return (usage / limit) * 100
+    except FileNotFoundError:
+        # cgroup v2
+        try:
+            with open('/sys/fs/cgroup/memory.current', 'r') as f:
+                usage = int(f.read().strip())
+            with open('/sys/fs/cgroup/memory.max', 'r') as f:
+                limit_str = f.read().strip()
+                if limit_str == "max":
+                    return psutil.virtual_memory().percent
+                limit = int(limit_str)
+                if limit > 0:
+                    return (usage / limit) * 100
+        except Exception:
+            pass
+    return psutil.virtual_memory().percent
+
+def get_container_disk_percent():
+    """Lấy % disk sử dụng của container (dựa trên thư mục /app)."""
+    try:
+        usage = psutil.disk_usage('/app')
+        return usage.percent
+    except Exception:
+        return psutil.disk_usage('/').percent
 
 def get_ip_address():
     try:
@@ -30,9 +124,9 @@ def get_mac_address():
 def collect_stats():
     return {
         "agent_id": AGENT_ID,
-        "cpu": psutil.cpu_percent(interval=1),
-        "ram": psutil.virtual_memory().percent,
-        "disk": psutil.disk_usage('/').percent,
+        "cpu": get_container_cpu_percent(),
+        "ram": get_container_memory_percent(),
+        "disk": get_container_disk_percent(),
         "ip_address": get_ip_address(),
         "mac_address": get_mac_address(),
         "timestamp": datetime.now(timezone.utc).isoformat()
@@ -193,7 +287,7 @@ async def send_risk_telemetry(websocket):
 
             payload = {
                 "agent_id": AGENT_ID,
-                "cpu_usage": psutil.cpu_percent(interval=1),
+                "cpu_usage": get_container_cpu_percent(),
                 "process_list": procs,
                 "network_connections": conns,
                 "file_changes_count": file_changes,
