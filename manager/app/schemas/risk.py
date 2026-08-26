@@ -66,6 +66,8 @@ class DnsQueryItem(BaseModel):
 class RiskAssessmentDTO(BaseModel):
     agent_id: str
     cpu_usage: float = 0.0
+    ram_usage: float = 0.0
+    disk_usage: float = 0.0
     process_list: List[Dict[str, Any]] = Field(default_factory=list)
     network_connections: List[Dict[str, Any]] = Field(default_factory=list)
     file_changes_count: int = 0

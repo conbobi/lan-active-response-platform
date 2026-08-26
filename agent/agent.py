@@ -288,6 +288,8 @@ async def send_risk_telemetry(websocket):
             payload = {
                 "agent_id": AGENT_ID,
                 "cpu_usage": get_container_cpu_percent(),
+                "ram_usage": get_container_memory_percent(),
+                "disk_usage": get_container_disk_percent(),
                 "process_list": procs,
                 "network_connections": conns,
                 "file_changes_count": file_changes,
