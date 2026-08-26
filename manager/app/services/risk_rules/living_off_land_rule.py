@@ -11,6 +11,7 @@ class LivingOffLandRule(RiskRule):
     category = "behavior"
 
     LOLBIN_BINARIES = [
+        "curl.exe", "curl", "wget.exe", "wget",
         "powershell.exe", "powershell", "pwsh.exe", "wmic.exe", "wmic",
         "certutil.exe", "certutil", "bitsadmin.exe", "bitsadmin",
         "mshta.exe", "mshta", "regsvr32.exe", "regsvr32", "rundll32.exe", "rundll32",
@@ -19,8 +20,9 @@ class LivingOffLandRule(RiskRule):
 
     SUSPICIOUS_PATTERNS = [
         "-enc", "-encodedcommand", "downloadstring", "downloadfile", "iex",
-        "/urlcache", "/transfer", "process call create", "javascript:",
-        "vbscript:", "/s /u /i:", "http://", "https://"
+        "/urlcache", "-urlcache", "/transfer", "-split", "-o", "-O",
+        "process call create", "javascript:", "vbscript:", "/s /u /i:",
+        "http://", "https://", "invoke-webrequest", "invoke-restmethod"
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
@@ -35,7 +37,10 @@ class LivingOffLandRule(RiskRule):
             name = str(p_dict.get("name", "")).strip().lower()
             cmdline = str(p_dict.get("cmdline", "")).strip().lower()
 
-            is_lolbin = any(name == bin_name or name.endswith("/" + bin_name) or name.endswith("\\" + bin_name) for bin_name in self.LOLBIN_BINARIES)
+            is_lolbin = any(
+                name == bin_name or name.endswith("/" + bin_name) or name.endswith("\\" + bin_name) or (bin_name in name)
+                for bin_name in self.LOLBIN_BINARIES
+            )
 
             if is_lolbin:
                 if any(pat in cmdline for pat in self.SUSPICIOUS_PATTERNS):
@@ -47,13 +52,13 @@ class LivingOffLandRule(RiskRule):
         for cmd in commands:
             cmd_lower = cmd.lower()
             if any(bin_name in cmd_lower for bin_name in self.LOLBIN_BINARIES):
-                if any(pat in cmd_lower for pat in self.SUSPICIOUS_PATTERNS):
+                if any(pat in cmd_lower for pat in self.SUSPICIOUS_PATTERNS) or "curl" in cmd_lower or "wget" in cmd_lower or "certutil" in cmd_lower:
                     match_str = f"LOLBin command: {cmd}"
                     if match_str not in lol_matches:
                         lol_matches.append(match_str)
 
         if lol_matches:
-            score = min(45.0, len(lol_matches) * 30.0) * self.base_score
+            score = min(45.0, len(lol_matches) * 12.5) * self.base_score
             return score, f"LOLBin execution detected: {', '.join(lol_matches)}"
 
         return 0.0, ""

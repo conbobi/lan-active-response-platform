@@ -140,7 +140,8 @@ def collect_process_info():
     suspicious_keywords = [
         "mimikatz", "netcat", "nc", "nc.openbsd", "nc.traditional", "nmap", "chisel",
         "vssadmin", "powershell", "cmd.exe", "lsass.dump", "ransomware_sim",
-        "backdoor_sim", "credential_dump", "lateral_movement", "c2_communication", "sleep", "certutil"
+        "backdoor_sim", "credential_dump", "lateral_movement", "c2_communication", "sleep", "certutil",
+        "curl", "wget", "urlcache", "-o", "-O", "-split"
     ]
     processes = []
     try:
@@ -157,7 +158,7 @@ def collect_process_info():
                 mem_pct = float(info.get('memory_percent') or 0.0)
 
                 full_str = f"{name} {exe} {cmdline}".lower()
-                is_suspicious = any(s in full_str for s in suspicious_keywords)
+                is_suspicious = any(s.lower() in full_str for s in suspicious_keywords)
 
                 processes.append({
                     "pid": pid,
@@ -177,11 +178,27 @@ def collect_process_info():
 
     return processes
 
-def get_process_list():
+def collect_suspicious_commands(all_processes=None):
+    """
+    Trích xuất các lệnh đáng ngờ từ danh sách tiến trình (cmdline).
+    """
+    if all_processes is None:
+        all_processes = collect_process_info()
+
+    suspicious_cmds = []
+    for proc in all_processes:
+        if proc.get("is_suspicious") and proc.get("cmdline"):
+            cmd = str(proc["cmdline"]).strip()
+            if cmd and cmd not in suspicious_cmds:
+                suspicious_cmds.append(cmd)
+    return suspicious_cmds
+
+def get_process_list(all_processes=None):
     """Lấy danh sách process đang chạy, ưu tiên các process suspicious."""
-    all_procs = collect_process_info()
-    suspicious_procs = [p for p in all_procs if p["is_suspicious"]]
-    normal_procs = [p for p in all_procs if not p["is_suspicious"]]
+    if all_processes is None:
+        all_processes = collect_process_info()
+    suspicious_procs = [p for p in all_processes if p["is_suspicious"]]
+    normal_procs = [p for p in all_processes if not p["is_suspicious"]]
     return (suspicious_procs + normal_procs)[:30]
 
 def get_network_connections():
@@ -270,6 +287,65 @@ def collect_registry_changes():
 
     return changes
 
+def collect_shadow_copy_indicators(all_processes=None, suspicious_cmds=None):
+    """
+    Thu thập dấu hiệu Shadow Copy Deletion:
+    - Kiểm tra /etc/shadow đã được đọc/mở.
+    - Kiểm tra tiến trình vssadmin / shadow copy deletion trong all_processes.
+    - Kiểm tra câu lệnh vssadmin / shadow copy deletion trong suspicious_cmds.
+    """
+    if all_processes is None:
+        all_processes = collect_process_info()
+    if suspicious_cmds is None:
+        suspicious_cmds = collect_suspicious_commands(all_processes)
+
+    shadow_detected = False
+    indicators = []
+
+    shadow_keywords = [
+        "vssadmin", "delete shadows", "wmic shadowcopy", "bcdedit", "wbadmin",
+        "shadow_deletion", "shadow"
+    ]
+
+    # 1. Kiểm tra tiến trình trong all_processes
+    for proc in all_processes:
+        name = str(proc.get("name", "")).lower()
+        cmdline = str(proc.get("cmdline", "")).lower()
+        full_str = f"{name} {cmdline}"
+        if any(kw in full_str for kw in shadow_keywords):
+            shadow_detected = True
+            ind_msg = f"vssadmin_process: {proc.get('name')} ({proc.get('cmdline')})"
+            if ind_msg not in indicators:
+                indicators.append(ind_msg)
+
+    # 2. Kiểm tra trong suspicious_cmds
+    for cmd in suspicious_cmds:
+        cmd_lower = str(cmd).lower()
+        if any(kw in cmd_lower for kw in shadow_keywords):
+            shadow_detected = True
+            ind_msg = f"vssadmin_command: {cmd}"
+            if ind_msg not in indicators:
+                indicators.append(ind_msg)
+
+    # 3. Kiểm tra /etc/shadow được đọc/mở
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'open_files']):
+            try:
+                open_files = proc.info.get('open_files')
+                if open_files:
+                    for f in open_files:
+                        if getattr(f, 'path', '') == '/etc/shadow':
+                            shadow_detected = True
+                            if "shadow_file_read" not in indicators:
+                                indicators.append("shadow_file_read")
+                            break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        pass
+
+    return shadow_detected, indicators
+
 async def send_ws_json(websocket, message):
     async with ws_lock:
         await websocket.send(json.dumps(message))
@@ -319,11 +395,16 @@ async def send_risk_telemetry(websocket):
     await asyncio.sleep(2)
     while True:
         try:
-            procs = get_process_list()
+            all_procs = collect_process_info()
+            procs = get_process_list(all_procs)
             conns = get_network_connections()
             file_changes = get_file_changes_count()
             registry_changes = collect_registry_changes()
-            suspicious_cmds = [p["cmdline"] for p in procs if p.get("is_suspicious") and p.get("cmdline")]
+            suspicious_cmds = collect_suspicious_commands(all_procs)
+
+            # ✅ Phát hiện Shadow Copy
+            shadow_detected, shadow_indicators = collect_shadow_copy_indicators(all_procs, suspicious_cmds)
+            shadow_copy_deletion = shadow_detected
 
             cred_events = []
             if os.path.exists("/tmp/lsass.dump"):
@@ -338,7 +419,8 @@ async def send_risk_telemetry(websocket):
                 "network_connections": conns,
                 "file_changes_count": file_changes,
                 "suspicious_commands": suspicious_cmds,
-                "shadow_copy_deletion": False,
+                "shadow_copy_deletion": shadow_copy_deletion,
+                "shadow_copy_indicators": shadow_indicators,  # Thêm để debug
                 "mass_file_modification": file_changes > 20,
                 "registry_changes": registry_changes,
                 "credential_access_events": cred_events,
@@ -348,7 +430,7 @@ async def send_risk_telemetry(websocket):
             }
 
             message = {"type": "TELEMETRY_RISK", "payload": payload}
-            print(f"[TELEMETRY_RISK] Sending payload for '{AGENT_ID}' (procs: {len(procs)}, conns: {len(conns)}, file_changes: {file_changes})", flush=True)
+            print(f"[TELEMETRY_RISK] Sending payload for '{AGENT_ID}' (procs: {len(procs)}, conns: {len(conns)}, file_changes: {file_changes}, shadow_deletion: {shadow_copy_deletion}, shadow_indicators: {shadow_indicators})", flush=True)
             res = await send_ws_json(websocket, message)
             if res:
                 print(f"[TELEMETRY_RISK] Server ACK response: {res}", flush=True)
