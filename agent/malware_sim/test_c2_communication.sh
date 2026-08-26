@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Rule: C2CommunicationRule
+# Description: Kích hoạt cảnh báo C2 Communication Anomaly (truy vấn DNS tới domain duckdns/ngrok và kết nối cổng C2 9001)
+# Duration: >= 60 giây (mặc định 70s)
+# ==============================================================================
+
+DURATION=70
+C2_DOMAIN="test.duckdns.org"
+C2_PORT=9001
+
+echo "[+] [C2CommunicationRule] Bắt đầu mô phỏng giao tiếp C2 (Domain: $C2_DOMAIN, Port: $C2_PORT)..."
+
+cleanup() {
+    echo -e "\n[+] Dọn dẹp tiến trình C2 Beaconing..."
+    pkill -f "$C2_DOMAIN" 2>/dev/null || true
+    pkill -f "c2_beacon" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Đặt tiến trình truy vấn định kỳ domain C2 và kết nối cổng C2
+(
+    end=$((SECONDS + DURATION))
+    while [ $SECONDS -lt $end ]; do
+        echo "[+] Đang gửi DNS query & beacon tới $C2_DOMAIN:$C2_PORT..."
+        nslookup "$C2_DOMAIN" >/dev/null 2>&1 || host "$C2_DOMAIN" >/dev/null 2>&1 || true
+        curl -s --connect-timeout 2 "http://$C2_DOMAIN:$C2_PORT" >/dev/null 2>&1 || true
+        sleep 5
+    done
+) &
+BEACON_PID=$!
+
+echo "[+] Tiến trình C2 Beaconing (PID: $BEACON_PID) đang hoạt động trong ${DURATION} giây..."
+sleep $DURATION
+
+echo "[+] [C2CommunicationRule] Mô phỏng kết thúc thành công."
