@@ -15,6 +15,13 @@ from app.services.command_dispatcher import command_dispatcher
 from app.services.risk_assessment_service import RiskAssessmentService
 from app.models.process_info import ProcessInfo
 from app.repositories.process_info_repository import ProcessInfoRepository
+from app.models.flow import Flow
+from app.repositories.flow_repository import FlowRepository
+from app.models.event import Event
+from app.repositories.event_repository import EventRepository
+from app.schemas.enums import IncidentSeverity
+from app.schemas.incident import IncidentCreate
+from app.services.incident_service import IncidentService
 from app.core.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -100,21 +107,20 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                         procs_data = payload.get("processes", [])
                         saved_count = await _save_process_list(session, target_agent_id, procs_data)
                         logger.info(f"Saved {saved_count} processes for agent '{target_agent_id}' via PROCESS_LIST")
-                        response_payload = {
-                            "status": "ack",
-                            "message": "Process list stored successfully",
-                            "count": saved_count
-                        }
+                        if data.get("wait_ack", True):
+                            response_payload = {
+                                "status": "ack",
+                                "message": "Process list stored successfully",
+                                "count": saved_count
+                            }
 
                     elif msg_type == "TELEMETRY_RISK":
                         payload = data.get("payload", {})
                         target_agent_id = payload.get("agent_id", agent_id)
                         logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}'")
                         
-                        # Store process telemetry into ProcessInfo table if process_list provided
-                        procs_data = payload.get("process_list") or payload.get("processes")
-                        if procs_data:
-                            await _save_process_list(session, target_agent_id, procs_data)
+                        # Note: _save_process_list is intentionally removed from TELEMETRY_RISK
+                        # to avoid overwriting the full process tree from PROCESS_LIST.
 
                         risk_service = RiskAssessmentService(session)
                         record = await risk_service.process_risk(
@@ -122,12 +128,109 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                             data=payload
                         )
                         logger.info(f"Calculated risk score {record.score} for agent '{target_agent_id}'")
-                        response_payload = {
-                            "status": "ack",
-                            "message": "Risk telemetry processed",
-                            "score": record.score,
-                            "record_id": record.id
-                        }
+                        if data.get("wait_ack", True):
+                            response_payload = {
+                                "status": "ack",
+                                "message": "Risk telemetry processed",
+                                "score": record.score
+                            }
+
+                    elif msg_type == "FLOW_STATS":
+                        payload = data.get("payload", {})
+                        target_agent_id = payload.get("agent_id", agent_id)
+                        bytes_sent = int(payload.get("bytes_sent_delta", 0))
+                        packets_sent = int(payload.get("packets_sent_delta", 0))
+                        tcp_pkts = int(payload.get("tcp_packets_delta", 0))
+                        udp_pkts = int(payload.get("udp_packets_delta", 0))
+                        agent_ip = str(payload.get("ip_address") or "192.168.10.10")
+                        now_dt = datetime.now(timezone.utc)
+
+                        flow_repo = FlowRepository(session)
+                        if tcp_pkts > 0 or (tcp_pkts == 0 and udp_pkts == 0):
+                            tcp_bytes = int(bytes_sent * (tcp_pkts / max(1, tcp_pkts + udp_pkts))) if (tcp_pkts + udp_pkts) > 0 else bytes_sent
+                            flow_tcp = Flow(
+                                id=f"flow_{uuid.uuid4().hex[:12]}",
+                                src_ip=agent_ip,
+                                dst_ip="192.168.10.1",
+                                src_port=0,
+                                dst_port=80,
+                                protocol="TCP",
+                                bytes_sent=tcp_bytes,
+                                packets_sent=tcp_pkts or packets_sent,
+                                start_time=now_dt,
+                                end_time=now_dt,
+                                agent_id=target_agent_id,
+                                created_at=now_dt
+                            )
+                            await flow_repo.add(flow_tcp)
+
+                        if udp_pkts > 0:
+                            udp_bytes = int(bytes_sent * (udp_pkts / max(1, tcp_pkts + udp_pkts)))
+                            flow_udp = Flow(
+                                id=f"flow_{uuid.uuid4().hex[:12]}",
+                                src_ip=agent_ip,
+                                dst_ip="192.168.10.1",
+                                src_port=0,
+                                dst_port=53,
+                                protocol="UDP",
+                                bytes_sent=udp_bytes,
+                                packets_sent=udp_pkts,
+                                start_time=now_dt,
+                                end_time=now_dt,
+                                agent_id=target_agent_id,
+                                created_at=now_dt
+                            )
+                            await flow_repo.add(flow_udp)
+
+                        logger.info(f"Recorded FLOW_STATS for agent '{target_agent_id}': {packets_sent} pkts, {bytes_sent} bytes")
+                        if data.get("wait_ack", True):
+                            response_payload = {"status": "ack", "message": "Flow stats processed"}
+
+                    elif msg_type == "FIM_ALERT":
+                        payload = data.get("payload", {})
+                        target_agent_id = payload.get("agent_id", agent_id)
+                        file_path = str(payload.get("file_path", ""))
+                        action = str(payload.get("action", "MODIFIED"))
+                        old_hash = str(payload.get("old_hash", ""))
+                        new_hash = str(payload.get("new_hash", ""))
+                        now_dt = datetime.now(timezone.utc)
+
+                        # 1. Create Event record
+                        fim_event = Event(
+                            id=f"evt_{uuid.uuid4().hex[:12]}",
+                            agent_id=target_agent_id,
+                            event_type="FIM_ALERT",
+                            severity=IncidentSeverity.HIGH,
+                            source="AGENT_FIM",
+                            details=payload,
+                            processed=False,
+                            created_at=now_dt
+                        )
+                        event_repo = EventRepository(session)
+                        await event_repo.add(fim_event)
+
+                        # 2. Check if critical system file -> raise CRITICAL Incident
+                        is_critical_file = any(
+                            file_path == cf or file_path.endswith(cf)
+                            for cf in ("/etc/passwd", "/etc/shadow", "passwd", "shadow")
+                        )
+                        if is_critical_file:
+                            inc_dto = IncidentCreate(
+                                id=f"inc_{uuid.uuid4().hex[:12]}",
+                                title=f"Critical File Integrity Alert: {file_path}",
+                                description=f"Unauthorized {action} detected on system file '{file_path}' for agent '{target_agent_id}'. Baseline hash: {old_hash[:12]}... -> Current hash: {new_hash[:12]}...",
+                                severity=IncidentSeverity.CRITICAL,
+                                agent_id=target_agent_id,
+                                risk_score=95.0,
+                                notes="Automated incident triggered by Agent FIM."
+                            )
+                            inc_service = IncidentService(session)
+                            await inc_service.create_incident(inc_dto)
+                            logger.warning(f"CRITICAL Incident created for FIM tampering on {file_path} (agent {target_agent_id})")
+
+                        logger.info(f"Recorded FIM_ALERT for agent '{target_agent_id}' on {file_path} ({action})")
+                        if data.get("wait_ack", True):
+                            response_payload = {"status": "ack", "message": "FIM alert processed"}
 
                     elif msg_type == "TOPOLOGY_UPDATE":
                         dto = TopologyUpdateDTO(**data.get("payload", {}))

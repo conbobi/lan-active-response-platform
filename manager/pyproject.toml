@@ -8,6 +8,7 @@ dependencies = [
     "aiogram>=3.30.0",
     "aiosqlite>=0.22.1",
     "asyncpg>=0.31.0",
+    "docker>=7.1.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "networkx>=3.6.1",

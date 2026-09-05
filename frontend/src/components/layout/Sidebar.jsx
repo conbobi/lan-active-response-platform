@@ -17,6 +17,7 @@ import {
   FiFileText,
   FiCheckSquare,
   FiBell,
+  FiGitBranch,
 } from 'react-icons/fi';
 
 const mainNavItems = [
@@ -31,9 +32,11 @@ const mainNavItems = [
 const intelligenceNavItems = [
   { to: '/risk', icon: <FiActivity size={16} />, label: 'Risk Monitor' },
   { to: '/rules/detection', icon: <FiShield size={16} />, label: 'Detection Rules' },
+  { to: '/rules/process-chains', icon: <FiGitBranch size={16} />, label: 'Process Chains' },
   { to: '/threat-intel', icon: <FiSearch size={16} />, label: 'Threat Intel' },
   { to: '/process', icon: <FiCpu size={16} />, label: 'Process Root Cause' },
 ];
+
 
 const adminNavItems = [
   { to: '/reports', icon: <FiFileText size={16} />, label: 'Reports' },
@@ -72,6 +75,7 @@ export default function Sidebar() {
       ))}
 
       <div className="sidebar-footer" style={{ marginTop: 'auto', paddingTop: '1rem' }}>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <FiSliders size={14} color="#64748b" />
           <span style={{ fontSize: '0.75rem', color: '#64748b' }}>LARP SOC Platform v2.0</span>

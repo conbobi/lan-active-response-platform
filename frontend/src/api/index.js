@@ -15,3 +15,7 @@ export * from './settings';
 export * from './reports';
 export * from './whitelist';
 export * from './notifications';
+export * from './docker';
+export * from './processGroups';
+export * from './processChainRules';
+

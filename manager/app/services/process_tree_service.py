@@ -51,11 +51,32 @@ class ProcessTreeService:
             }
             G.add_node(p.pid, **proc_dict[p.pid])
 
+        # Ensure root node (PID 1) exists for hierarchy anchor
+        if 1 not in proc_dict and len(proc_dict) > 0:
+            proc_dict[1] = {
+                "pid": 1,
+                "parent_pid": None,
+                "name": "systemd/init",
+                "exe": "/sbin/init",
+                "cmdline": "init",
+                "cpu_percent": 0.0,
+                "memory_percent": 0.0,
+                "hash": None,
+                "is_suspicious": False,
+                "created_at": None
+            }
+            G.add_node(1, **proc_dict[1])
+
         for p in processes:
+            if p.pid == 1:
+                continue
             if p.parent_pid and p.parent_pid in proc_dict and p.parent_pid != p.pid:
                 G.add_edge(p.parent_pid, p.pid)
+            elif 1 in proc_dict:
+                # If parent is not in snapshot or orphan, attach to root PID 1 so tree is unbroken
+                G.add_edge(1, p.pid)
 
-        # Build root nodes (nodes with in-degree 0 or parent not in snapshot)
+        # Build root nodes (nodes with in-degree 0)
         roots = [n for n in G.nodes() if G.in_degree(n) == 0]
 
         visited = set()

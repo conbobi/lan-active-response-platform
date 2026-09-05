@@ -22,6 +22,14 @@ from app.schemas.report import ReportGenerateRequest, ReportOut
 from app.schemas.notification import NotificationConfigCreate, NotificationConfigOut, NotificationLogOut
 from app.schemas.threat_intel import ThreatCheckDTO, ThreatIndicatorOut
 from app.schemas.setting import SystemSettingOut, SystemSettingUpdate
+from app.schemas.docker_status import ContainerStatusOut, DockerStatusResponse
+from app.schemas.process_group import (
+    ProcessGroupBase, ProcessGroupCreate, ProcessGroupUpdate, ProcessGroupOut
+)
+from app.schemas.process_chain_rule import (
+    ProcessChainAction, ProcessChainRuleBase, ProcessChainRuleCreate,
+    ProcessChainRuleUpdate, ProcessChainRuleOut
+)
 
 __all__ = [
     "ORMBaseModel",
@@ -44,4 +52,9 @@ __all__ = [
     "NotificationConfigCreate", "NotificationConfigOut", "NotificationLogOut",
     "ThreatCheckDTO", "ThreatIndicatorOut",
     "SystemSettingOut", "SystemSettingUpdate",
+    "ContainerStatusOut", "DockerStatusResponse",
+    "ProcessGroupBase", "ProcessGroupCreate", "ProcessGroupUpdate", "ProcessGroupOut",
+    "ProcessChainAction", "ProcessChainRuleBase", "ProcessChainRuleCreate",
+    "ProcessChainRuleUpdate", "ProcessChainRuleOut",
 ]
+

@@ -17,6 +17,8 @@ from app.models.notification import NotificationConfig, NotificationLog
 from app.models.threat_indicator import ThreatIndicator
 from app.models.system_setting import SystemSetting
 from app.models.detection_rule import DetectionRule
+from app.models.process_group import ProcessGroup
+from app.models.process_chain_rule import ProcessChainRule
 
 __all__ = [
     "Base",
@@ -40,4 +42,7 @@ __all__ = [
     "ThreatIndicator",
     "SystemSetting",
     "DetectionRule",
+    "ProcessGroup",
+    "ProcessChainRule",
 ]
+

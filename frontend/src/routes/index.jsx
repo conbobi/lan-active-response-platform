@@ -25,9 +25,11 @@ export const routes = [
   { path: '/incidents', element: <Incidents /> },
   { path: '/commands', element: <Commands /> },
   { path: '/risk', element: <RiskAssessment /> },
-  { path: '/rules/detection', element: <DetectionRules /> },
+  { path: '/rules/detection', element: <DetectionRules defaultTab="detection" /> },
+  { path: '/rules/process-chains', element: <DetectionRules defaultTab="process-chains" /> },
   { path: '/threat-intel', element: <ThreatIntel /> },
   { path: '/process', element: <ProcessTree /> },
+
   { path: '/reports', element: <Reports /> },
   { path: '/whitelist', element: <Whitelist /> },
   { path: '/notifications', element: <Notifications /> },

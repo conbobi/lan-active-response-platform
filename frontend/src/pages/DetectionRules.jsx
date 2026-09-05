@@ -1,10 +1,13 @@
 // src/pages/DetectionRules.jsx
 import React, { useState, useMemo, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import useDetectionRules from '../hooks/useDetectionRules';
 import Badge from '../components/ui/Badge';
 import SearchBar from '../components/ui/SearchBar';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
+import FilterTabs from '../components/ui/FilterTabs';
+import ProcessChainManager from '../components/rules/ProcessChainManager';
 import {
   FiShield,
   FiPlus,
@@ -15,9 +18,15 @@ import {
   FiEye,
   FiCheckCircle,
   FiAlertTriangle,
+  FiCpu,
 } from 'react-icons/fi';
 
 const CATEGORIES = ['All', 'OS', 'Network', 'Process', 'Behavior'];
+const MAIN_TABS = [
+  { value: 'detection', label: 'Core Risk Rules' },
+  { value: 'process-chains', label: 'Process Chain Detection' },
+];
+
 
 function WeightInput({ initialWeight, onSave }) {
   const [val, setVal] = useState(initialWeight);
@@ -63,7 +72,23 @@ function WeightInput({ initialWeight, onSave }) {
   );
 }
 
-export default function DetectionRules() {
+export default function DetectionRules({ defaultTab, initialTab }) {
+  const location = useLocation();
+  const activeTabProp = initialTab || defaultTab;
+  const initial =
+    activeTabProp ||
+    (location.pathname.includes('process-chains') ? 'process-chains' : 'detection');
+  const [mainTab, setMainTab] = useState(initial);
+
+  useEffect(() => {
+    if (activeTabProp) {
+      setMainTab(activeTabProp);
+    } else if (location.pathname.includes('process-chains')) {
+      setMainTab('process-chains');
+    }
+  }, [activeTabProp, location.pathname]);
+
+
   const {
     rules,
     loading,
@@ -76,6 +101,7 @@ export default function DetectionRules() {
     handleCreateRule,
     handleDeleteRule,
   } = useDetectionRules();
+
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
@@ -243,11 +269,15 @@ export default function DetectionRules() {
     return <Badge status="online" label="OS" showDot={false} />;
   };
 
-  if (loading) {
+  if (loading && mainTab === 'detection') {
     return (
       <div>
         <div className="page-header">
           <h1 className="page-title">Detection Rules Engine</h1>
+          <p className="page-subtitle">Configure core threat detection risk rules, base scores, weight factors, categories, and parameters</p>
+        </div>
+        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1.25rem' }}>
+          <FilterTabs tabs={MAIN_TABS} active={mainTab} onChange={setMainTab} />
         </div>
         <div className="card skeleton" style={{ height: '400px' }} />
       </div>
@@ -258,18 +288,39 @@ export default function DetectionRules() {
     <div>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Detection Rules Engine</h1>
-          <p className="page-subtitle">Configure core threat detection risk rules, base scores, weight factors, categories, and parameters</p>
+          <h1 className="page-title">
+            {mainTab === 'process-chains'
+              ? 'Process Chain Detection Engine'
+              : 'Detection Rules Engine'}
+          </h1>
+          <p className="page-subtitle">
+            {mainTab === 'process-chains'
+              ? 'Configure dynamic parent-child process chains, process groups, and containment actions'
+              : 'Configure core threat detection risk rules, base scores, weight factors, categories, and parameters'}
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshRules}>
-            Refresh
-          </Button>
-          <Button variant="primary" iconLeft={<FiPlus size={15} />} onClick={openCreateModal}>
-            Add Detection Rule
-          </Button>
-        </div>
+        {mainTab === 'detection' && (
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshRules}>
+              Refresh
+            </Button>
+            <Button variant="primary" iconLeft={<FiPlus size={15} />} onClick={openCreateModal}>
+              Add Detection Rule
+            </Button>
+          </div>
+        )}
       </div>
+
+      {/* Main Tab Switcher */}
+      <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1.25rem' }}>
+        <FilterTabs tabs={MAIN_TABS} active={mainTab} onChange={setMainTab} />
+      </div>
+
+      {mainTab === 'process-chains' ? (
+        <ProcessChainManager />
+      ) : (
+        <>
+
 
       {actionNotice && (
         <div
@@ -671,7 +722,10 @@ export default function DetectionRules() {
           </div>
         </Modal>
       )}
+        </>
+      )}
     </div>
   );
 }
+
 

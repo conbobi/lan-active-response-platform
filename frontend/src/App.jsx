@@ -20,6 +20,7 @@ import Attack from './pages/Attack';
 import Settings from './pages/Settings';
 
 export default function App() {
+
   return (
     <BrowserRouter>
       <Routes>
@@ -40,6 +41,8 @@ export default function App() {
           <Route path="/rules" element={<Rules />} />
           <Route path="/attack" element={<Attack />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/rules/process-chains" element={<DetectionRules initialTab="process-chains" />} />
+
         </Route>
       </Routes>
     </BrowserRouter>

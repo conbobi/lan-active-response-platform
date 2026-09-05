@@ -19,6 +19,9 @@ from app.services.report_service import ReportService
 from app.services.threat_intelligence_service import ThreatIntelligenceService
 from app.services.process_tree_service import ProcessTreeService
 from app.services.setting_service import SettingService
+from app.services.docker_monitor_service import DockerMonitorService
+from app.services.process_group_service import ProcessGroupService
+from app.services.process_chain_rule_service import ProcessChainRuleService
 
 __all__ = [
     "AbstractService",
@@ -42,4 +45,8 @@ __all__ = [
     "ThreatIntelligenceService",
     "ProcessTreeService",
     "SettingService",
+    "DockerMonitorService",
+    "ProcessGroupService",
+    "ProcessChainRuleService",
 ]
+

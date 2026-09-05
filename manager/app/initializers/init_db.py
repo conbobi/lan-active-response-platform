@@ -17,4 +17,15 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS base_score FLOAT NOT NULL DEFAULT 1.0;"))
         except Exception as e:
             logger.debug(f"DB alter table detection_rules base_score: {e}")
-        logger.info("Database initialization complete.")
+
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.process_chain_rule_service import ProcessChainRuleService
+        async with AsyncSessionLocal() as session:
+            service = ProcessChainRuleService(session)
+            await service.seed_default_data()
+    except Exception as e:
+        logger.error(f"Failed to seed process chain default data: {e}", exc_info=True)
+
+    logger.info("Database initialization complete.")
+

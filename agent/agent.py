@@ -9,11 +9,16 @@ import websockets
 from datetime import datetime, timezone
 from commands import COMMAND_HANDLERS
 import time
+from fim import FileIntegrityMonitor
 
 MANAGER_URL = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
 
-ws_lock = asyncio.Lock()
+ws_request_lock = asyncio.Lock()
+ws_send_lock = asyncio.Lock()
+last_heartbeat_ack_time = time.time()
+_prev_net_io = None
+_prev_net_time = None
 def get_container_cpu_percent():
     """
     Tính CPU % sử dụng của container dựa trên cgroup v1/v2.
@@ -145,9 +150,12 @@ def collect_process_info():
     ]
     processes = []
     try:
-        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent']):
+        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent','status']):
             try:
                 info = proc.info
+                status = info.get('status')
+                if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD, "zombie", "defunct"):
+                    continue
                 pid = info.get('pid')
                 ppid = info.get('ppid')
                 name = str(info.get('name') or "")
@@ -166,6 +174,7 @@ def collect_process_info():
                     "name": name,
                     "exe": exe,
                     "exe_path": exe,
+                    "path": exe,
                     "cmdline": cmdline,
                     "cpu_percent": cpu_pct,
                     "memory_percent": mem_pct,
@@ -346,17 +355,106 @@ def collect_shadow_copy_indicators(all_processes=None, suspicious_cmds=None):
 
     return shadow_detected, indicators
 
-async def send_ws_json(websocket, message):
-    async with ws_lock:
-        await websocket.send(json.dumps(message))
+def get_network_flow_stats():
+    """
+    Thu thập số liệu lưu lượng mạng (bytes, packets) sử dụng psutil.net_io_counters()
+    và tính delta giữa hai chu kỳ lấy mẫu.
+    """
+    global _prev_net_io, _prev_net_time
+    curr_io = psutil.net_io_counters()
+    curr_time = time.time()
+
+    if _prev_net_io is None or _prev_net_time is None:
+        _prev_net_io = curr_io
+        _prev_net_time = curr_time
+        return {
+            "agent_id": AGENT_ID,
+            "bytes_sent_delta": 0,
+            "bytes_recv_delta": 0,
+            "packets_sent_delta": 0,
+            "packets_recv_delta": 0,
+            "tcp_packets_delta": 0,
+            "udp_packets_delta": 0,
+            "ip_address": get_ip_address(),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+    bytes_sent_delta = max(0, curr_io.bytes_sent - _prev_net_io.bytes_sent)
+    bytes_recv_delta = max(0, curr_io.bytes_recv - _prev_net_io.bytes_recv)
+    packets_sent_delta = max(0, curr_io.packets_sent - _prev_net_io.packets_sent)
+    packets_recv_delta = max(0, curr_io.packets_recv - _prev_net_io.packets_recv)
+
+    _prev_net_io = curr_io
+    _prev_net_time = curr_time
+
+    tcp_packets_delta = 0
+    udp_packets_delta = 0
+    try:
+        if os.path.exists("/proc/net/snmp"):
+            with open("/proc/net/snmp", "r") as f:
+                lines = f.readlines()
+            for i in range(len(lines) - 1):
+                if lines[i].startswith("Tcp:") and lines[i+1].startswith("Tcp:"):
+                    headers = lines[i].split()
+                    values = lines[i+1].split()
+                    if "OutSegs" in headers:
+                        idx = headers.index("OutSegs")
+                        tcp_out = int(values[idx])
+                        if hasattr(get_network_flow_stats, "_prev_tcp_out"):
+                            tcp_packets_delta = max(0, tcp_out - get_network_flow_stats._prev_tcp_out)
+                        get_network_flow_stats._prev_tcp_out = tcp_out
+                elif lines[i].startswith("Udp:") and lines[i+1].startswith("Udp:"):
+                    headers = lines[i].split()
+                    values = lines[i+1].split()
+                    if "OutDatagrams" in headers:
+                        idx = headers.index("OutDatagrams")
+                        udp_out = int(values[idx])
+                        if hasattr(get_network_flow_stats, "_prev_udp_out"):
+                            udp_packets_delta = max(0, udp_out - get_network_flow_stats._prev_udp_out)
+                        get_network_flow_stats._prev_udp_out = udp_out
+    except Exception:
+        pass
+
+    if tcp_packets_delta == 0 and udp_packets_delta == 0 and packets_sent_delta > 0:
+        tcp_packets_delta = int(packets_sent_delta * 0.75)
+        udp_packets_delta = packets_sent_delta - tcp_packets_delta
+
+    return {
+        "agent_id": AGENT_ID,
+        "bytes_sent_delta": bytes_sent_delta,
+        "bytes_recv_delta": bytes_recv_delta,
+        "packets_sent_delta": packets_sent_delta,
+        "packets_recv_delta": packets_recv_delta,
+        "tcp_packets_delta": tcp_packets_delta,
+        "udp_packets_delta": udp_packets_delta,
+        "ip_address": get_ip_address(),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+async def send_ws_json_and_wait(websocket, message):
+    """Gửi message yêu cầu phản hồi (Heartbeat, Command ACK) có bảo vệ bằng ws_request_lock."""
+    async with ws_request_lock:
         try:
+            await websocket.send(json.dumps(message))
             raw_res = await asyncio.wait_for(websocket.recv(), timeout=5)
             return json.loads(raw_res)
         except asyncio.TimeoutError:
             return None
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            raise
         except Exception as e:
             print(f"WS response read error: {e}", flush=True)
             return None
+
+async def send_ws_json_no_wait(websocket, message):
+    """Gửi message fire-and-forget (Telemetry, Process list, Flow stats, FIM) không khóa đợi phản hồi."""
+    async with ws_send_lock:
+        try:
+            await websocket.send(json.dumps(message))
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            raise
+        except Exception as e:
+            print(f"WS send error: {e}", flush=True)
 
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
@@ -369,30 +467,38 @@ async def execute_command(websocket, cmd):
     return result
 
 async def send_stats(websocket):
+    """Gửi heartbeat định kỳ mỗi 5s và nhận lệnh pending_commands."""
+    global last_heartbeat_ack_time
     while True:
         try:
             stats = collect_stats()
             message = {"type": "HEARTBEAT", "payload": stats}
-            response = await send_ws_json(websocket, message)
-            if response and isinstance(response, dict) and "pending_commands" in response:
-                for cmd in response["pending_commands"]:
-                    ack_payload = await execute_command(websocket, cmd)
-                    ack_message = {
-                        "type": "COMMAND_ACK",
-                        "payload": {
-                            "command_id": cmd.get("command_id"),
-                            "status": ack_payload.get("status", "success"),
-                            "error_message": ack_payload.get("message"),
-                            "executed_at": datetime.now(timezone.utc).isoformat()
+            response = await send_ws_json_and_wait(websocket, message)
+            if response and isinstance(response, dict):
+                if response.get("status") == "ack":
+                    last_heartbeat_ack_time = time.time()
+                if "pending_commands" in response:
+                    for cmd in response["pending_commands"]:
+                        ack_payload = await execute_command(websocket, cmd)
+                        ack_message = {
+                            "type": "COMMAND_ACK",
+                            "payload": {
+                                "command_id": cmd.get("command_id"),
+                                "status": ack_payload.get("status", "success"),
+                                "error_message": ack_payload.get("message"),
+                                "executed_at": datetime.now(timezone.utc).isoformat()
+                            }
                         }
-                    }
-                    await send_ws_json(websocket, ack_message)
+                        await send_ws_json_and_wait(websocket, ack_message)
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            print(f"[{AGENT_ID}] WebSocket connection closed in send_stats loop.", flush=True)
+            raise
         except Exception as e:
             print(f"Error in send_stats loop: {e}", flush=True)
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
 
 async def send_risk_telemetry(websocket):
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
     while True:
         try:
             all_procs = collect_process_info()
@@ -402,7 +508,6 @@ async def send_risk_telemetry(websocket):
             registry_changes = collect_registry_changes()
             suspicious_cmds = collect_suspicious_commands(all_procs)
 
-            # ✅ Phát hiện Shadow Copy
             shadow_detected, shadow_indicators = collect_shadow_copy_indicators(all_procs, suspicious_cmds)
             shadow_copy_deletion = shadow_detected
 
@@ -420,7 +525,7 @@ async def send_risk_telemetry(websocket):
                 "file_changes_count": file_changes,
                 "suspicious_commands": suspicious_cmds,
                 "shadow_copy_deletion": shadow_copy_deletion,
-                "shadow_copy_indicators": shadow_indicators,  # Thêm để debug
+                "shadow_copy_indicators": shadow_indicators,
                 "mass_file_modification": file_changes > 20,
                 "registry_changes": registry_changes,
                 "credential_access_events": cred_events,
@@ -429,20 +534,20 @@ async def send_risk_telemetry(websocket):
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
-            message = {"type": "TELEMETRY_RISK", "payload": payload}
-            print(f"[TELEMETRY_RISK] Sending payload for '{AGENT_ID}' (procs: {len(procs)}, conns: {len(conns)}, file_changes: {file_changes}, shadow_deletion: {shadow_copy_deletion}, shadow_indicators: {shadow_indicators})", flush=True)
-            res = await send_ws_json(websocket, message)
-            if res:
-                print(f"[TELEMETRY_RISK] Server ACK response: {res}", flush=True)
+            message = {"type": "TELEMETRY_RISK", "payload": payload, "wait_ack": False}
+            await send_ws_json_no_wait(websocket, message)
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            print(f"[{AGENT_ID}] WebSocket connection closed in send_risk_telemetry loop.", flush=True)
+            raise
         except Exception as e:
             print(f"Error sending risk telemetry: {e}", flush=True)
         await asyncio.sleep(15)
 
 async def send_process_list(websocket):
     """
-    Gửi danh sách toàn bộ process định kỳ mỗi 15-20s tới Manager qua WebSocket message 'PROCESS_LIST'.
+    Gửi danh sách toàn bộ process định kỳ mỗi 20s tới Manager qua WebSocket message 'PROCESS_LIST'.
     """
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
     while True:
         try:
             procs = collect_process_info()
@@ -452,33 +557,114 @@ async def send_process_list(websocket):
                     "agent_id": AGENT_ID,
                     "processes": procs,
                     "timestamp": datetime.now(timezone.utc).isoformat()
-                }
+                },
+                "wait_ack": False
             }
-            print(f"[PROCESS_LIST] Sending complete process list for '{AGENT_ID}' ({len(procs)} processes)", flush=True)
-            res = await send_ws_json(websocket, message)
-            if res:
-                print(f"[PROCESS_LIST] Server ACK response: {res}", flush=True)
+            await send_ws_json_no_wait(websocket, message)
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            print(f"[{AGENT_ID}] WebSocket connection closed in send_process_list loop.", flush=True)
+            raise
         except Exception as e:
             print(f"Error sending process list: {e}", flush=True)
         await asyncio.sleep(20)
 
-async def main_agent():
+async def send_flow_stats(websocket):
+    """
+    Gửi thông tin lưu lượng mạng (bytes, packets) định kỳ mỗi 5 giây qua 'FLOW_STATS'.
+    """
+    await asyncio.sleep(1)
     while True:
         try:
+            stats = get_network_flow_stats()
+            message = {
+                "type": "FLOW_STATS",
+                "payload": stats,
+                "wait_ack": False
+            }
+            await send_ws_json_no_wait(websocket, message)
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            print(f"[{AGENT_ID}] WebSocket connection closed in send_flow_stats loop.", flush=True)
+            raise
+        except Exception as e:
+            print(f"Error sending flow stats: {e}", flush=True)
+        await asyncio.sleep(5)
+
+async def send_fim_alerts(websocket):
+    """
+    Định kỳ mỗi 10 giây quét tính toàn vẹn của các file hệ thống và gửi 'FIM_ALERT'.
+    """
+    fim_monitor = FileIntegrityMonitor(agent_id=AGENT_ID)
+    await asyncio.sleep(3)
+    while True:
+        try:
+            alerts = fim_monitor.check_integrity()
+            for alert in alerts:
+                message = {
+                    "type": "FIM_ALERT",
+                    "payload": alert,
+                    "wait_ack": False
+                }
+                await send_ws_json_no_wait(websocket, message)
+                print(f"[{AGENT_ID}] Dispatched FIM_ALERT for {alert.get('file_path')} ({alert.get('action')})", flush=True)
+        except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+            print(f"[{AGENT_ID}] WebSocket connection closed in send_fim_alerts loop.", flush=True)
+            raise
+        except Exception as e:
+            print(f"Error in send_fim_alerts loop: {e}", flush=True)
+        await asyncio.sleep(10)
+
+async def watchdog_task():
+    """
+    Watchdog giám sát kết nối: Nếu quá 30 giây không gửi được heartbeat hoặc
+    không nhận ACK từ Manager, tự động thoát os._exit(1) để Docker restart container.
+    """
+    global last_heartbeat_ack_time
+    while True:
+        await asyncio.sleep(5)
+        elapsed = time.time() - last_heartbeat_ack_time
+        if elapsed > 30:
+            print(f"[{AGENT_ID}] WATCHDOG TRIGGERED: No heartbeat ACK for {elapsed:.1f}s (>30s). Exiting for Docker restart...", flush=True)
+            os._exit(1)
+
+def get_manager_ws_url():
+    url = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
+    sep = "&" if "?" in url else "?"
+    if "agent_id=" not in url:
+        url = f"{url}{sep}agent_id={AGENT_ID}"
+    return url
+
+async def main_agent():
+    global last_heartbeat_ack_time
+    retry_delay = 2
+    max_delay = 15
+    ws_url = get_manager_ws_url()
+
+    while True:
+        try:
+            print(f"[{AGENT_ID}] Connecting to Manager at {ws_url}...", flush=True)
             async with websockets.connect(
-                MANAGER_URL,
-                ping_interval=20,
-                ping_timeout=20,
+                ws_url,
+                ping_interval=15,
+                ping_timeout=15,
             ) as ws:
-                print(f"Connected to {MANAGER_URL}", flush=True)
+                print(f"[{AGENT_ID}] Successfully connected to {ws_url}", flush=True)
+                retry_delay = 2  # Reset exponential backoff upon successful connection
+                last_heartbeat_ack_time = time.time()  # Reset watchdog timer upon connect
                 await asyncio.gather(
                     send_stats(ws),
                     send_risk_telemetry(ws),
                     send_process_list(ws),
+                    send_flow_stats(ws),
+                    send_fim_alerts(ws),
+                    watchdog_task(),
                 )
+        except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError, OSError) as e:
+            print(f"[{AGENT_ID}] Connection lost/refused: {e}. Reconnecting in {retry_delay}s...", flush=True)
         except Exception as e:
-            print(f"Error: {e}. Retrying in 5s...", flush=True)
-            await asyncio.sleep(5)
+            print(f"[{AGENT_ID}] Unexpected agent error: {e}. Reconnecting in {retry_delay}s...", flush=True)
+
+        await asyncio.sleep(retry_delay)
+        retry_delay = min(retry_delay * 2, max_delay)
 
 if __name__ == "__main__":
     asyncio.run(main_agent())

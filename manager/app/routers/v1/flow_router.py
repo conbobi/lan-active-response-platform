@@ -1,5 +1,5 @@
-from typing import List
-from fastapi import APIRouter, Depends, status
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
@@ -16,11 +16,29 @@ async def create_flow(dto: FlowCreate, db: AsyncSession = Depends(get_db)):
     return await service.create_flow(dto)
 
 
+@router.get("/traffic-stats")
+async def get_traffic_stats(
+    agent_id: Optional[str] = Query(None, description="Filter by agent ID or server"),
+    minutes: int = Query(5, ge=1, le=60, description="Time window in minutes"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get aggregated traffic statistics (SYN, UDP, Total) for charts."""
+    service = FlowService(db)
+    return await service.get_traffic_series(agent_id=agent_id, minutes=minutes)
+
+
+@router.get("", response_model=List[FlowOut], include_in_schema=False)
 @router.get("/", response_model=List[FlowOut])
-async def list_flows(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+async def list_flows(
+    skip: int = 0,
+    limit: int = 100,
+    agent_id: Optional[str] = Query(None, description="Filter by agent ID or manager"),
+    minutes: int = Query(5, ge=1, le=60, description="Recent time window in minutes"),
+    db: AsyncSession = Depends(get_db)
+):
     """List network flows."""
     service = FlowService(db)
-    return await service.list_flows(skip=skip, limit=limit)
+    return await service.list_flows(skip=skip, limit=limit, agent_id=agent_id, minutes=minutes)
 
 
 @router.get("/{flow_id}", response_model=FlowOut)

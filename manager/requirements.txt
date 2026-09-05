@@ -118,3 +118,4 @@ uvicorn==0.52.4
 yarl==1.24.5
     # via aiohttp
 asyncpg==0.31.0
+docker>=7.1.0

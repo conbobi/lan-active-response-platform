@@ -35,6 +35,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - larp-net
 
@@ -42,6 +44,7 @@ services:
   client1:
     build: ./agent #Dùng chung một bản thiết kế (Dockerfile) trong thư mục ./agent để tạo ra các máy con.
     hostname: client1 #Đặt tên định danh cho máy trạm này trong mạng nội bộ.
+    restart: unless-stopped
     environment:
       - MANAGER_URL=ws://manager:8000/ws/agent #Đây là "đường dây liên lạc" giữa máy trạm và tòa nhà Manager. Lưu ý: manager chính là tên dịch vụ Manager ở trên, không phải localhost hay 127.0.0.1
       - AGENT_ID=client1
@@ -58,6 +61,7 @@ services:
   client2:
     build: ./agent
     hostname: client2
+    restart: unless-stopped
     environment:
       - MANAGER_URL=ws://manager:8000/ws/agent
       - AGENT_ID=client2
@@ -74,6 +78,7 @@ services:
   client3:
     build: ./agent
     hostname: client3
+    restart: unless-stopped
     environment:
       - MANAGER_URL=ws://manager:8000/ws/agent
       - AGENT_ID=client3
@@ -90,6 +95,7 @@ services:
   client4:
     build: ./agent
     hostname: client4
+    restart: unless-stopped
     environment:
       - MANAGER_URL=ws://manager:8000/ws/agent
       - AGENT_ID=client4
@@ -106,6 +112,7 @@ services:
   attacker:
     build: ./agent
     hostname: attacker
+    restart: unless-stopped
     environment:
       - MANAGER_URL=ws://manager:8000/ws/agent
       - AGENT_ID=attacker

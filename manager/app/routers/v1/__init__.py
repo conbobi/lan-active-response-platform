@@ -16,6 +16,9 @@ from app.routers.v1.risk_router import router as risk_router
 from app.routers.v1.threat_intel_router import router as threat_intel_router
 from app.routers.v1.process_router import router as process_router
 from app.routers.v1.setting_router import router as setting_router
+from app.routers.v1.docker_router import router as docker_router
+from app.routers.v1.process_group_router import router as process_group_router
+from app.routers.v1.process_chain_rule_router import router as process_chain_rule_router
 
 api_router = APIRouter()
 
@@ -35,5 +38,9 @@ api_router.include_router(risk_router, prefix="/risk", tags=["Risk Assessment"])
 api_router.include_router(threat_intel_router, prefix="/threat-intel", tags=["Threat Intelligence"])
 api_router.include_router(process_router, prefix="/process", tags=["Process & Root Cause Analysis"])
 api_router.include_router(setting_router, prefix="/settings", tags=["Settings"])
+api_router.include_router(docker_router, prefix="/docker", tags=["Docker Monitor"])
+api_router.include_router(process_group_router, prefix="/process-groups", tags=["Process Groups"])
+api_router.include_router(process_chain_rule_router, prefix="/process-chain-rules", tags=["Process Chain Rules"])
 
 __all__ = ["api_router"]
+

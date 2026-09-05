@@ -1,5 +1,5 @@
 // src/pages/ProcessTree.jsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import useProcessTree from '../hooks/useProcessTree';
 import { useAgents } from '../hooks/useAgents';
 import Dropdown from '../components/ui/Dropdown';
@@ -17,7 +17,9 @@ import {
   FiMaximize2,
   FiMinimize2,
   FiLayers,
-  FiTerminal
+  FiTerminal,
+  FiCheckCircle,
+  FiX
 } from 'react-icons/fi';
 
 export default function ProcessTree() {
@@ -29,6 +31,10 @@ export default function ProcessTree() {
     suspiciousProcesses,
     loading,
     killing,
+    error,
+    actionSuccess,
+    clearActionSuccess,
+    clearError,
     refreshProcessData,
     handleKillProcess,
     handleKillProcessTree,
@@ -37,6 +43,17 @@ export default function ProcessTree() {
   const [expandedPids, setExpandedPids] = useState(new Set());
   const [killModalProc, setKillModalProc] = useState(null);
   const [killTreeMode, setKillTreeMode] = useState(true);
+  const prevAgentRef = useRef('');
+
+  // Auto-dismiss success notification after 4.5 seconds
+  useEffect(() => {
+    if (actionSuccess) {
+      const timer = setTimeout(() => {
+        if (clearActionSuccess) clearActionSuccess();
+      }, 4500);
+      return () => clearTimeout(timer);
+    }
+  }, [actionSuccess, clearActionSuccess]);
 
   useEffect(() => {
     if (agents.length > 0 && !selectedAgent) {
@@ -44,30 +61,50 @@ export default function ProcessTree() {
     }
   }, [agents, selectedAgent]);
 
-  // Auto-expand top roots when process tree loads
+  // Auto-expand tree when agent changes or process tree loads, while preserving user expanded state
   useEffect(() => {
-    if (processTree) {
-      const roots = processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]);
-      if (Array.isArray(roots)) {
-        const initialPids = new Set();
-        const collectPids = (nodes, depth = 0) => {
-          nodes.forEach((n) => {
-            if (n && n.pid) {
-              // Auto expand top 2 levels or suspicious nodes
-              if (depth < 2 || n.is_suspicious) {
-                initialPids.add(n.pid);
-              }
-              if (Array.isArray(n.children)) {
-                collectPids(n.children, depth + 1);
-              }
-            }
-          });
-        };
-        collectPids(roots, 0);
-        setExpandedPids(initialPids);
+    if (!processTree) return;
+    const roots = processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]);
+    if (!Array.isArray(roots)) return;
+
+    const isAgentChanged = prevAgentRef.current !== selectedAgent;
+    prevAgentRef.current = selectedAgent;
+
+    // Collect auto-expand PIDs (top 2 levels or suspicious nodes)
+    const autoExpandPids = new Set();
+    const collectPids = (nodes, depth = 0) => {
+      nodes.forEach((n) => {
+        if (n && n.pid) {
+          if (depth < 2 || n.is_suspicious) {
+            autoExpandPids.add(n.pid);
+          }
+          if (Array.isArray(n.children)) {
+            collectPids(n.children, depth + 1);
+          }
+        }
+      });
+    };
+    collectPids(roots, 0);
+
+    setExpandedPids((prev) => {
+      // If agent changed or first load, initialize with default top-level expanded PIDs
+      if (isAgentChanged || prev.size === 0) {
+        return autoExpandPids;
       }
-    }
-  }, [processTree]);
+      // Otherwise preserve all user-expanded PIDs and add any newly detected suspicious nodes
+      const next = new Set(prev);
+      const collectSuspiciousOnly = (nodes) => {
+        nodes.forEach((n) => {
+          if (n && n.pid && n.is_suspicious) {
+            next.add(n.pid);
+          }
+          if (Array.isArray(n.children)) collectSuspiciousOnly(n.children);
+        });
+      };
+      collectSuspiciousOnly(roots);
+      return next;
+    });
+  }, [processTree, selectedAgent]);
 
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({
@@ -114,12 +151,21 @@ export default function ProcessTree() {
 
   const confirmKill = async () => {
     if (!killModalProc) return;
-    if (killTreeMode) {
-      await handleKillProcessTree(killModalProc.pid, killModalProc.name);
-    } else {
-      await handleKillProcess(killModalProc.pid);
-    }
+    const target = killModalProc;
+    const isTree = killTreeMode;
+    
+    // Close modal immediately
     setKillModalProc(null);
+
+    try {
+      if (isTree) {
+        await handleKillProcessTree(target.pid, target.name);
+      } else {
+        await handleKillProcess(target.pid);
+      }
+    } catch (e) {
+      // Error handled by hook
+    }
   };
 
   // Render recursive process tree nodes with expand/collapse
@@ -130,7 +176,7 @@ export default function ProcessTree() {
     const isSusp = node.is_suspicious;
 
     return (
-      <div key={node.pid || Math.random()} style={{ display: 'flex', flexDirection: 'column' }}>
+      <div key={`tree-node-${node.pid}`} style={{ display: 'flex', flexDirection: 'column' }}>
         <div
           style={{
             display: 'flex',
@@ -222,6 +268,7 @@ export default function ProcessTree() {
               size="sm"
               iconLeft={<FiXCircle size={13} />}
               onClick={() => openKillModal(node, false)}
+              disabled={killing}
             >
               Kill PID
             </Button>
@@ -230,6 +277,7 @@ export default function ProcessTree() {
               size="sm"
               iconLeft={<FiLayers size={13} />}
               onClick={() => openKillModal(node, true)}
+              disabled={killing}
             >
               Kill Tree
             </Button>
@@ -278,7 +326,7 @@ export default function ProcessTree() {
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           {killing && (
             <span style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <FiRotateCw size={14} className="spin" /> Dispatching Kill Signal...
+              <FiRotateCw size={14} className="spin" /> Dispatching Kill & Syncing...
             </span>
           )}
           <div style={{ width: 240 }}>
@@ -286,13 +334,79 @@ export default function ProcessTree() {
               options={agentOptions}
               value={selectedAgent}
               onChange={setSelectedAgent}
+              disabled={killing}
             />
           </div>
-          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshProcessData}>
-            Refresh
+          <Button
+            variant="outline"
+            iconLeft={<FiRotateCw size={15} className={killing ? 'spin' : ''} />}
+            onClick={refreshProcessData}
+            disabled={killing}
+          >
+            {killing ? 'Syncing...' : 'Refresh'}
           </Button>
         </div>
       </div>
+
+      {/* Success Notification Alert */}
+      {actionSuccess && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0.75rem 1rem',
+            background: 'rgba(0,192,123,0.12)',
+            border: '1px solid var(--success)',
+            borderRadius: 'var(--radius-sm)',
+            marginBottom: '1.25rem',
+            color: 'var(--success)',
+            fontSize: '0.875rem',
+            fontWeight: 600
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiCheckCircle size={17} />
+            <span>{actionSuccess} — Process list refreshed successfully.</span>
+          </div>
+          <button
+            onClick={clearActionSuccess}
+            style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+          >
+            <FiX size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Error Alert */}
+      {error && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0.75rem 1rem',
+            background: 'rgba(239,68,68,0.12)',
+            border: '1px solid var(--error)',
+            borderRadius: 'var(--radius-sm)',
+            marginBottom: '1.25rem',
+            color: 'var(--error)',
+            fontSize: '0.875rem',
+            fontWeight: 600
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiAlertOctagon size={17} />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={clearError}
+            style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+          >
+            <FiX size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Flagged Suspicious Processes Alert Card */}
       <div className="card" style={{ marginBottom: '1.5rem', borderLeft: '4px solid var(--error)' }}>
@@ -312,7 +426,7 @@ export default function ProcessTree() {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  justify: 'space-between',
+                  justifyContent: 'space-between',
                   padding: '0.75rem 1rem',
                   background: 'rgba(239,68,68,0.06)',
                   borderRadius: 'var(--radius-sm)',
@@ -346,10 +460,22 @@ export default function ProcessTree() {
                 </div>
 
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <Button variant="ghost" size="sm" iconLeft={<FiXCircle size={14} />} onClick={() => openKillModal(proc, false)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    iconLeft={<FiXCircle size={14} />}
+                    onClick={() => openKillModal(proc, false)}
+                    disabled={killing}
+                  >
                     Kill PID {proc.pid}
                   </Button>
-                  <Button variant="danger" size="sm" iconLeft={<FiLayers size={14} />} onClick={() => openKillModal(proc, true)}>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    iconLeft={<FiLayers size={14} />}
+                    onClick={() => openKillModal(proc, true)}
+                    disabled={killing}
+                  >
                     Kill Tree {proc.pid}
                   </Button>
                 </div>
@@ -372,10 +498,10 @@ export default function ProcessTree() {
           </h3>
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <Button variant="ghost" size="sm" iconLeft={<FiMaximize2 size={13} />} onClick={expandAll}>
+            <Button variant="ghost" size="sm" iconLeft={<FiMaximize2 size={13} />} onClick={expandAll} disabled={killing}>
               Expand All
             </Button>
-            <Button variant="ghost" size="sm" iconLeft={<FiMinimize2 size={13} />} onClick={collapseAll}>
+            <Button variant="ghost" size="sm" iconLeft={<FiMinimize2 size={13} />} onClick={collapseAll} disabled={killing}>
               Collapse All
             </Button>
           </div>
@@ -416,7 +542,7 @@ export default function ProcessTree() {
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              <Button variant="ghost" onClick={() => setKillModalProc(null)}>
+              <Button variant="ghost" onClick={() => setKillModalProc(null)} disabled={killing}>
                 Cancel
               </Button>
               <Button
