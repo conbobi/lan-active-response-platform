@@ -1,13 +1,80 @@
+import sys
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
+
+# Ensure agent directory is importable
+agent_dir = Path(__file__).resolve().parents[3] / "agent"
+if str(agent_dir) not in sys.path:
+    sys.path.insert(0, str(agent_dir))
+
+from fim import FileIntegrityMonitor
 from app.websocket.agent_ws import agent_websocket_endpoint
 from app.schemas.enums import IncidentSeverity
 
 pytestmark = pytest.mark.asyncio
 
 
+async def test_fim_monitor_detects_changes_and_single_alert(tmp_path):
+    """
+    Verify FileIntegrityMonitor detects file modification/deletion/creation
+    and only emits an alert once per state transition (no repeated alert flooding).
+    """
+    test_file = tmp_path / "config.txt"
+    test_file.write_text("initial content")
+
+    watched_dir = tmp_path / "extra"
+    watched_dir.mkdir()
+
+    # 1. Initialize monitor
+    monitor = FileIntegrityMonitor(
+        agent_id="agent-test",
+        watched_files=[str(test_file)],
+        watched_dirs=[str(watched_dir)]
+    )
+
+    # Initial check right after baseline: no changes
+    alerts = monitor.check_integrity()
+    assert len(alerts) == 0
+
+    # 2. Modify file -> should trigger 1 alert
+    test_file.write_text("tampered content")
+    alerts = monitor.check_integrity()
+    assert len(alerts) == 1
+    assert alerts[0]["action"] == "MODIFIED"
+    assert alerts[0]["file_path"] == str(test_file)
+    assert alerts[0]["old_hash"] != alerts[0]["new_hash"]
+
+    # 3. Subsequent check with NO changes -> must NOT send alert again
+    repeat_alerts = monitor.check_integrity()
+    assert len(repeat_alerts) == 0, "FIM must not flood repeated alerts for already recorded hash"
+
+    # 4. Create new file in watched directory -> triggers CREATED alert
+    new_file = watched_dir / "backdoor.sh"
+    new_file.write_text("#!/bin/bash\necho bad")
+
+    alerts = monitor.check_integrity()
+    assert len(alerts) == 1
+    assert alerts[0]["action"] == "CREATED"
+    assert alerts[0]["file_path"] == str(new_file)
+
+    # 5. Check again -> no duplicate CREATED alert
+    assert len(monitor.check_integrity()) == 0
+
+    # 6. Delete file -> triggers DELETED alert
+    test_file.unlink()
+    alerts = monitor.check_integrity()
+    assert len(alerts) == 1
+    assert alerts[0]["action"] == "DELETED"
+    assert alerts[0]["file_path"] == str(test_file)
+
+    # 7. Check again -> no duplicate DELETED alert
+    assert len(monitor.check_integrity()) == 0
+
+
 async def test_fim_alert_critical_file_creates_incident():
+    """Verify backend agent_ws receives FIM_ALERT on sensitive file (/etc/passwd) and creates CRITICAL Incident."""
     mock_ws = MagicMock()
     mock_ws.query_params = {"agent_id": "client1"}
 
