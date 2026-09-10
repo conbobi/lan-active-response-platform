@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import patch
 from app.services.docker_monitor_service import DockerMonitorService
 
 

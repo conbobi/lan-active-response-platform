@@ -1,6 +1,6 @@
 import math
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any
 
 
 class BeaconingDetectionService:

@@ -4,9 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.process_group import ProcessGroup
 from app.models.process_chain_rule import ProcessChainRule as ModelProcessChainRule
 from app.schemas.process_group import ProcessGroupCreate, ProcessGroupUpdate
-from app.schemas.process_chain_rule import ProcessChainRuleCreate, ProcessChainRuleUpdate
 from app.services.process_group_service import ProcessGroupService
-from app.services.process_chain_rule_service import ProcessChainRuleService
 from app.services.risk_rules.process_chain_rule import ProcessChainRule as RiskProcessChainRule
 from app.core.exceptions import AppException
 

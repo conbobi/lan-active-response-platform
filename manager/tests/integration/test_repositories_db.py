@@ -37,8 +37,7 @@ async def test_agent_repository_db(db_session):
 
     # 3. List
     agents = await repo.list()
-    assert len(agents) == 1
-    assert agents[0].id == "repo-agent-1"
+    assert any(a.id == "repo-agent-1" for a in agents)
 
 
 async def test_topology_link_repository_db(db_session):

@@ -1,5 +1,5 @@
 import heapq
-from typing import Dict, List, Tuple, Optional, Callable, Any, Set
+from typing import Dict, List, Tuple, Optional, Any, Set
 
 
 def dijkstra_shortest_path(

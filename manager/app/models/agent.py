@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional
 from sqlalchemy import String, Float, Boolean, DateTime, Enum
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 from app.schemas.enums import AgentStatus
 

@@ -2,7 +2,6 @@ from app.services.base import AbstractService
 from app.services.lock_manager import LockManager
 from app.services.scheduler import Scheduler
 from app.services.command_dispatcher import CommandDispatcher, command_dispatcher
-from app.services.detection_engine import DetectionEngine, detection_engine
 from app.services.path_finder import PathFinder
 from app.services.routing_manager import RoutingManager, PathInfo, RoutingEntry
 from app.services.agent_service import AgentService
@@ -28,7 +27,6 @@ __all__ = [
     "LockManager",
     "Scheduler",
     "CommandDispatcher", "command_dispatcher",
-    "DetectionEngine", "detection_engine",
     "PathFinder",
     "RoutingManager", "PathInfo", "RoutingEntry",
     "AgentService",

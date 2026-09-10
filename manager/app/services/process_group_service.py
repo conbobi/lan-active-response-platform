@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.process_group import ProcessGroup
 from app.schemas.process_group import ProcessGroupCreate, ProcessGroupUpdate

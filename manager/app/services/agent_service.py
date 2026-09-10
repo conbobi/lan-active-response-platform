@@ -1,10 +1,9 @@
 import uuid
-from app.models import agent_history
-from typing import List, Optional
+from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent import Agent
 from app.repositories.agent_repository import AgentRepository
-from app.schemas.agent import AgentCreate, AgentUpdate
+from app.schemas.agent import AgentCreate
 from app.schemas.heartbeat import HeartbeatDTO
 from app.schemas.enums import AgentStatus
 from app.core.exceptions import AgentNotFoundError, ConflictError

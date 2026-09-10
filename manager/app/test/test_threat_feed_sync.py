@@ -1,4 +1,3 @@
-import pytest
 from app.services.threat_intelligence_service import ThreatIntelligenceService
 
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 from pydantic import BaseModel, Field
 from app.schemas.base import ORMBaseModel
 from app.schemas.enums import IncidentSeverity, IncidentStatus

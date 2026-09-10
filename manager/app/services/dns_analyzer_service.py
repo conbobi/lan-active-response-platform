@@ -1,6 +1,6 @@
 import math
 from collections import Counter
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 
 class DnsAnalyzerService:

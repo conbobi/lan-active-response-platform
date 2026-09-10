@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.services.risk_rules import create_default_registry, RiskRuleRegistry
+from app.services.risk_rules import create_default_registry
 from app.services.risk_rules.cpu_spike_rule import CpuSpikeRule
 from app.services.risk_rules.suspicious_process_rule import SuspiciousProcessRule
 from app.services.risk_rules.network_connection_rule import NetworkConnectionRule
@@ -14,7 +14,6 @@ from app.services.risk_rules.shadow_copy_rule import ShadowCopyRule
 from app.services.risk_rules.c2_communication_rule import C2CommunicationRule
 from app.services.risk_rules.lateral_movement_rule import LateralMovementRule
 from app.services.risk_rules.mass_file_modification_rule import MassFileModificationRule
-from app.schemas.risk import RiskAssessmentDTO
 
 pytestmark = pytest.mark.asyncio
 

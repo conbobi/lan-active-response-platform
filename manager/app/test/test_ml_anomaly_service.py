@@ -1,4 +1,3 @@
-import pytest
 from app.services.ml_anomaly_service import MLAnomalyService
 
 

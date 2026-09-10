@@ -7,11 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import NotificationConfig, NotificationLog
 from app.repositories.notification_repository import NotificationRepository
-from app.services.command_dispatcher import command_dispatcher
-from app.models.command import Command
-from app.schemas.enums import CommandStatus
-from app.repositories.command_repository import CommandRepository
-from app.repositories.agent_repository import AgentRepository
 
 logger = logging.getLogger(__name__)
 

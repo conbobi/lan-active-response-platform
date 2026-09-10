@@ -1,5 +1,4 @@
 import io
-import math
 import asyncio
 import logging
 from datetime import datetime, timezone

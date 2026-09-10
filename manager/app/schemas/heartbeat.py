@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from typing import Optional
 from pydantic import Field
 from app.schemas.base import ORMBaseModel
 

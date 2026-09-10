@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 from pydantic import Field
 from app.schemas.base import ORMBaseModel
 

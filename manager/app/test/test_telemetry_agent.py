@@ -1,7 +1,5 @@
-import pytest
 import sys
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add agent path to sys.path so we can test agent module functions
 agent_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../agent"))

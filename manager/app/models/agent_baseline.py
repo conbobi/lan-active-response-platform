@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import List, Dict
 from sqlalchemy import String, DateTime, LargeBinary, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base

@@ -3,7 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 # Ensure agent directory is importable
 agent_dir = Path(__file__).resolve().parents[3] / "agent"

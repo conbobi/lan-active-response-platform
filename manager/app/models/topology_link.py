@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Any
 from sqlalchemy import String, Float, Boolean, ForeignKey, Column
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin

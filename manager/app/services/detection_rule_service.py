@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.detection_rule import DetectionRule
 from app.schemas.detection_rule import DetectionRuleCreate, DetectionRuleUpdate

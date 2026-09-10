@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from pydantic import Field
 from app.schemas.base import ORMBaseModel
 from app.schemas.enums import IncidentSeverity
