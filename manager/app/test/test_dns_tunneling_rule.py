@@ -1,6 +1,8 @@
 import pytest
-from app.services.dns_analyzer_service import DnsAnalyzerService
-from app.services.risk_rules.dns_tunneling_rule import DnsTunnelingRule
+from app.services.risk_rules.dns_tunneling_rule import (
+    DnsAnalyzerService,
+    DnsTunnelingRule,
+)
 
 
 def test_shannon_entropy_calculation():

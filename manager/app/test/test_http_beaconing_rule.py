@@ -1,7 +1,9 @@
 from datetime import datetime, timezone, timedelta
 import pytest
-from app.services.beaconing_detection_service import BeaconingDetectionService
-from app.services.risk_rules.http_beaconing_rule import HttpBeaconingRule
+from app.services.risk_rules.http_beaconing_rule import (
+    BeaconingDetectionService,
+    HttpBeaconingRule,
+)
 
 
 def test_beaconing_interval_analysis():
