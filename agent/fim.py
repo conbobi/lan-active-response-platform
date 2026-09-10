@@ -93,13 +93,22 @@ class FileIntegrityMonitor:
             else:
                 curr_hash = self.calculate_sha256(filepath)
                 if curr_hash is not None and curr_hash != old_hash:
-                    # File was modified
+                    # File was modified - run YARA scan
+                    yara_matched = []
+                    try:
+                        from yara_scanner import global_yara_scanner
+                        yara_res = global_yara_scanner.scan_file(filepath)
+                        yara_matched = [m.get("rule") for m in yara_res if m.get("rule")]
+                    except Exception:
+                        pass
+
                     alerts.append({
                         "agent_id": self.agent_id,
                         "file_path": filepath,
                         "old_hash": old_hash,
                         "new_hash": curr_hash,
                         "action": "MODIFIED",
+                        "yara_matches": yara_matched,
                         "timestamp": now_iso
                     })
                     # Update cache to suppress repeated alerts for the same change
@@ -112,12 +121,21 @@ class FileIntegrityMonitor:
                 if new_hash is not None:
                     # If already initialized, new file in watched directory is an alert
                     if self.initialized:
+                        yara_matched = []
+                        try:
+                            from yara_scanner import global_yara_scanner
+                            yara_res = global_yara_scanner.scan_file(filepath)
+                            yara_matched = [m.get("rule") for m in yara_res if m.get("rule")]
+                        except Exception:
+                            pass
+
                         alerts.append({
                             "agent_id": self.agent_id,
                             "file_path": filepath,
                             "old_hash": "",
                             "new_hash": new_hash,
                             "action": "CREATED",
+                            "yara_matches": yara_matched,
                             "timestamp": now_iso
                         })
                     self.file_hashes[filepath] = new_hash

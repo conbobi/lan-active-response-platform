@@ -11,13 +11,27 @@ dependencies = [
     "docker>=7.1.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "joblib>=1.6.0",
     "networkx>=3.6.1",
+    "psutil>=7.2.2",
     "pydantic>=2.13.4",
     "pydantic-core>=2.46.4",
     "pydantic-settings>=2.15.0",
     "pytest",
     "pytest-asyncio",
+    "pyyaml>=6.0.3",
     "reportlab>=5.0.1",
+    "scikit-learn>=1.9.0",
     "sqlalchemy>=2.0.52",
     "uvicorn>=0.52.4",
+    "websockets>=17.1",
+    "yara-python>=4.5.4",
+]
+
+[dependency-groups]
+dev = [
+    "deadcode>=2.4.1",
+    "ruff>=0.16.6",
+    "skylos>=4.36.1",
+    "vulture>=2.16",
 ]

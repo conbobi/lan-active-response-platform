@@ -29,6 +29,36 @@ async def lifespan(app: FastAPI):
     logger.info("Starting background scheduler and dead agent sweep...")
     scheduler = topology_facade.schedule_background_tasks()
 
+    # Schedule periodic Threat Feed sync (every 6 hours)
+    async def periodic_feed_sync():
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.services.threat_intelligence_service import ThreatIntelligenceService
+            async with AsyncSessionLocal() as session:
+                ti_svc = ThreatIntelligenceService(session)
+                await ti_svc.sync_all_feeds()
+        except Exception as e:
+            logger.error(f"Error in periodic threat feed sync: {e}")
+
+    scheduler.schedule_task(21600, periodic_feed_sync)
+
+    # Schedule periodic ML baseline retrain (every 24 hours)
+    async def periodic_ml_retrain():
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.repositories.agent_repository import AgentRepository
+            from app.services.ml_anomaly_service import MLAnomalyService
+            async with AsyncSessionLocal() as session:
+                agent_repo = AgentRepository(session)
+                ml_svc = MLAnomalyService(session)
+                agents = await agent_repo.list()
+                for ag in agents:
+                    await ml_svc.train_agent_baseline(ag.id)
+        except Exception as e:
+            logger.error(f"Error in periodic ML baseline retrain: {e}")
+
+    scheduler.schedule_task(86400, periodic_ml_retrain)
+
     logger.info("🚀 LAN Active Response Manager startup complete.")
     yield
 

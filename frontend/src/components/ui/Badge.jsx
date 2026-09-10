@@ -2,7 +2,12 @@ import React from 'react';
 
 const variantMap = {
   online: 'badge-online',
+  active: 'badge-online',
   offline: 'badge-offline',
+  dead: 'badge-offline',
+  inactive: 'badge-offline',
+  isolated: 'badge-warning',
+  quarantine: 'badge-critical',
   warning: 'badge-warning',
   critical: 'badge-critical',
   info: 'badge-info',
@@ -12,8 +17,19 @@ const variantMap = {
 };
 
 const labelMap = {
-  online: 'Online', offline: 'Offline', warning: 'Warning',
-  critical: 'Critical', info: 'Info', low: 'Low', medium: 'Medium', high: 'High',
+  online: 'Online',
+  active: 'Online',
+  offline: 'Offline',
+  dead: 'Offline',
+  inactive: 'Inactive',
+  isolated: 'Isolated',
+  quarantine: 'Quarantine',
+  warning: 'Warning',
+  critical: 'Critical',
+  info: 'Info',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
 };
 
 export default function Badge({ status, label, showDot = true }) {

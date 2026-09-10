@@ -1,13 +1,16 @@
 import statistics
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import String, Integer, DateTime, ForeignKey
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 
 class Flow(Base):
     __tablename__ = "flows"
+    __table_args__ = (
+        Index("ix_flows_agent_dst_time", "agent_id", "dst_ip", "start_time"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     src_ip: Mapped[str] = mapped_column(String(45), nullable=False)

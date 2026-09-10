@@ -31,6 +31,13 @@ Tài liệu này cung cấp hướng dẫn vận hành chi tiết dành cho Chuy
    - [Demo 3: Cây Tiến Trình & Lọc Zombie (`demo_process_tree.sh`)](#demo-3-cây-tiến-trình--lọc-zombie-demo_process_treesh)
    - [Demo 4: Tự Phục Hồi Kết Nối & Watchdog (`demo_reconnect.sh`)](#demo-4-tự-phục-hồi-kết-nối--watchdog-demo_reconnectsh)
 5. [Quy Trình Xử Lý Sự Cố Khẩn Cấp (SOP)](#5-quy-trình-xử-lý-sự-cố-khẩn-cấp-sop)
+6. [Hướng Dẫn Vận Hành 6 Tính Năng SOC/EDR Nâng Cao Mới](#6-hướng-dẫn-vận-hành-6-tính-năng-socedr-nâng-cao-mới)
+   - [6.1. Automated Threat Intelligence Feeds](#61-automated-threat-intelligence-feeds)
+   - [6.2. YARA Signature Integration](#62-yara-signature-integration)
+   - [6.3. Brute Force Detection](#63-brute-force-detection)
+   - [6.4. DNS Tunneling & Shannon Entropy](#64-dns-tunneling--shannon-entropy)
+   - [6.5. HTTP/TCP C2 Beaconing Detection](#65-httptcp-c2-beaconing-detection)
+   - [6.6. Machine Learning Behavioral Baseline (Isolation Forest)](#66-machine-learning-behavioral-baseline-isolation-forest)
 
 ---
 
@@ -467,6 +474,68 @@ Khi hệ thống phát cảnh báo mức **High** hoặc **Critical**:
   ├── Nhấn "Unisolate" trên trang Agents để đưa máy trạm hoạt động trở lại.
   └── Đóng sự cố trên trang Incidents (Chuyển trạng thái sang Resolved).
 ```
+
+---
+
+## 6. Hướng Dẫn Vận Hành 6 Tính Năng SOC/EDR Nâng Cao Mới
+
+Nền tảng LARP đã được nâng cấp với 6 tính năng bảo mật chuyên sâu, tích hợp trực tiếp vào kiến trúc **RiskRule Registry** và giao diện quản trị:
+
+### 6.1. Automated Threat Intelligence Feeds
+* **Mục đích**: Tự động tải và đồng bộ các danh sách IoC độc hại (IP máy chủ C2, URL phát tán mã độc, mã băm tập tin nguy hiểm) từ các tổ chức an ninh mạng công khai (Feodo Tracker, URLhaus, ThreatFox, AbuseIPDB) vào cơ sở dữ liệu cục bộ.
+* **Cách sử dụng trên UI**:
+  1. Vào trang **Threat Intel Center** (`/threat-intel`).
+  2. Chuyển sang tab **Automated Feeds**:
+     - Xem trạng thái đồng bộ, chu kỳ cập nhật (mặc định mỗi 6 giờ), số lượng IoC đã kéo về.
+     - Bấm **Sync Now** trên từng nguồn hoặc **Sync All Feeds** để ép hệ thống tải ngay lập tức.
+     - Bấm **Add Feed** để thêm nguồn cung cấp IoC tùy chỉnh của doanh nghiệp.
+  3. Chuyển sang tab **IoC Database** để tra cứu và lọc danh sách hàng nghìn IoC đang hoạt động.
+
+### 6.2. YARA Signature Integration
+* **Mục đích**: Nhận diện nhị phân mã độc, webshells và ransomware theo mẫu chuỗi ký tự và điều kiện logic YARA chuẩn quốc tế.
+* **Cơ chế hoạt động**:
+  - **Tự động quét khi có tệp mới**: Khi module FIM trên Agent phát hiện tệp mới tạo (`CREATED`) hoặc bị thay đổi (`MODIFIED`) trong thư mục theo dõi, YARA scanner sẽ lập tức quét tệp. Nếu khớp chữ ký độc hại, cảnh báo `YARA_SCAN_ALERT` được phát lên Manager và lập tức sinh Incident **CRITICAL** (điểm rủi ro: 90–100).
+  - **Quét theo yêu cầu (On-demand)**: Chuyên viên SOC có thể phát lệnh quét từ xa xuống bất kỳ máy trạm nào.
+* **Cách sử dụng trên UI**:
+  1. Vào menu **Cyber Intelligence -> YARA Signatures** (`/rules/yara`).
+  2. Bấm **New Rule** để thêm tập luật mới (kiểm tra cú pháp tự động).
+  3. Bấm **Dispatch Scan** -> Chọn Agent mục tiêu (ví dụ `client1`) -> Nhập thư mục cần quét (ví dụ `/tmp` hoặc `/app`) -> Bấm **Start Scan**.
+
+### 6.3. Brute Force Detection
+* **Mục đích**: Phát hiện tấn công dò quét mật khẩu hàng loạt qua SSH, RDP hoặc tài khoản hệ thống.
+* **Nguyên lý tính điểm**:
+  - Cơ chế cửa sổ thời gian trượt (Sliding Window): Mặc định $\ge 5$ lần thử thất bại trong 30–60 giây sẽ bị tính **30 điểm rủi ro**.
+  - Tấn công dồn dập $\ge 15$ lần hoặc **có 1 lần đăng nhập thành công ngay sau chuỗi thất bại** (dấu hiệu kẻ tấn công đã dò trúng mật khẩu và xâm nhập thành công): Lập tức phạt **75–90 điểm**, tạo Incident khẩn cấp và kích hoạt cô lập mạng tự động.
+* **Cách cấu hình trên UI**:
+  - Vào **Detection Rules** (`/rules/detection`), tìm rule `brute_force`, bấm biểu tượng chỉnh sửa để thay đổi tham số JSON: `{"threshold": 5, "critical_threshold": 15, "window_seconds": 60}`.
+
+### 6.4. DNS Tunneling & Shannon Entropy
+* **Mục đích**: Phát hiện kênh liên lạc gián điệp C2 và thất thoát dữ liệu (Data Exfiltration) lén lút qua giao thức DNS (ví dụ: dnscat2, iodine).
+* **Nguyên lý tính điểm**:
+  - Tính độ hỗn loạn thông tin **Shannon Entropy $H(X)$**: Nếu entropy của subdomain $\ge 3.8$ (dấu hiệu Base64/Hex/mã hóa), cộng $+35$ điểm.
+  - Độ dài FQDN $> 45$ ký tự: cộng $+25$ điểm.
+  - Tần suất các truy vấn bản ghi bất thường (TXT, NULL) $\ge 10$ query/phút: cộng $+30$ điểm.
+* **Cách quan sát trên UI**:
+  - Vào trang **Network 3D** (`/network`), cuộn xuống bảng **DNS Tunneling & Entropy Inspector** để xem các bản ghi DNS có entropy cao và trạng thái cảnh báo theo thời gian thực.
+
+### 6.5. HTTP/TCP C2 Beaconing Detection
+* **Mục đích**: Bắt quả tang mã độc định kỳ gửi tín hiệu "nhịp tim" (beacon) về máy chủ điều khiển C2 (Cobalt Strike, Sliver, Meterpreter).
+* **Nguyên lý tính điểm**:
+  - Thuật toán phân tích chuỗi thời gian: Tính các khoảng cách thời gian giữa các kết nối liên tiếp $\Delta t_i$, từ đó tính Hệ số biến thiên (Coefficient of Variation) $CV = \frac{\sigma}{\mu}$.
+  - Nếu $CV < 0.25$ (chu kỳ rất đều, độ lệch dưới 25% jitter) với $\ge 8$ kết nối: Phạt **50 điểm**.
+  - Nếu IP máy chủ đích trùng khớp với kho Threat Intelligence: Đẩy thẳng lên **90 điểm (CRITICAL)**.
+* **Cách quan sát trên UI**:
+  - Vào trang **Network 3D** (`/network`), quan sát widget **C2 HTTP Beaconing Analysis** để xem danh sách IP nghi vấn, chu kỳ trung bình (interval) và hệ số jitter $CV$.
+
+### 6.6. Machine Learning Behavioral Baseline (Isolation Forest)
+* **Mục đích**: Nhận diện các hành vi bất thường tinh vi của từng Agent cụ thể dựa trên mô hình học máy không giám sát (Unsupervised ML), không bị giới hạn bởi ngưỡng cứng (Static Threshold).
+* **Nguyên lý hoạt động**:
+  - Mô hình học vector 6 chiều: `[CPU, RAM, Disk, Process Count, Open Sockets, File Changes]` từ lịch sử hoạt động của từng Agent.
+  - Sử dụng **Isolation Forest** kết hợp luật **3-Sigma Deviation** để chấm điểm dị biệt (Decision function).
+  - Tác vụ huấn luyện và dự đoán hoàn toàn chạy ngầm qua luồng không chặn (`asyncio.to_thread`), bảo đảm hiệu năng tối đa cho máy chủ SOC.
+  - Hệ thống tự động re-train lại baseline hàng ngày.
+* **Cách quan sát trên UI**:
+  - Vào trang **Risk Monitor** (`/risk`), click vào một Agent bất kỳ để mở modal chi tiết: widget **🤖 ML Behavioral Baseline** sẽ hiển thị trạng thái hoạt động của mô hình cho Agent đó.
 
 ---
 

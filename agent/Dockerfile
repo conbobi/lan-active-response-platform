@@ -18,8 +18,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agent.py .
-COPY fim.py .
+COPY *.py /app/
 COPY commands/ /app/commands/
 
 # Thêm thư mục mô phỏng hành vi mã độc (malware simulation)

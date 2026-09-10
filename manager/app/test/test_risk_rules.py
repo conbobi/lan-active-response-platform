@@ -21,8 +21,8 @@ pytestmark = pytest.mark.asyncio
 
 async def test_registry_operations():
     registry = create_default_registry()
-    assert len(registry.get_all_rules()) == 13
-    assert len(registry.get_enabled_rules()) == 13
+    assert len(registry.get_all_rules()) == 18
+    assert len(registry.get_enabled_rules()) == 18
 
     rule = registry.get_rule("cpu_spike")
     assert rule is not None
@@ -30,7 +30,7 @@ async def test_registry_operations():
 
     # Disable a rule
     registry.update_rule_config("cpu_spike", enabled=False, weight=2.0)
-    assert len(registry.get_enabled_rules()) == 12
+    assert len(registry.get_enabled_rules()) == 17
     assert rule.enabled is False
     assert rule.weight == 2.0
 

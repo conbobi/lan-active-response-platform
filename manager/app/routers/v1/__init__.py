@@ -19,6 +19,7 @@ from app.routers.v1.setting_router import router as setting_router
 from app.routers.v1.docker_router import router as docker_router
 from app.routers.v1.process_group_router import router as process_group_router
 from app.routers.v1.process_chain_rule_router import router as process_chain_rule_router
+from app.routers.v1.yara_router import router as yara_router
 
 api_router = APIRouter()
 
@@ -41,6 +42,7 @@ api_router.include_router(setting_router, prefix="/settings", tags=["Settings"])
 api_router.include_router(docker_router, prefix="/docker", tags=["Docker Monitor"])
 api_router.include_router(process_group_router, prefix="/process-groups", tags=["Process Groups"])
 api_router.include_router(process_chain_rule_router, prefix="/process-chain-rules", tags=["Process Chain Rules"])
+api_router.include_router(yara_router, prefix="/yara", tags=["YARA Rules"])
 
 __all__ = ["api_router"]
 

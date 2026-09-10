@@ -61,6 +61,8 @@ class DnsQueryItem(BaseModel):
     query: str
     query_type: Optional[str] = "A"
     resolved_ips: List[str] = Field(default_factory=list)
+    entropy: Optional[float] = None
+    length: Optional[int] = None
 
 
 class RiskAssessmentDTO(BaseModel):
@@ -79,6 +81,9 @@ class RiskAssessmentDTO(BaseModel):
     mass_file_modification: bool = False
     dns_queries: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     process_tree: List[Dict[str, Any]] = Field(default_factory=list)
+    auth_events: List[Dict[str, Any]] = Field(default_factory=list)
+    connection_history: List[Dict[str, Any]] = Field(default_factory=list)
+    yara_matches: List[str] = Field(default_factory=list)
 
 
 class RiskScoreOut(ORMBaseModel):

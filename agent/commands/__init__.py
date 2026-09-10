@@ -4,6 +4,7 @@ from .kill_process import KillProcessCommand
 from .kill_process_tree import KillProcessTreeCommand
 from .self_update import SelfUpdateCommand
 from .quarantine import QuarantineCommand, ReleaseQuarantineCommand
+from .yara_scan import YaraScanCommand
 
 COMMAND_HANDLERS = {
     SynFloodCommand.name: SynFloodCommand(),
@@ -13,4 +14,5 @@ COMMAND_HANDLERS = {
     SelfUpdateCommand.name: SelfUpdateCommand(),
     QuarantineCommand.name: QuarantineCommand(),
     ReleaseQuarantineCommand.name: ReleaseQuarantineCommand(),
+    YaraScanCommand.name: YaraScanCommand(),
 }

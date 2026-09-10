@@ -5,8 +5,18 @@ import asyncio
 import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
+import sys
+from pathlib import Path
+agent_dir = str(Path(__file__).resolve().parent)
+if agent_dir not in sys.path:
+    sys.path.insert(0, agent_dir)
+
 from fim import FileIntegrityMonitor
-import agent
+import importlib.util
+spec = importlib.util.spec_from_file_location("agent", Path(agent_dir) / "agent.py")
+agent = importlib.util.module_from_spec(spec)
+sys.modules["agent"] = agent
+spec.loader.exec_module(agent)
 
 
 def test_fim_detects_modification_and_suppresses_repeat():

@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from commands import COMMAND_HANDLERS
 import time
 from fim import FileIntegrityMonitor
+from auth_monitor import global_auth_monitor
+from dns_sniffer import global_dns_sniffer
+from connection_tracker import global_connection_tracker
 
 MANAGER_URL = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
@@ -515,6 +518,11 @@ async def send_risk_telemetry(websocket):
             if os.path.exists("/tmp/lsass.dump"):
                 cred_events.append({"target_object": "lsass.dump", "action": "read"})
 
+            auth_events = global_auth_monitor.get_new_events()
+            dns_queries = global_dns_sniffer.get_recent_queries()
+            global_connection_tracker.sample_connections()
+            conn_hist = global_connection_tracker.get_connection_history()
+
             payload = {
                 "agent_id": AGENT_ID,
                 "cpu_usage": get_container_cpu_percent(),
@@ -530,12 +538,23 @@ async def send_risk_telemetry(websocket):
                 "registry_changes": registry_changes,
                 "credential_access_events": cred_events,
                 "lateral_movement_events": [],
-                "dns_queries": [],
+                "dns_queries": dns_queries,
+                "auth_events": auth_events,
+                "connection_history": conn_hist,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
             message = {"type": "TELEMETRY_RISK", "payload": payload, "wait_ack": False}
             await send_ws_json_no_wait(websocket, message)
+
+            # If auth attempts detected, dispatch real-time AUTH_EVENT message as well
+            if auth_events:
+                auth_msg = {
+                    "type": "AUTH_EVENT",
+                    "payload": {"agent_id": AGENT_ID, "events": auth_events},
+                    "wait_ack": False
+                }
+                await send_ws_json_no_wait(websocket, auth_msg)
         except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
             print(f"[{AGENT_ID}] WebSocket connection closed in send_risk_telemetry loop.", flush=True)
             raise
@@ -639,11 +658,17 @@ async def main_agent():
     max_delay = 15
     ws_url = get_manager_ws_url()
 
+    try:
+        global_dns_sniffer.start_background_sniffer()
+    except Exception as e:
+        print(f"[{AGENT_ID}] DNS sniffer start note: {e}", flush=True)
+
     while True:
         try:
             print(f"[{AGENT_ID}] Connecting to Manager at {ws_url}...", flush=True)
             async with websockets.connect(
                 ws_url,
+                open_timeout=10,
                 ping_interval=15,
                 ping_timeout=15,
             ) as ws:

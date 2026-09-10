@@ -16,9 +16,9 @@ const ITEMS_PER_PAGE = 8;
 
 const STATUS_OPTS = [
   { value: 'all', label: 'All Statuses' },
-  { value: 'active', label: 'Active' },
+  { value: 'online', label: 'Online / Active' },
   { value: 'isolated', label: 'Isolated' },
-  { value: 'dead', label: 'Dead / Offline' },
+  { value: 'offline', label: 'Offline / Dead' },
 ];
 
 const RISK_OPTS = [
@@ -110,8 +110,10 @@ export default function RiskAssessment() {
         (agent.ip_address && agent.ip_address.includes(searchTerm)) ||
         (agent.id && agent.id.toLowerCase().includes(searchTerm.toLowerCase()));
 
-      const agentStatus = agent.status || (agent.is_isolated ? 'isolated' : 'active');
-      const matchStatus = statusFilter === 'all' || agentStatus === statusFilter;
+      const isOnline = agent.status === 'online' || agent.status === 'active';
+      const isIsolated = Boolean(agent.is_isolated || agent.status === 'isolated' || agent.status === 'quarantine');
+      const normalizedStatus = isIsolated ? 'isolated' : isOnline ? 'online' : 'offline';
+      const matchStatus = statusFilter === 'all' || normalizedStatus === statusFilter;
 
       const riskData = riskMap[agent.id];
       const score = riskData ? riskData.latestScore : null;
@@ -221,10 +223,10 @@ export default function RiskAssessment() {
   const factorEntries = Array.isArray(rawFactors)
     ? rawFactors
     : Object.entries(rawFactors).map(([key, val]) => ({
-        name: key,
-        weight: typeof val === 'object' ? val.weight || val.score || 20 : val,
-        description: typeof val === 'object' ? val.reason || val.description || 'Threshold triggered' : 'Risk factor triggered',
-      }));
+      name: key,
+      weight: typeof val === 'object' ? val.weight || val.score || 20 : val,
+      description: typeof val === 'object' ? val.reason || val.description || 'Threshold triggered' : 'Risk factor triggered',
+    }));
 
   if (agentsLoading && agents.length === 0) {
     return (
@@ -329,7 +331,9 @@ export default function RiskAssessment() {
                   const riskData = riskMap[agent.id];
                   const score = riskData ? riskData.latestScore : null;
                   const timestamp = riskData ? riskData.latestTimestamp : null;
-                  const agentStatus = agent.status || (agent.is_isolated ? 'isolated' : 'active');
+                  const isOnline = agent.status === 'online' || agent.status === 'active';
+                  const isIsolated = Boolean(agent.is_isolated || agent.status === 'isolated' || agent.status === 'quarantine');
+                  const normalizedStatus = isIsolated ? 'isolated' : isOnline ? 'online' : 'offline';
 
                   return (
                     <tr key={agent.id} style={{ cursor: 'pointer' }} onClick={() => handleOpenDetailModal(agent)}>
@@ -340,7 +344,7 @@ export default function RiskAssessment() {
                       <td style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>{agent.ip || agent.ip_address}</td>
                       <td>{getRiskBadge(score)}</td>
                       <td>
-                        <Badge status={agentStatus === 'active' ? 'online' : agentStatus === 'isolated' ? 'critical' : 'offline'} label={agentStatus.toUpperCase()} />
+                        <Badge status={normalizedStatus} />
                       </td>
                       <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
                         {timestamp ? new Date(timestamp).toLocaleString() : 'N/A'}
@@ -427,61 +431,71 @@ export default function RiskAssessment() {
                   </div>
                 )}
               </div>
-            </div>
-
-            {/* Triggered Factors */}
-            <div>
-              <h4 style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                Triggered Risk Factors ({factorEntries.length})
-              </h4>
-              {factorEntries.length === 0 ? (
-                <div style={{ fontSize: '0.85rem', color: 'var(--success)', background: 'rgba(0,192,123,0.08)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                  ✓ No active risk factors triggered in latest evaluation.
+              {/* Machine Learning Behavioral Baseline Status */}
+              <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', fontSize: '0.82rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>🤖 ML Behavioral Baseline:</span>
+                  <span className="badge badge-online">Isolation Forest Active</span>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 180, overflowY: 'auto' }}>
-                  {factorEntries.map((factor, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: '0.65rem 0.85rem',
-                        background: 'rgba(239,68,68,0.06)',
-                        border: '1px solid rgba(239,68,68,0.2)',
-                        borderRadius: 'var(--radius-sm)',
-                        display: 'flex',
-                        justify: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--error)' }}>
-                          {factor.name || factor.rule_name || `Factor #${idx + 1}`}
+                <div style={{ color: 'var(--text-tertiary)', fontSize: '0.76rem' }}>
+                  Profiling multi-dimensional metrics (CPU, RAM, Socket deltas, Process counts) against historical baseline.
+                </div>
+              </div>
+
+              {/* Triggered Factors */}
+              <div>
+                <h4 style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                  Triggered Risk Factors ({factorEntries.length})
+                </h4>
+                {factorEntries.length === 0 ? (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--success)', background: 'rgba(0,192,123,0.08)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                    ✓ No active risk factors triggered in latest evaluation.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 180, overflowY: 'auto' }}>
+                    {factorEntries.map((factor, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '0.65rem 0.85rem',
+                          background: 'rgba(239,68,68,0.06)',
+                          border: '1px solid rgba(239,68,68,0.2)',
+                          borderRadius: 'var(--radius-sm)',
+                          display: 'flex',
+                          justify: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--error)' }}>
+                            {factor.name || factor.rule_name || `Factor #${idx + 1}`}
+                          </div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                            {factor.description || factor.reason || 'Threshold triggered'}
+                          </div>
                         </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                          {factor.description || factor.reason || 'Threshold triggered'}
-                        </div>
+                        <Badge status="critical" label={`+${factor.weight || 20}`} showDot={false} />
                       </div>
-                      <Badge status="critical" label={`+${factor.weight || 20}`} showDot={false} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-            {/* Action footer */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              {selectedAgent.status !== 'isolated' && !selectedAgent.is_isolated ? (
-                <Button variant="danger" size="sm" onClick={() => handleIsolate(selectedAgent.id)}>
-                  Isolate Agent
+              {/* Action footer */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                {selectedAgent.status !== 'isolated' && !selectedAgent.is_isolated ? (
+                  <Button variant="danger" size="sm" onClick={() => handleIsolate(selectedAgent.id)}>
+                    Isolate Agent
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={() => handleUnisolate(selectedAgent.id)}>
+                    Release Agent
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => setSelectedAgent(null)}>
+                  Close
                 </Button>
-              ) : (
-                <Button variant="outline" size="sm" onClick={() => handleUnisolate(selectedAgent.id)}>
-                  Release Agent
-                </Button>
-              )}
-              <Button variant="ghost" size="sm" onClick={() => setSelectedAgent(null)}>
-                Close
-              </Button>
+              </div>
             </div>
           </div>
         </Modal>

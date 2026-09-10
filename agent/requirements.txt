@@ -1,2 +1,3 @@
 psutil>=5.9
 websockets>=12.0
+yara-python>=4.5.0

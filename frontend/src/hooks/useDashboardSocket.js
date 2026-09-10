@@ -14,37 +14,53 @@ export const useDashboardSocket = (onMessage) => {
       : `${protocol}//${host}/ws/dashboard`;
 
     let ws;
-    try {
-      ws = new WebSocket(wsUrl);
-      socketRef.current = ws;
+    let reconnectTimeout = null;
+    let isUnmounted = false;
 
-      ws.onopen = () => {
-        setIsConnected(true);
-        console.log('[WebSocket] Connected to /ws/dashboard');
-      };
+    const connect = () => {
+      if (isUnmounted) return;
+      try {
+        ws = new WebSocket(wsUrl);
+        socketRef.current = ws;
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (onMessage) onMessage(data);
-        } catch (e) {
-          console.error('[WebSocket] Failed to parse message:', event.data);
+        ws.onopen = () => {
+          setIsConnected(true);
+          console.log('[WebSocket] Connected to /ws/dashboard');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (onMessage) onMessage(data);
+          } catch (e) {
+            console.error('[WebSocket] Failed to parse message:', event.data);
+          }
+        };
+
+        ws.onerror = (err) => {
+          console.warn('[WebSocket] Dashboard WS connection error:', err);
+        };
+
+        ws.onclose = () => {
+          setIsConnected(false);
+          console.log('[WebSocket] Dashboard WS connection closed. Retrying in 3s...');
+          if (!isUnmounted) {
+            reconnectTimeout = setTimeout(connect, 3000);
+          }
+        };
+      } catch (err) {
+        console.warn('[WebSocket] Failed to initialize WebSocket:', err);
+        if (!isUnmounted) {
+          reconnectTimeout = setTimeout(connect, 3000);
         }
-      };
+      }
+    };
 
-      ws.onerror = (err) => {
-        console.warn('[WebSocket] Dashboard WS connection error:', err);
-      };
-
-      ws.onclose = () => {
-        setIsConnected(false);
-        console.log('[WebSocket] Dashboard WS connection closed');
-      };
-    } catch (err) {
-      console.warn('[WebSocket] Failed to initialize WebSocket:', err);
-    }
+    connect();
 
     return () => {
+      isUnmounted = true;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
   }, [onMessage]);

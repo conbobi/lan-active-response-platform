@@ -15,6 +15,10 @@ from app.models.risk_score import RiskScoreRecord
 from app.models.report import Report
 from app.models.notification import NotificationConfig, NotificationLog
 from app.models.threat_indicator import ThreatIndicator
+from app.models.threat_feed import ThreatFeed
+from app.models.yara_rule import YaraRule
+from app.models.auth_event import AuthEvent
+from app.models.agent_baseline import AgentBaseline
 from app.models.system_setting import SystemSetting
 from app.models.detection_rule import DetectionRule
 from app.models.process_group import ProcessGroup
@@ -40,9 +44,12 @@ __all__ = [
     "NotificationConfig",
     "NotificationLog",
     "ThreatIndicator",
+    "ThreatFeed",
+    "YaraRule",
+    "AuthEvent",
+    "AgentBaseline",
     "SystemSetting",
     "DetectionRule",
     "ProcessGroup",
     "ProcessChainRule",
 ]
-

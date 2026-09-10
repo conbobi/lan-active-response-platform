@@ -1,17 +1,13 @@
 import api from './api';
 
-// Hàm map trạng thái từ backend (ACTIVE, DEAD, ISOLATED) về frontend ('online', 'offline', 'isolated')
-const mapStatus = (status) => {
-  switch (status) {
-    case 'active':
-      return 'online';
-    case 'dead':
-      return 'offline';
-    case 'isolated':
-      return 'isolated';
-    default:
-      return 'offline';
-  }
+// Hàm map trạng thái từ backend (ACTIVE, DEAD, ISOLATED, QUARANTINE) về frontend ('online', 'offline', 'isolated')
+const mapStatus = (status, isIsolated = false) => {
+  if (isIsolated) return 'isolated';
+  const s = String(status || '').toLowerCase();
+  if (s === 'active' || s === 'online') return 'online';
+  if (s === 'isolated' || s === 'quarantine') return 'isolated';
+  if (s === 'dead' || s === 'offline' || s === 'inactive') return 'offline';
+  return 'offline';
 };
 
 export const getAgents = async () => {
@@ -21,7 +17,7 @@ export const getAgents = async () => {
     id: agent.id,
     hostname: agent.hostname || agent.id,
     ip: agent.ip_address || agent.ip,
-    status: mapStatus(agent.status),
+    status: mapStatus(agent.status, agent.is_isolated),
     cpu: agent.cpu || 0,
     ram: agent.ram || 0,
     disk: agent.disk || 0,

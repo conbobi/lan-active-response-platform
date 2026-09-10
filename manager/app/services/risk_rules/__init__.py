@@ -13,10 +13,15 @@ from app.services.risk_rules.shadow_copy_rule import ShadowCopyRule
 from app.services.risk_rules.c2_communication_rule import C2CommunicationRule
 from app.services.risk_rules.lateral_movement_rule import LateralMovementRule
 from app.services.risk_rules.mass_file_modification_rule import MassFileModificationRule
+from app.services.risk_rules.brute_force_rule import BruteForceRule
+from app.services.risk_rules.dns_tunneling_rule import DnsTunnelingRule
+from app.services.risk_rules.http_beaconing_rule import HttpBeaconingRule
+from app.services.risk_rules.yara_match_rule import YaraMatchRule
+from app.services.risk_rules.ml_anomaly_rule import MLAnomalyRule
 
 
 def create_default_registry() -> RiskRuleRegistry:
-    """Instantiate a RiskRuleRegistry populated with all 13 default risk rules."""
+    """Instantiate a RiskRuleRegistry populated with all 18 dynamic risk rules."""
     registry = RiskRuleRegistry()
     registry.register(CpuSpikeRule())
     registry.register(SuspiciousProcessRule())
@@ -31,6 +36,11 @@ def create_default_registry() -> RiskRuleRegistry:
     registry.register(C2CommunicationRule())
     registry.register(LateralMovementRule())
     registry.register(MassFileModificationRule())
+    registry.register(BruteForceRule())
+    registry.register(DnsTunnelingRule())
+    registry.register(HttpBeaconingRule())
+    registry.register(YaraMatchRule())
+    registry.register(MLAnomalyRule())
     return registry
 
 
@@ -51,4 +61,9 @@ __all__ = [
     "C2CommunicationRule",
     "LateralMovementRule",
     "MassFileModificationRule",
+    "BruteForceRule",
+    "DnsTunnelingRule",
+    "HttpBeaconingRule",
+    "YaraMatchRule",
+    "MLAnomalyRule",
 ]

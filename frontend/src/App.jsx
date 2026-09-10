@@ -18,6 +18,7 @@ import Notifications from './pages/Notifications';
 import Rules from './pages/Rules';
 import Attack from './pages/Attack';
 import Settings from './pages/Settings';
+import YaraRules from './pages/YaraRules';
 
 export default function App() {
 
@@ -33,6 +34,8 @@ export default function App() {
           <Route path="/commands" element={<Commands />} />
           <Route path="/risk" element={<RiskAssessment />} />
           <Route path="/rules/detection" element={<DetectionRules />} />
+          <Route path="/rules/process-chains" element={<DetectionRules initialTab="process-chains" />} />
+          <Route path="/rules/yara" element={<YaraRules />} />
           <Route path="/threat-intel" element={<ThreatIntel />} />
           <Route path="/process" element={<ProcessTree />} />
           <Route path="/reports" element={<Reports />} />

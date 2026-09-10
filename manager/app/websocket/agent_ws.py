@@ -22,6 +22,8 @@ from app.repositories.event_repository import EventRepository
 from app.schemas.enums import IncidentSeverity
 from app.schemas.incident import IncidentCreate
 from app.services.incident_service import IncidentService
+from app.models.auth_event import AuthEvent
+from app.repositories.auth_event_repository import AuthEventRepository
 from app.core.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -246,6 +248,82 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                         dto = CommandAckDTO(**data.get("payload", {}))
                         await command_dispatcher.verify_execution(dto, session)
                         response_payload = {"status": "ack", "message": "Command ack recorded"}
+
+                    elif msg_type == "AUTH_EVENT":
+                        payload = data.get("payload", {})
+                        target_agent_id = payload.get("agent_id", agent_id)
+                        now_dt = datetime.now(timezone.utc)
+                        auth_repo = AuthEventRepository(session)
+
+                        # Support single event or batch events
+                        events_list = payload.get("events") if isinstance(payload.get("events"), list) else [payload]
+                        for evt in events_list:
+                            auth_record = AuthEvent(
+                                id=f"auth_{uuid.uuid4().hex[:12]}",
+                                agent_id=target_agent_id,
+                                service=str(evt.get("service") or "ssh"),
+                                source_ip=str(evt.get("source_ip") or "unknown"),
+                                username=str(evt.get("username") or "unknown"),
+                                status=str(evt.get("status") or "failed"),
+                                count=int(evt.get("count", 1)),
+                                timestamp=now_dt,
+                                created_at=now_dt
+                            )
+                            await auth_repo.add(auth_record)
+
+                        # Evaluate brute force risk
+                        risk_service = RiskAssessmentService(session)
+                        rec = await risk_service.process_risk(
+                            agent_id=target_agent_id,
+                            data={"auth_events": events_list, "agent_id": target_agent_id}
+                        )
+                        logger.info(f"Recorded AUTH_EVENT for agent '{target_agent_id}' (risk: {rec.score})")
+                        if data.get("wait_ack", True):
+                            response_payload = {"status": "ack", "message": "Auth event processed", "score": rec.score}
+
+                    elif msg_type == "YARA_SCAN_ALERT":
+                        payload = data.get("payload", {})
+                        target_agent_id = payload.get("agent_id", agent_id)
+                        file_path = str(payload.get("file_path", ""))
+                        matched_rules = payload.get("matched_rules", [])
+                        now_dt = datetime.now(timezone.utc)
+
+                        # Create Event
+                        evt_record = Event(
+                            id=f"evt_{uuid.uuid4().hex[:12]}",
+                            agent_id=target_agent_id,
+                            event_type="YARA_SCAN_ALERT",
+                            severity=IncidentSeverity.CRITICAL,
+                            source="AGENT_YARA",
+                            details=payload,
+                            processed=False,
+                            created_at=now_dt
+                        )
+                        event_repo = EventRepository(session)
+                        await event_repo.add(evt_record)
+
+                        # Create Critical Incident
+                        inc_dto = IncidentCreate(
+                            id=f"inc_{uuid.uuid4().hex[:12]}",
+                            title=f"Malware Signature Alert: {', '.join(matched_rules)}",
+                            description=f"YARA rules {matched_rules} matched file '{file_path}' on agent '{target_agent_id}'. Details: {payload}",
+                            severity=IncidentSeverity.CRITICAL,
+                            agent_id=target_agent_id,
+                            risk_score=95.0,
+                            notes="Automated critical alert triggered by Agent YARA scanner."
+                        )
+                        inc_service = IncidentService(session)
+                        await inc_service.create_incident(inc_dto)
+
+                        # Evaluate composite risk
+                        risk_service = RiskAssessmentService(session)
+                        await risk_service.process_risk(
+                            agent_id=target_agent_id,
+                            data={"yara_matches": matched_rules, "agent_id": target_agent_id}
+                        )
+                        logger.warning(f"CRITICAL: YARA malware match on '{file_path}' for agent '{target_agent_id}'")
+                        if data.get("wait_ack", True):
+                            response_payload = {"status": "ack", "message": "YARA alert processed"}
 
                     else:
                         response_payload = {"error": f"Unknown message type '{msg_type}'"}

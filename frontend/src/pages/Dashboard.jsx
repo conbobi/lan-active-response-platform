@@ -31,14 +31,15 @@ export default function Dashboard() {
 
     const handleSocketMessage = useCallback((msg) => {
         console.log('[Dashboard] WS Message received:', msg);
-        if (msg.event === 'heartbeat' || msg.event === 'topology_update' || msg.event === 'dead_agent') {
+        const evt = msg.event || msg.type;
+        if (evt === 'heartbeat' || evt === 'topology_update' || evt === 'dead_agent') {
             if (refreshAgents) refreshAgents();
         }
     }, [refreshAgents]);
 
     const { isConnected } = useDashboardSocket(handleSocketMessage);
 
-    const totalOnline = agents.filter((a) => a.status === 'online').length;
+    const totalOnline = agents.filter((a) => a.status === 'online' || a.status === 'active').length;
     const alertsToday = events.filter((e) => new Date(e.timestamp).toDateString() === new Date().toDateString()).length;
     const avgRisk = Math.round(events.reduce((s, e) => s + e.riskScore, 0) / (events.length || 1));
     const blockedIps = events.filter((e) => e.type === 'block_ip').length;

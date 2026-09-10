@@ -205,6 +205,104 @@ export default function Network() {
         onLinkClick={handleLinkClick}
         fgRef={fgRef}
       />
+
+      {/* Network Security Analytics: DNS Tunneling & HTTP Beaconing */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginTop: '1.5rem' }}>
+        {/* DNS Tunneling Monitor */}
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <FiRadio color="var(--primary)" /> DNS Tunneling & Entropy Inspector
+            </h3>
+            <span className="badge badge-neutral" style={{ fontSize: '0.72rem' }}>Shannon Entropy H(X) &gt; 3.8</span>
+          </div>
+
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+            Monitors high-randomness subdomains, TXT/NULL record spikes, and encoded data exfiltration payloads.
+          </div>
+
+          <div className="table-container" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            <table className="table" style={{ fontSize: '0.8rem' }}>
+              <thead>
+                <tr>
+                  <th>Query Domain</th>
+                  <th>Type</th>
+                  <th>Length</th>
+                  <th>Entropy</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ fontFamily: 'monospace' }}>a9f8b7c6d5e4.tunnel.evil-c2.net</td>
+                  <td>TXT</td>
+                  <td>32</td>
+                  <td style={{ color: 'var(--danger)', fontWeight: 600 }}>4.12</td>
+                  <td><span className="badge badge-critical">Tunneling Suspect</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontFamily: 'monospace' }}>api.github.com</td>
+                  <td>A</td>
+                  <td>14</td>
+                  <td style={{ color: 'var(--success)' }}>2.34</td>
+                  <td><span className="badge badge-online">Normal</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontFamily: 'monospace' }}>update.microsoft.com</td>
+                  <td>A</td>
+                  <td>20</td>
+                  <td style={{ color: 'var(--success)' }}>2.18</td>
+                  <td><span className="badge badge-online">Normal</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* HTTP/TCP Beaconing Monitor */}
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <FiActivity color="var(--warning)" /> C2 HTTP Beaconing Analysis
+            </h3>
+            <span className="badge badge-neutral" style={{ fontSize: '0.72rem' }}>CV &lt; 0.25 Regular Rhythm</span>
+          </div>
+
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+            Detects persistent periodic outbound heartbeats with regular intervals (&sigma; / &mu; &lt; 25% jitter).
+          </div>
+
+          <div className="table-container" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            <table className="table" style={{ fontSize: '0.8rem' }}>
+              <thead>
+                <tr>
+                  <th>Destination Host</th>
+                  <th>Port</th>
+                  <th>Interval</th>
+                  <th>Jitter (CV)</th>
+                  <th>Verdict</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>185.220.101.5</td>
+                  <td>443</td>
+                  <td>30.0s</td>
+                  <td style={{ color: 'var(--danger)', fontWeight: 600 }}>0.08</td>
+                  <td><span className="badge badge-critical">C2 Beacon (92%)</span></td>
+                </tr>
+                <tr>
+                  <td style={{ fontFamily: 'monospace' }}>192.168.10.1</td>
+                  <td>80</td>
+                  <td>5.2s</td>
+                  <td>0.65</td>
+                  <td><span className="badge badge-online">Random Egress</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
