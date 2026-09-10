@@ -118,7 +118,6 @@ class ThreatIntelligenceService:
         lines = text.splitlines()
         extracted = set()
 
-        ip_pattern = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
         hash_pattern = re.compile(r"^[a-fA-F0-9]{32,64}$")
         domain_pattern = re.compile(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$")
 

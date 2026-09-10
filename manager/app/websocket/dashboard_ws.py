@@ -8,6 +8,6 @@ async def dashboard_websocket_endpoint(websocket: WebSocket):
     await dashboard_manager.connect(websocket)
     try:
         while True:
-            data = await websocket.receive_text()
+            await websocket.receive_text()
     except WebSocketDisconnect:
         dashboard_manager.disconnect(websocket)

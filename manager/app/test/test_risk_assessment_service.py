@@ -108,5 +108,5 @@ async def test_whitelisted_agent_no_auto_isolate(mock_db, mock_notification_serv
             network_connections=[]
         )
 
-        record = await service.process_risk(dto.agent_id, dto)
+        await service.process_risk(dto.agent_id, dto)
         mock_dispatcher.push_command.assert_not_awaited()

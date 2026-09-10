@@ -26,7 +26,7 @@ async def test_telemetry_risk_ws_handling():
     
     from fastapi import WebSocketDisconnect
     mock_ws.receive_text = AsyncMock(side_effect=[
-        import_json := __import__("json").dumps(telemetry_msg),
+        __import__("json").dumps(telemetry_msg),
         WebSocketDisconnect()
     ])
     mock_ws.send_json = AsyncMock()
