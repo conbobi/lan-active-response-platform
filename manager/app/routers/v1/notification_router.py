@@ -52,16 +52,6 @@ async def list_notification_logs(skip: int = 0, limit: int = 100, db: AsyncSessi
     """Retrieve notification audit log history."""
     repo = NotificationRepository(db)
     return await repo.list_logs(skip=skip, limit=limit)
-@router.post("/webhook/telegram")
-async def telegram_webhook(payload: Dict[str, Any], db: AsyncSession = Depends(get_db)):
-    """Webhook listener for Telegram bot callback queries."""
-    service = NotificationService(db)
-    callback_query = payload.get("callback_query")
-    if callback_query:
-        result = await service.handle_callback_telegram(callback_query, db)
-        return result
-    return {"status": "ok", "message": "No callback query in payload"}
-
 
 @router.post("/webhook/discord")
 async def discord_webhook(request: Request, db: AsyncSession = Depends(get_db)):
