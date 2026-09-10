@@ -12,7 +12,7 @@ class SuspiciousProcessRule(RiskRule):
 
     DEFAULT_SUSPICIOUS_NAMES = [
         "mimikatz.exe", "mimikatz", "netcat", "nc", "nc.exe", "nc.openbsd", "nc.traditional", "nmap", "chisel",
-        "psexec.exe", "procdump.exe", "bloodhound", "sharphound", "lazagne", "vssadmin", "sleep", "ransomware_sim"
+        "psexec.exe", "procdump.exe", "bloodhound", "sharphound", "lazagne", "vssadmin", "ransomware_sim"
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
@@ -26,6 +26,8 @@ class SuspiciousProcessRule(RiskRule):
         proc_names: List[str] = []
 
         threat_intel_service = context.get("threat_intel_service")
+        whitelist_service = context.get("whitelist_service")
+        agent_id = context.get("agent_id")
 
         for proc in processes:
             p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
@@ -33,6 +35,14 @@ class SuspiciousProcessRule(RiskRule):
             cmdline = str(p_dict.get("cmdline", "")).strip().lower()
             is_susp = p_dict.get("is_suspicious", False)
             p_hash = p_dict.get("hash")
+
+            # Check whitelist first
+            if whitelist_service:
+                try:
+                    if await whitelist_service.is_whitelisted(agent_id=agent_id, process_name=name):
+                        continue
+                except Exception:
+                    pass
 
             full_str = f"{name} {cmdline}"
             is_match = is_susp or any(s.lower() in full_str for s in suspicious_list)

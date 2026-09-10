@@ -15,17 +15,6 @@ class ProcessChainRule(RiskRule):
     base_score = 1.0
     category = "process"
 
-    # Default fallback parents and children if DB is unavailable or empty
-    DEFAULT_PARENTS = [
-        "winword.exe", "word.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
-        "acrord32.exe", "acrobat.exe", "chrome.exe", "msedge.exe", "firefox.exe"
-    ]
-    DEFAULT_CHILDREN = [
-        "cmd.exe", "cmd", "powershell.exe", "powershell", "pwsh.exe",
-        "wscript.exe", "cscript.exe", "mshta.exe", "bitsadmin.exe",
-        "bash", "sh", "python", "python.exe", "curl", "wget", "certutil"
-    ]
-
     # In-memory rule cache
     _cache_rules: Optional[List[Dict[str, Any]]] = None
     _cache_timestamp: float = 0.0
@@ -40,21 +29,21 @@ class ProcessChainRule(RiskRule):
 
     @classmethod
     def _get_fallback_rules(cls) -> List[Dict[str, Any]]:
-        """Construct fallback rules based on default hardcoded patterns."""
+        """Construct fallback rules when DB rules are empty or DB session is missing."""
         return [
             {
                 "id": "fallback_office_shell",
                 "name": "Default Office Spawning Shell (Fallback)",
                 "action": "alert",
-                "parent_patterns": tuple(p.lower() for p in cls.DEFAULT_PARENTS),
-                "child_patterns": tuple(p.lower() for p in cls.DEFAULT_CHILDREN),
+                "parent_patterns": ("winword.exe", "word.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "acrord32.exe", "acrobat.exe"),
+                "child_patterns": ("cmd.exe", "cmd", "powershell.exe", "powershell", "pwsh.exe", "wscript.exe", "cscript.exe", "bash", "sh"),
             }
         ]
 
     async def _get_active_chain_rules(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Fetch active process chain rules from DB with TTL caching.
-        Falls back to hardcoded defaults on error or missing DB session.
+        Fetch active process chain rules from DB via ProcessChainRuleService with TTL caching.
+        Falls back to default rules on error or missing DB session.
         """
         now = time.time()
         if (
@@ -65,22 +54,14 @@ class ProcessChainRule(RiskRule):
 
         session = context.get("session")
         if not session:
-            logger.warning(
-                "[PROCESS_CHAIN] No database session provided in context. "
-                "Using default fallback rules."
-            )
             return self._get_fallback_rules()
 
         try:
-            from app.repositories.process_chain_rule_repository import ProcessChainRuleRepository
-            repo = ProcessChainRuleRepository(session)
-            db_rules = await repo.list_active()
+            from app.services.process_chain_rule_service import ProcessChainRuleService
+            service = ProcessChainRuleService(session)
+            db_rules = await service.list_active_rules()
 
             if not db_rules:
-                logger.warning(
-                    "[PROCESS_CHAIN] No active process chain rules found in DB. "
-                    "Using default fallback rules."
-                )
                 return self._get_fallback_rules()
 
             prepared: List[Dict[str, Any]] = []

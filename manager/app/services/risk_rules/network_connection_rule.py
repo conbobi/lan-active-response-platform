@@ -12,12 +12,18 @@ class NetworkConnectionRule(RiskRule):
 
     DEFAULT_SUSPICIOUS_PORTS = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
 
+    def _get_suspicious_ports(self) -> set:
+        config_ports = self.config.get("suspicious_ports")
+        if config_ports:
+            return set(config_ports)
+        return self.DEFAULT_SUSPICIOUS_PORTS
+
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         connections = telemetry.get("network_connections", [])
         if not connections:
             return 0.0, ""
 
-        suspicious_ports = set(self.config.get("suspicious_ports", self.DEFAULT_SUSPICIOUS_PORTS))
+        suspicious_ports = self._get_suspicious_ports()
         suspicious_conns = 0
         threat_ip_count = 0
 
