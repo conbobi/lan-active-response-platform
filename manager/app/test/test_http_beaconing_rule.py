@@ -37,3 +37,27 @@ async def test_http_beaconing_rule_evaluation():
     score, reason = await rule.evaluate(telemetry, {})
     assert score >= 50.0
     assert "Periodic outbound beaconing detected" in reason
+
+
+@pytest.mark.asyncio
+async def test_manager_ip_ignored_in_beaconing():
+    rule = HttpBeaconingRule()
+    now = datetime.now(timezone.utc)
+    
+    # 100 periodic connections to Manager IP (172.19.0.3 on port 8000)
+    connections = [
+        {
+            "dst_ip": "172.19.0.3",
+            "dst_port": 8000,
+            "timestamp": (now + timedelta(seconds=i * 15)).isoformat()
+        }
+        for i in range(100)
+    ]
+    result = rule.detect_beaconing(connections)
+    assert result == []
+
+    telemetry = {"connection_history": connections}
+    score, reason = await rule.evaluate(telemetry, {})
+    assert score == 0.0
+    assert reason == ""
+

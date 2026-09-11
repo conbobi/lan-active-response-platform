@@ -1,8 +1,39 @@
+import os
 import math
+import socket
+import logging
 import asyncio
+import ipaddress
 from datetime import datetime
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Set
 from app.services.risk_rules.base import RiskRule
+
+logger = logging.getLogger(__name__)
+
+DOCKER_SUBNET = ipaddress.ip_network("172.16.0.0/12")
+
+
+def _get_ignored_ips() -> Set[str]:
+    """Return set of IP addresses to ignore for beaconing detection."""
+    ignored = {"127.0.0.1", "0.0.0.0", "localhost", "::1"}
+
+    manager_ip_env = os.getenv("MANAGER_IP")
+    if manager_ip_env:
+        ignored.add(manager_ip_env.strip())
+
+    try:
+        manager_dns_ip = socket.gethostbyname("manager")
+        ignored.add(manager_dns_ip)
+    except Exception:
+        pass
+
+    try:
+        host_ip = socket.gethostbyname(socket.gethostname())
+        ignored.add(host_ip)
+    except Exception:
+        pass
+
+    return ignored
 
 
 class BeaconingDetectionService:
@@ -75,17 +106,30 @@ class BeaconingDetectionService:
         Groups connection history by (dst_ip, dst_port) and identifies beaconing candidates.
         """
         groups: Dict[str, List[datetime]] = {}
+        ignored_ips = _get_ignored_ips()
 
         for conn in connection_history:
             dst_ip = conn.get("dst_ip")
-            if not dst_ip or dst_ip in ("127.0.0.1", "0.0.0.0", "localhost"):
+            if not dst_ip or dst_ip in ignored_ips:
+                logger.debug(f"[BEACONING] Ignored connection to ignored IP: {dst_ip}")
                 continue
 
-            # Exclude local subnet default gateway if needed
-            if dst_ip.startswith("127.") or dst_ip == "192.168.10.1":
+            # Exclude loopback
+            if dst_ip.startswith("127."):
+                logger.debug(f"[BEACONING] Ignored connection to loopback IP: {dst_ip}")
                 continue
 
             dst_port = conn.get("dst_port", 80)
+
+            # Ignore Manager traffic in internal Docker subnet (172.16.0.0/12 on port 8000/8002)
+            if dst_port in (8000, 8002):
+                try:
+                    if ipaddress.ip_address(dst_ip) in DOCKER_SUBNET:
+                        logger.debug(f"[BEACONING] Ignored connection to Docker Manager IP {dst_ip}:{dst_port}")
+                        continue
+                except ValueError:
+                    pass
+
             key = f"{dst_ip}:{dst_port}"
 
             ts_raw = conn.get("timestamp")
@@ -142,6 +186,12 @@ class HttpBeaconingRule(RiskRule):
         "min_connections": 8,
         "cv_threshold": 0.25
     }
+
+    def detect_beaconing(self, connections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Direct helper to evaluate connections against beaconing criteria."""
+        min_conns = int(self.config.get("min_connections", 8))
+        cv_th = float(self.config.get("cv_threshold", 0.25))
+        return BeaconingDetectionService.evaluate_connections(connections, min_conns, cv_th)
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         connection_history: List[Dict[str, Any]] = telemetry.get("connection_history", [])
