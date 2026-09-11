@@ -92,7 +92,12 @@ class MLAnomalyService:
 
     async def train_agent_baseline(self, agent_id: str) -> Optional[AgentBaseline]:
         """Collect historical telemetry samples and train individual baseline model."""
-        stmt = select(AgentHistory).where(AgentHistory.agent_id == agent_id).limit(500)
+        stmt = (
+            select(AgentHistory)
+            .where(AgentHistory.agent_id == agent_id)
+            .order_by(AgentHistory.timestamp.desc())
+            .limit(500)
+        )
         res = await self.session.execute(stmt)
         hist_records = list(res.scalars().all())
 
@@ -209,8 +214,25 @@ class MLAnomalyService:
         # Retrieve or cache model
         if agent_id not in self._model_cache:
             baseline = await self.repo.get_by_agent(agent_id)
-            if not baseline or not baseline.model_data or baseline.features_list != FEATURE_NAMES:
+            now_utc = datetime.now(timezone.utc)
+            updated_ts = baseline.updated_at if (baseline and baseline.updated_at) else None
+            age_seconds = (
+                (now_utc - (updated_ts if updated_ts.tzinfo else updated_ts.replace(tzinfo=timezone.utc))).total_seconds()
+                if updated_ts else 999999
+            )
+
+            # Nếu baseline chưa có, sai schema feature, quá ít mẫu, hoặc quá cũ (> 1h) → retrain
+            needs_retrain = (
+                baseline is None
+                or not baseline.model_data
+                or baseline.features_list != FEATURE_NAMES
+                or (baseline.samples_count < 100 and age_seconds > 300)
+                or age_seconds > 3600
+            )
+            if needs_retrain:
+                logger.info(f"Retraining baseline for {agent_id}: samples={baseline.samples_count if baseline else 0}")
                 baseline = await self.train_agent_baseline(agent_id)
+
             if not baseline or not baseline.model_data:
                 return MLAnomalyResult({"is_anomaly": False, "score": 0.0, "risk_points": 0.0, "reasons": [], "z_reasons": []})
 
