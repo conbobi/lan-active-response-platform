@@ -17,6 +17,10 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS base_score FLOAT NOT NULL DEFAULT 1.0;"))
         except Exception as e:
             logger.debug(f"DB alter table detection_rules base_score: {e}")
+        try:
+            await conn.execute(text("ALTER TABLE risk_score_records ADD COLUMN IF NOT EXISTS smoothed_score FLOAT DEFAULT 0.0;"))
+        except Exception as e:
+            logger.debug(f"DB alter table risk_score_records smoothed_score: {e}")
 
     try:
         from app.core.database import AsyncSessionLocal

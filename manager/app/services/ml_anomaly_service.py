@@ -31,6 +31,12 @@ ABSOLUTE_FLOOR = {
 }
 
 
+class MLAnomalyResult(dict):
+    """Result dictionary that also unpacks like a 4-tuple (is_anomaly, score, risk_points, reasons)."""
+    def __iter__(self):
+        return iter((self["is_anomaly"], self["score"], self["risk_points"], self["reasons"]))
+
+
 class MLAnomalyService:
     """
     Lightweight Machine Learning Behavioral Anomaly Detection Service for Agents.
@@ -192,10 +198,12 @@ class MLAnomalyService:
 
         return is_anomaly, round(score, 3), risk_points, reasons
 
-    async def score_telemetry(self, agent_id: str, telemetry: Dict[str, Any]) -> Tuple[bool, float, float, List[str]]:
+    train_baseline = train_agent_baseline
+
+    async def score_telemetry(self, agent_id: str, telemetry: Dict[str, Any]) -> MLAnomalyResult:
         """
         Evaluate incoming agent telemetry against its ML baseline.
-        Returns: (is_anomaly, anomaly_score, risk_points, reasons)
+        Returns: MLAnomalyResult dict (unpackable as is_anomaly, score, risk_points, reasons)
         """
         # Retrieve or cache model
         if agent_id not in self._model_cache:
@@ -203,7 +211,7 @@ class MLAnomalyService:
             if not baseline or not baseline.model_data or baseline.features_list != FEATURE_NAMES:
                 baseline = await self.train_agent_baseline(agent_id)
             if not baseline or not baseline.model_data:
-                return False, 0.0, 0.0, []
+                return MLAnomalyResult({"is_anomaly": False, "score": 0.0, "risk_points": 0.0, "reasons": [], "z_reasons": []})
 
             try:
                 buf = io.BytesIO(baseline.model_data)
@@ -211,7 +219,7 @@ class MLAnomalyService:
                 self._model_cache[agent_id] = (loaded_model, baseline.mean_vector, baseline.std_vector)
             except Exception as e:
                 logger.error(f"Failed to load ML baseline for agent '{agent_id}': {e}")
-                return False, 0.0, 0.0, []
+                return MLAnomalyResult({"is_anomaly": False, "score": 0.0, "risk_points": 0.0, "reasons": [], "z_reasons": []})
 
         model, mean_dict, std_dict = self._model_cache[agent_id]
         features = self.extract_features(telemetry)
@@ -240,6 +248,12 @@ class MLAnomalyService:
                     std_dict
                 )
             else:
-                return False, 0.0, 0.0, []
+                return MLAnomalyResult({"is_anomaly": False, "score": 0.0, "risk_points": 0.0, "reasons": [], "z_reasons": []})
 
-        return is_anomaly, score, risk_points, reasons
+        return MLAnomalyResult({
+            "is_anomaly": is_anomaly,
+            "score": score,
+            "risk_points": risk_points,
+            "reasons": reasons,
+            "z_reasons": reasons,
+        })

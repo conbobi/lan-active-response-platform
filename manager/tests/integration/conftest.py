@@ -36,6 +36,10 @@ TestSessionLocal = async_sessionmaker(
 async def setup_test_database():
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.execute(text("ALTER TABLE risk_score_records ADD COLUMN IF NOT EXISTS smoothed_score FLOAT DEFAULT 0.0;"))
+        except Exception:
+            pass
     yield
 
 
@@ -47,7 +51,15 @@ async def clean_database():
             table_names = [table.name for table in reversed(Base.metadata.sorted_tables)]
             if table_names:
                 tables_str = ", ".join(f'"{name}"' for name in table_names)
-                await session.execute(text(f"TRUNCATE TABLE {tables_str} CASCADE;"))
+                try:
+                    await session.execute(text(f"TRUNCATE TABLE {tables_str} CASCADE;"))
+                except Exception:
+                    await session.rollback()
+                    for table in reversed(Base.metadata.sorted_tables):
+                        try:
+                            await session.execute(table.delete())
+                        except Exception:
+                            pass
         else:
             for table in reversed(Base.metadata.sorted_tables):
                 await session.execute(table.delete())

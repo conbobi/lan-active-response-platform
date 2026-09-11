@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from pydantic import BaseModel, Field
 from app.schemas.base import ORMBaseModel
 
@@ -30,5 +30,6 @@ class RiskScoreOut(ORMBaseModel):
     id: str
     agent_id: str
     score: float
+    smoothed_score: Optional[float] = 0.0
     factors: Dict[str, Any]
     timestamp: datetime

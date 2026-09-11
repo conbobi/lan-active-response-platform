@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from sqlalchemy import String, Float, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
@@ -17,9 +17,14 @@ class RiskScoreRecord(Base):
         String(64), ForeignKey("agents.id"), nullable=False
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
+    smoothed_score: Mapped[Optional[float]] = mapped_column(Float, default=0.0, nullable=True)
     factors: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
+
+
+# Alias for backward compatibility
+RiskScore = RiskScoreRecord

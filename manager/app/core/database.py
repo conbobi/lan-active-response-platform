@@ -18,6 +18,10 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False
 )
 
+# Aliases for backwards compatibility
+async_session_maker = AsyncSessionLocal
+async_sessionmaker = AsyncSessionLocal
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency for obtaining an AsyncSession."""

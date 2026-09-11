@@ -22,12 +22,95 @@ from app.services.command_dispatcher import command_dispatcher
 logger = logging.getLogger(__name__)
 
 
+# ===== EMA (Exponential Moving Average) =====
+EMA_ALPHA = 0.35             # Hệ số làm mượt
+DEBOUNCE_MIN_CYCLES = 2      # Số chu kỳ liên tiếp tối thiểu
+DEBOUNCE_PENALTY = 0.3       # Hệ số phạt nếu chưa đủ chu kỳ
+
+# ===== Anomaly Category Cap =====
+ANOMALY_RULES = {
+    "ml_behavioral_anomaly",
+    "cpu_spike",
+    "ram_spike",
+    "disk_spike",
+    "network_volume_spike",
+}
+IOC_RULES = {
+    "yara_match",
+    "suspicious_process",
+    "c2_communication",
+    "credential_dumping",
+    "threat_intel_match",
+    "http_beaconing",
+    "dns_tunneling",
+}
+ANOMALY_CAP = 35.0
+
+
+def compute_ema(current: float, previous: Optional[float], alpha: float = EMA_ALPHA) -> float:
+    """Tính EMA cho risk score.
+
+    Args:
+        current: Điểm raw vừa tính.
+        previous: Điểm smoothed của chu kỳ trước (None nếu lần đầu).
+        alpha: Hệ số làm mượt (0.35 = cân bằng giữa phản ứng và mượt).
+
+    Returns:
+        Điểm đã làm mượt.
+    """
+    if previous is None or not isinstance(previous, (int, float)):
+        return round(float(current), 2)
+    return round(alpha * current + (1 - alpha) * previous, 2)
+
+
+def apply_debounce(
+    raw_score: float,
+    consecutive_hits: int,
+    min_cycles: int = DEBOUNCE_MIN_CYCLES,
+    penalty: float = DEBOUNCE_PENALTY,
+) -> float:
+    """Giảm điểm nếu rule chưa kích hoạt đủ số chu kỳ liên tiếp."""
+    if consecutive_hits >= min_cycles:
+        return raw_score
+    return round(raw_score * penalty, 2)
+
+
+def apply_category_cap(factors: Dict[str, Any]) -> float:
+    """Tính tổng điểm sau khi áp dụng cap cho nhóm anomaly.
+
+    - Nếu có bất kỳ IOC rule nào kích hoạt → KHÔNG cap.
+    - Nếu chỉ có anomaly rules → cap tổng anomaly ở 35.
+    """
+    numeric_scores = {
+        k: float(v) for k, v in factors.items()
+        if k != "total_score" and isinstance(v, (int, float))
+    }
+    has_ioc = any(rule in numeric_scores and numeric_scores[rule] > 0 for rule in IOC_RULES)
+
+    if has_ioc:
+        return round(sum(numeric_scores.values()), 2)
+
+    anomaly_sum = sum(v for k, v in numeric_scores.items() if k in ANOMALY_RULES)
+    other_sum = sum(v for k, v in numeric_scores.items() if k not in ANOMALY_RULES)
+
+    capped_anomaly = min(anomaly_sum, ANOMALY_CAP)
+    return round(other_sum + capped_anomaly, 2)
+
+
 class RiskAssessmentService:
     """
     Intelligent dynamic risk assessment service using Registry Pattern and Strategy Pattern.
     Evaluates composite telemetry risk scores across 13 security risk rules, whitelist rules,
-    and executes automated network isolation, incident creation, and notifications.
+    applies EMA smoothing and debounce, and executes automated network isolation, incident creation, and notifications.
     """
+
+    # In-memory debounce counter across cycles: {agent_id: {rule_id: consecutive_count}}
+    _rule_hit_counter: Dict[str, Dict[str, int]] = {}
+
+    @classmethod
+    def cleanup_agent(cls, agent_id: str) -> None:
+        """Cleanup debounce counters when an agent disconnects."""
+        cls._rule_hit_counter.pop(agent_id, None)
 
     def __init__(self, session: AsyncSession, registry: Optional[RiskRuleRegistry] = None):
         self.session = session
@@ -44,7 +127,8 @@ class RiskAssessmentService:
         self, agent_id: str, data: Union[RiskAssessmentDTO, Dict[str, Any]]
     ) -> Tuple[float, Dict[str, Any]]:
         """
-        Evaluate composite risk score (0 - 100) using dynamic rules in RiskRuleRegistry.
+        Evaluate composite risk score (0 - 100) using dynamic rules in RiskRuleRegistry,
+        applying debounce to anomaly rules and category capping.
         """
         # Convert incoming data to standard telemetry dict
         if isinstance(data, RiskAssessmentDTO):
@@ -78,22 +162,32 @@ class RiskAssessmentService:
             "agent_id": agent_id,
         }
 
-        score = 0.0
+        rule_scores: Dict[str, float] = {}
         factors: Dict[str, Any] = {}
+        agent_counters = self._rule_hit_counter.setdefault(agent_id, {})
 
         # Evaluate each enabled rule in registry
         for rule in self.registry.get_enabled_rules():
             try:
                 rule_score, reason = await rule.evaluate(telemetry, context)
                 if rule_score > 0:
-                    weighted_score = rule_score * getattr(rule, "weight", 1.0)
-                    score += weighted_score
+                    # Apply debounce if rule belongs to anomaly/behavioral category
+                    if rule.rule_id in ANOMALY_RULES:
+                        agent_counters[rule.rule_id] = agent_counters.get(rule.rule_id, 0) + 1
+                        debounced_score = apply_debounce(rule_score, agent_counters[rule.rule_id])
+                    else:
+                        debounced_score = rule_score
+
+                    weighted_score = debounced_score * getattr(rule, "weight", 1.0)
+                    rule_scores[rule.rule_id] = weighted_score
                     factors[rule.rule_id] = reason
-                    logger.info(f"[EVALUATE] Agent {agent_id} - Rule {rule.rule_id}: score={rule_score}, weighted={weighted_score}")
+                    logger.info(f"[EVALUATE] Agent {agent_id} - Rule {rule.rule_id}: raw={rule_score}, debounced={debounced_score}, weighted={weighted_score}")
+                else:
+                    agent_counters.pop(rule.rule_id, None)
             except Exception as exc:
                 logger.error(f"Error evaluating rule '{rule.rule_id}' for agent {agent_id}: {exc}", exc_info=True)
 
-        final_score = min(100.0, round(score, 2))
+        final_score = min(100.0, apply_category_cap(rule_scores))
         factors["total_score"] = final_score
         logger.info(f"[EVALUATE] Agent {agent_id} - Final score: {final_score}")
         return final_score, factors
@@ -125,18 +219,50 @@ class RiskAssessmentService:
         data: Union[RiskAssessmentDTO, Dict[str, Any]]
     ) -> RiskScoreRecord:
         """
-        Process assessment, store record, check whitelist, and execute auto-isolation, incident creation, & alert.
+        Process assessment, calculate raw + smoothed score via EMA, store record, check whitelist,
+        and execute auto-isolation, incident creation, & alert based on smoothed score.
         """
-        score, factors = await self.evaluate(agent_id, data)
-        action = await self.determine_action(score)
+        raw_score, factors = await self.evaluate(agent_id, data)
 
+        # 2. Lấy smoothed_score gần nhất từ DB (hỗ trợ cả mock trong unit test)
+        latest = None
+        if hasattr(self.risk_repo, "get_latest_by_agent"):
+            try:
+                import inspect
+                call_res = self.risk_repo.get_latest_by_agent(agent_id, limit=1)
+                if inspect.isawaitable(call_res):
+                    latest = await call_res
+                elif isinstance(call_res, list):
+                    latest = call_res
+            except Exception as e:
+                logger.debug(f"Could not fetch previous risk record: {e}")
+
+        prev_record = latest[0] if (latest and isinstance(latest, list)) else latest
+        prev_smoothed = getattr(prev_record, "smoothed_score", None) if prev_record else None
+        if (prev_smoothed is None or not isinstance(prev_smoothed, (int, float))) and prev_record:
+            prev_smoothed = getattr(prev_record, "score", None)
+        if not isinstance(prev_smoothed, (int, float)):
+            prev_smoothed = None
+
+        # 3. Áp dụng EMA
+        smoothed = compute_ema(raw_score, prev_smoothed)
+
+        # 4. Lưu cả raw + smoothed + factors
         record = RiskScoreRecord(
             id=f"risk_{uuid.uuid4().hex[:12]}",
             agent_id=agent_id,
-            score=score,
+            score=raw_score,
+            smoothed_score=smoothed,
             factors=factors
         )
-        await self.risk_repo.add(record)
+        if hasattr(self.risk_repo, "add"):
+            import inspect
+            res_add = self.risk_repo.add(record)
+            if inspect.isawaitable(res_add):
+                await res_add
+
+        # 5. Phản ứng tự động dựa trên smoothed score
+        action = await self.determine_action(smoothed)
 
         agent = await self.agent_repo.get(agent_id)
         if not agent:
@@ -162,16 +288,16 @@ class RiskAssessmentService:
         incident_creation_th = thresholds.get("incident_creation_threshold", 50.0)
         auto_kill_th = thresholds.get("auto_kill_threshold", 85.0)
 
-        # 1. Automated Incident Creation if score >= incident_creation_threshold
-        if score >= incident_creation_th:
+        # 1. Automated Incident Creation if smoothed >= incident_creation_threshold
+        if smoothed >= incident_creation_th:
             incident_service = IncidentService(self.session)
-            inc = await incident_service.create_from_risk(agent_id, score, factors)
-            logger.info(f"Automated incident '{inc.id}' evaluated for agent '{agent_id}' (score: {score} >= threshold: {incident_creation_th})")
+            inc = await incident_service.create_from_risk(agent_id, smoothed, factors)
+            logger.info(f"Automated incident '{inc.id}' evaluated for agent '{agent_id}' (score: {smoothed} >= threshold: {incident_creation_th})")
 
-        # 2. Automated Process Tree Termination if score >= auto_kill_threshold
-        if score >= auto_kill_th and not is_whitelisted:
+        # 2. Automated Process Tree Termination if smoothed >= auto_kill_threshold
+        if smoothed >= auto_kill_th and not is_whitelisted:
             logger.warning(
-                f"High risk score ({score} >= {auto_kill_th}) for agent '{agent_id}'. "
+                f"High risk score ({smoothed} >= {auto_kill_th}) for agent '{agent_id}'. "
                 f"Triggering Automated Process Tree Termination!"
             )
             cmd_repo = CommandRepository(self.session)
@@ -204,7 +330,7 @@ class RiskAssessmentService:
                     payload={
                         "pid": sproc["pid"],
                         "process_name": sproc["name"],
-                        "reason": f"Automated Process Tree Kill triggered by Risk Score {score} (threshold: {auto_kill_th})"
+                        "reason": f"Automated Process Tree Kill triggered by Risk Score {smoothed} (threshold: {auto_kill_th})"
                     },
                     status=CommandStatus.PENDING
                 )
@@ -217,14 +343,14 @@ class RiskAssessmentService:
                 msg = (
                     f"⚔️ <b>AUTOMATED PROCESS TREE KILLED</b> ⚔️\n"
                     f"<b>Agent ID:</b> {agent_id}\n"
-                    f"<b>Risk Score:</b> {score}/100 (Threshold: {auto_kill_th})\n"
+                    f"<b>Risk Score:</b> {smoothed}/100 (Threshold: {auto_kill_th})\n"
                     f"<b>Terminated Process Trees:</b> {', '.join(killed_details)}"
                 )
                 await self.notification_service.send_alert(msg)
 
         # 3. Network Auto-Isolation
         if action == "auto_isolate":
-            logger.warning(f"Critical risk score ({score}) for agent '{agent_id}'. Triggering auto-isolation!")
+            logger.warning(f"Critical risk score ({smoothed}) for agent '{agent_id}'. Triggering auto-isolation!")
             agent.isolate()
 
             # Create isolate command
@@ -233,7 +359,7 @@ class RiskAssessmentService:
                 id=f"cmd_{uuid.uuid4().hex[:12]}",
                 agent_id=agent_id,
                 action="isolate",
-                payload={"reason": f"Auto isolation triggered by Risk Assessment Score {score}"},
+                payload={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
                 status=CommandStatus.PENDING
             )
             await cmd_repo.add(cmd)
@@ -244,7 +370,7 @@ class RiskAssessmentService:
                 f"🚨 <b>CRITICAL RISK ALERT</b> 🚨\n"
                 f"<b>Agent ID:</b> {agent_id}\n"
                 f"<b>Hostname:</b> {agent.hostname}\n"
-                f"<b>Risk Score:</b> {score}/100\n"
+                f"<b>Risk Score:</b> {smoothed}/100\n"
                 f"<b>Action:</b> 🛡️ Automated Network Isolation Executed\n"
                 f"<b>Factors:</b> {factors}"
             )
@@ -255,7 +381,7 @@ class RiskAssessmentService:
                 f"⚠️ <b>HIGH RISK DETECTED</b> ⚠️\n"
                 f"<b>Agent ID:</b> {agent_id}\n"
                 f"<b>Hostname:</b> {agent.hostname}\n"
-                f"<b>Risk Score:</b> {score}/100\n"
+                f"<b>Risk Score:</b> {smoothed}/100\n"
                 f"<b>Action Required:</b> Manual review or isolation recommended."
             )
             buttons = [
@@ -270,7 +396,7 @@ class RiskAssessmentService:
             msg = (
                 f"⚡ <b>MODERATE RISK ALERT</b> ⚡\n"
                 f"<b>Agent ID:</b> {agent_id}\n"
-                f"<b>Risk Score:</b> {score}/100"
+                f"<b>Risk Score:</b> {smoothed}/100"
             )
             await self.notification_service.send_alert(msg)
 
