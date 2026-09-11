@@ -185,8 +185,9 @@ class MLAnomalyService:
         # - VÀ có ít nhất 2 feature vượt ngưỡng Z-score
         is_anomaly = (score < ANOMALY_SCORE_THRESHOLD) and (len(z_reasons) >= MIN_Z_REASONS)
 
-        # Override rule cho IOC: nếu pred == -1 và score < -0.08, cho phép anomaly dù chỉ 1 reason
-        if pred == -1 and score < -0.08 and len(z_reasons) >= 1:
+        # Override rule: chỉ override khi độ lệch cực kỳ nghiêm trọng
+        # (score < -0.25 kèm 1 reason) để tránh false positive từ các spike đơn lẻ
+        if pred == -1 and score < -0.25 and len(z_reasons) >= 1:
             is_anomaly = True
 
         risk_points = 0.0
