@@ -9,6 +9,8 @@ import Network from './pages/Network';
 import Incidents from './pages/Incidents';
 import Commands from './pages/Commands';
 import RiskAssessment from './pages/RiskAssessment';
+import RiskMonitor from './pages/RiskMonitor';
+import FixVerification from './pages/FixVerification';
 import DetectionRules from './pages/DetectionRules';
 import ThreatIntel from './pages/ThreatIntel';
 import ProcessTree from './pages/ProcessTree';
@@ -32,7 +34,10 @@ export default function App() {
           <Route path="/network" element={<Network />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/commands" element={<Commands />} />
-          <Route path="/risk" element={<RiskAssessment />} />
+          <Route path="/risk" element={<RiskMonitor />} />
+          <Route path="/risk-monitor" element={<RiskMonitor />} />
+          <Route path="/fix-verification" element={<FixVerification />} />
+          <Route path="/risk-legacy" element={<RiskAssessment />} />
           <Route path="/rules/detection" element={<DetectionRules />} />
           <Route path="/rules/process-chains" element={<DetectionRules initialTab="process-chains" />} />
           <Route path="/rules/yara" element={<YaraRules />} />

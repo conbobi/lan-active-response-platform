@@ -15,6 +15,64 @@ import { useDockerStatus } from '../hooks/useDockerStatus';
 import { useDashboardSocket } from '../hooks/useDashboardSocket';
 import { FiZap, FiActivity, FiRadio, FiFilter } from 'react-icons/fi';
 
+function FalsePositiveBanner() {
+    const [fpData, setFpData] = useState(null);
+
+    useEffect(() => {
+        let mounted = true;
+        async function check() {
+            try {
+                const res = await fetch('/api/v1/risk/verify-phase2');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (mounted) setFpData(data);
+            } catch (err) {
+                // ignore
+            }
+        }
+        check();
+        const interval = setInterval(check, 15000);
+        return () => {
+            mounted = false;
+            clearInterval(interval);
+        };
+    }, []);
+
+    if (!fpData) return null;
+
+    const hasManagerFP = !fpData.manager_ip_bypassed;
+    const hasIdleFP = !fpData.idle_agents_safe;
+
+    if (!hasManagerFP && !hasIdleFP) {
+        return null; // Không có FP -> tự động ẩn!
+    }
+
+    return (
+        <div
+            style={{
+                backgroundColor: '#fef2f2',
+                borderLeft: '4px solid #ef4444',
+                padding: '12px 16px',
+                marginBottom: '16px',
+                borderRadius: '6px',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+            }}
+        >
+            <div style={{ fontWeight: 700, color: '#991b1b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                ⚠️ Cảnh báo: Phát hiện False Positive trong hệ thống chấm điểm rủi ro
+            </div>
+            <ul style={{ fontSize: '13px', color: '#b91c1c', marginTop: '4px', paddingLeft: '20px' }}>
+                {hasManagerFP && (
+                    <li>• {fpData.details?.manager_ip_records ?? 0} bản ghi nhận diện nhầm kết nối Manager (172.19.0.3) là C2 Beaconing</li>
+                )}
+                {hasIdleFP && (
+                    <li>• Agent nhàn rỗi có điểm rủi ro bất thường (Max score: {fpData.details?.max_idle_score ?? 0})</li>
+                )}
+            </ul>
+        </div>
+    );
+}
+
 export default function Dashboard() {
     const navigate = useNavigate();
     const { agents, refreshAgents } = useAgents();
@@ -128,6 +186,7 @@ export default function Dashboard() {
 
     return (
         <div>
+            <FalsePositiveBanner />
             <div className="page-header">
                 <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>

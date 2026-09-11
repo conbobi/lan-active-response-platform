@@ -31,6 +31,7 @@ const mainNavItems = [
 
 const intelligenceNavItems = [
   { to: '/risk', icon: <FiActivity size={16} />, label: 'Risk Monitor' },
+  { to: '/fix-verification', icon: <FiCheckSquare size={16} />, label: 'Fix Verification' },
   { to: '/rules/detection', icon: <FiShield size={16} />, label: 'Detection Rules' },
   { to: '/rules/process-chains', icon: <FiGitBranch size={16} />, label: 'Process Chains' },
   { to: '/rules/yara', icon: <FiShield size={16} />, label: 'YARA Signatures' },
