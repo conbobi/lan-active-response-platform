@@ -73,6 +73,89 @@ async def test_suspicious_process_rule():
     assert "malicious file hashes" in reason
 
 
+async def test_suspicious_process_rule_normal_processes_no_fp():
+    rule = SuspiciousProcessRule()
+    context = {}
+    telemetry = {
+        "process_list": [
+            {"name": "python3", "cmdline": "python3 -m app.main", "exe": "/usr/bin/python3", "is_suspicious": False},
+            {"name": "sh", "cmdline": "sh -c sleep 10", "exe": "/bin/sh", "is_suspicious": False},
+            {"name": "sleep", "cmdline": "sleep 10", "exe": "/bin/sleep", "is_suspicious": False},
+            {"name": "bash", "cmdline": "bash script.sh", "exe": "/bin/bash", "is_suspicious": False},
+            {"name": "curl", "cmdline": "curl -s http://localhost", "exe": "/usr/bin/curl", "is_suspicious": False},
+            {"name": "sync_worker", "cmdline": "python3 sync_tasks.py", "exe": "/usr/bin/python3", "is_suspicious": False},
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score == 0.0
+    assert reason == ""
+
+
+async def test_suspicious_process_rule_temp_directory():
+    rule = SuspiciousProcessRule()
+    context = {}
+    # Running from /tmp
+    telemetry = {
+        "process_list": [
+            {"name": "my_payload", "exe": "/tmp/my_payload", "cmdline": "/tmp/my_payload"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score == 25.0
+    assert "my_payload" in reason
+
+    # Running from /dev/shm
+    telemetry2 = {
+        "process_list": [
+            {"name": "miner", "exe": "/dev/shm/miner", "cmdline": "/dev/shm/miner"}
+        ]
+    }
+    score2, reason2 = await rule.evaluate(telemetry2, context)
+    assert score2 == 25.0
+    assert "miner" in reason2
+
+
+async def test_suspicious_process_rule_outbound_network():
+    rule = SuspiciousProcessRule()
+    context = {}
+    # Process with PID correlating to an outbound connection
+    telemetry = {
+        "process_list": [
+            {"pid": 9999, "name": "custom_agent", "exe": "/usr/bin/custom_agent"}
+        ],
+        "network_connections": [
+            {"pid": 9999, "dst_ip": "203.0.113.5", "dst_port": 8080, "status": "ESTABLISHED"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score == 25.0
+    assert "custom_agent" in reason
+
+
+async def test_suspicious_process_rule_blacklist_nc_word_boundary():
+    rule = SuspiciousProcessRule()
+    context = {}
+    # 'nc' in cmdline should trigger
+    telemetry = {
+        "process_list": [
+            {"name": "nc", "cmdline": "nc -lvnp 4444", "exe": "/usr/bin/nc"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score == 25.0
+    assert "nc" in reason
+
+    # 'sync' or 'async' should NOT trigger 'nc'
+    telemetry2 = {
+        "process_list": [
+            {"name": "async_task", "cmdline": "python3 run_async.py", "exe": "/usr/bin/python3"}
+        ]
+    }
+    score2, reason2 = await rule.evaluate(telemetry2, context)
+    assert score2 == 0.0
+    assert reason2 == ""
+
+
 async def test_network_connection_rule():
     rule = NetworkConnectionRule()
     mock_intel = MagicMock()

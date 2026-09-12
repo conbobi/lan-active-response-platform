@@ -1,3 +1,4 @@
+import re
 import uuid
 import logging
 from typing import Dict, Any, Tuple, Union, Optional
@@ -304,8 +305,9 @@ class RiskAssessmentService:
             suspicious_procs = []
             
             suspect_keywords = [
-                "nc", "netcat", "mimikatz", "nmap", "chisel", "psexec", "procdump",
-                "ransomware_sim", "backdoor_sim", "credential_dump", "sleep", "shadow"
+                "mimikatz", "nmap", "chisel", "psexec", "procdump",
+                "ransomware_sim", "backdoor_sim", "credential_dump", "lazagne",
+                "vssadmin", "meterpreter", "cobaltstrike"
             ]
             
             for proc in processes:
@@ -315,7 +317,8 @@ class RiskAssessmentService:
                 cmdline = str(p_dict.get("cmdline", "")).strip().lower()
                 full_str = f"{name} {cmdline}"
                 
-                if is_susp or any(k in full_str for k in suspect_keywords):
+                matches_suspect = any(k in full_str for k in suspect_keywords) or bool(re.search(r"(?:\A|[^a-zA-Z0-9_\-\.])(?:nc|ncat|netcat)(?:\.exe)?(?:\Z|[^a-zA-Z0-9_\-\.])", full_str))
+                if is_susp or matches_suspect:
                     pid = p_dict.get("pid")
                     p_name = p_dict.get("name") or name or "suspicious_process"
                     if pid and not any(sp["pid"] == pid for sp in suspicious_procs):

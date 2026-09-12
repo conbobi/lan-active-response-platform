@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import psutil
@@ -146,10 +147,9 @@ def collect_process_info():
     Bao gồm PID, parent PID (ppid), name, exe, cmdline, cpu/memory %, và đánh dấu is_suspicious.
     """
     suspicious_keywords = [
-        "mimikatz", "netcat", "nc", "nc.openbsd", "nc.traditional", "nmap", "chisel",
-        "vssadmin", "powershell", "cmd.exe", "lsass.dump", "ransomware_sim",
-        "backdoor_sim", "credential_dump", "lateral_movement", "c2_communication", "sleep", "certutil",
-        "curl", "wget", "urlcache", "-o", "-O", "-split"
+        "mimikatz", "psexec", "chisel", "lazagne", "vssadmin", "ransomware_sim",
+        "meterpreter", "cobaltstrike", "lsass.dump", "backdoor_sim", "credential_dump",
+        "lateral_movement", "c2_communication"
     ]
     processes = []
     try:
@@ -169,7 +169,16 @@ def collect_process_info():
                 mem_pct = float(info.get('memory_percent') or 0.0)
 
                 full_str = f"{name} {exe} {cmdline}".lower()
-                is_suspicious = any(s.lower() in full_str for s in suspicious_keywords)
+                is_suspicious = False
+                for s in suspicious_keywords:
+                    if s.lower() in full_str:
+                        is_suspicious = True
+                        break
+                if not is_suspicious:
+                    for s in ("nc", "ncat", "nmap"):
+                        if re.search(rf"(?:\A|[^a-zA-Z0-9_\-\.]){s}(?:\.exe)?(?:\Z|[^a-zA-Z0-9_\-\.])", full_str):
+                            is_suspicious = True
+                            break
 
                 processes.append({
                     "pid": pid,
@@ -230,6 +239,7 @@ def get_network_connections():
                 is_susp = (dst_port in suspicious_ports or src_port in suspicious_ports)
 
                 connections.append({
+                    "pid": conn.pid,
                     "src_ip": src_ip,
                     "src_port": src_port,
                     "dst_ip": dst_ip,
