@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import KpiCard from '../components/ui/KpiCard';
 import AgentTable from '../components/ui/AgentTable';
@@ -212,7 +212,7 @@ export default function Dashboard() {
 
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
                 <AgentTable agents={agents} onViewAgent={setSelectedAgent} />
-                
+
                 {/* Network Traffic Card with Filter */}
                 <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -220,7 +220,7 @@ export default function Dashboard() {
                             <FiActivity size={16} color="var(--primary)" />
                             <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>Network Traffic (last 5 min)</span>
                         </div>
-                        
+
                         {/* Server & Agent Filter Selector */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                             <FiFilter size={12} color="var(--text-tertiary)" />
