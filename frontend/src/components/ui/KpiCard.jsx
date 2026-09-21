@@ -8,16 +8,45 @@ const configs = {
   blocked: { icon: <FiSlash size={20} />, label: 'IPs Blocked', color: 'var(--success)' },
 };
 
-export default function KpiCard({ type, value, trend, trendValue }) {
-  const cfg = configs[type] || { icon: null, label: type, color: 'var(--primary)' };
+export default function KpiCard({
+  type,
+  title,
+  label,
+  subtitle,
+  icon,
+  color,
+  value,
+  trend,
+  trendValue,
+}) {
+  const cfg = (type && configs[type]) || {
+    icon: icon || null,
+    label: title || label || type,
+    color: color ? (color.startsWith('var(') ? color : `var(--${color}, var(--primary))`) : 'var(--primary)',
+  };
+
+  const cardIcon = icon || cfg.icon;
+  const cardLabel = title || label || cfg.label;
+  const cardColor = color
+    ? color.startsWith('var(') || color.startsWith('#') || color.startsWith('rgb')
+      ? color
+      : `var(--${color}, var(--primary))`
+    : cfg.color;
+
   const isUp = trendValue > 0;
+
   return (
     <div className="kpi-card">
-      <div className="kpi-icon-wrap" style={{ background: `${cfg.color}18`, color: cfg.color }}>
-        {cfg.icon}
+      <div className="kpi-icon-wrap" style={{ background: `${cardColor}18`, color: cardColor }}>
+        {cardIcon}
       </div>
-      <div className="kpi-label">{cfg.label}</div>
+      <div className="kpi-label">{cardLabel}</div>
       <div className="kpi-value">{value}</div>
+      {subtitle && (
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.2rem' }}>
+          {subtitle}
+        </div>
+      )}
       {trendValue != null && (
         <div className={`kpi-trend ${isUp ? 'up' : 'down'}`}>
           {isUp ? <FiTrendingUp size={13} /> : <FiTrendingDown size={13} />}

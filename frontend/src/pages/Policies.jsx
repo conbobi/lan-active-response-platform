@@ -4,7 +4,7 @@ import usePolicies from '../hooks/usePolicies';
 import { listGroups } from '../api/groups';
 import PolicyTable from '../components/policies/PolicyTable';
 import PolicyFormModal from '../components/policies/PolicyFormModal';
-import PolicyDryRunModal from '../components/policies/PolicyDryRunModal';
+import PolicyDryRunPanel from '../components/policies/PolicyDryRunPanel';
 import Button from '../components/ui/Button';
 import SearchBar from '../components/ui/SearchBar';
 import FilterTabs from '../components/ui/FilterTabs';
@@ -285,10 +285,11 @@ export default function Policies() {
       />
 
       {/* Modal 2: Dry Run Test Simulation */}
-      <PolicyDryRunModal
+      <PolicyDryRunPanel
         isOpen={dryRunModalOpen}
-        policy={testingPolicy}
+        initialPolicy={testingPolicy}
         onClose={() => setDryRunModalOpen(false)}
+        onApplied={() => fetchPolicies()}
       />
     </div>
   );
