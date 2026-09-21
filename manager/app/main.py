@@ -58,6 +58,43 @@ async def lifespan(app: FastAPI):
 
     scheduler.schedule_task(86400, periodic_ml_retrain)
 
+    # Schedule periodic Auto-Rollback check (every 5 seconds)
+    async def periodic_auto_rollback():
+        try:
+            from datetime import datetime, timezone
+            from app.core.database import AsyncSessionLocal
+            from app.repositories.response_action_repository import ResponseActionRepository
+            from app.services.rollback_service import RollbackService
+            from app.services.setting_service import SettingService
+
+            now = datetime.now(timezone.utc)
+            async with AsyncSessionLocal() as session:
+                setting_svc = SettingService(session)
+                settings = await setting_svc.get_auto_rollback_settings()
+                if not settings.get("enabled", True):
+                    return
+
+                action_repo = ResponseActionRepository(session)
+                expired = await action_repo.get_expired_actions(now)
+                if not expired:
+                    return
+
+                rollback_svc = RollbackService(session)
+                for act in expired:
+                    try:
+                        logger.info(f"Auto-rollback triggering for action '{act.id}' (expired at {act.auto_rollback_at}).")
+                        await rollback_svc.rollback_action(
+                            action_id=act.id,
+                            reason=f"Auto-rollback timeout expired (scheduled for {act.auto_rollback_at})",
+                            actor="system"
+                        )
+                    except Exception as err:
+                        logger.error(f"Error during auto-rollback of action '{act.id}': {err}")
+        except Exception as e:
+            logger.error(f"Error in periodic auto-rollback loop: {e}")
+
+    scheduler.schedule_task(5, periodic_auto_rollback)
+
     logger.info("🚀 LAN Active Response Manager startup complete.")
     yield
 

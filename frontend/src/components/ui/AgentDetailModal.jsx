@@ -2,15 +2,24 @@ import React, { useState } from 'react';
 import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';
 import { useAgentHistory } from '../../hooks/useAgentHistory';
+import useActions from '../../hooks/useActions';
+import ActionTimeline from '../actions/ActionTimeline';
 import Badge from './Badge';
 import { FiX, FiCpu, FiHardDrive, FiShield, FiGlobe } from 'react-icons/fi';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-const TABS = ['Overview', 'CPU/RAM', 'Info'];
+const TABS = ['Overview', 'CPU/RAM', 'Info', 'Mitigations'];
 
 export default function AgentDetailModal({ agent, onClose }) {
     const { history, loading } = useAgentHistory(agent?.id);
+    const {
+        actions,
+        loading: loadingActions,
+        actionLoading,
+        handleUndo,
+        handleUndoAll,
+    } = useActions({ agentId: agent?.id });
     const [tab, setTab] = useState('Overview');
     if (!agent) return null;
 
@@ -87,6 +96,15 @@ export default function AgentDetailModal({ agent, onClose }) {
                                 </div>
                             ))}
                         </div>
+                    )}
+                    {tab === 'Mitigations' && (
+                        <ActionTimeline
+                            actions={actions}
+                            onUndo={handleUndo}
+                            onUndoAll={handleUndoAll}
+                            loading={loadingActions}
+                            actionLoading={actionLoading}
+                        />
                     )}
                 </div>
             </div>

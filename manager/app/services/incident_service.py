@@ -189,41 +189,50 @@ class IncidentService(AbstractService[IncidentRepository]):
         result_msg = ""
 
         if action_type == "isolate":
-            from app.repositories.agent_repository import AgentRepository
-            agent_repo = AgentRepository(self.session)
-            agent = await agent_repo.get(agent_id)
-            if agent:
-                agent.isolate()
-
-            cmd = Command(
-                id=f"cmd_{uuid.uuid4().hex[:12]}",
+            from app.services.response_action_service import ResponseActionService
+            act_service = ResponseActionService(self.session)
+            act = await act_service.create_and_apply_action(
                 agent_id=agent_id,
-                action="isolate",
-                payload={"reason": f"SOC Quick Action from Incident '{incident_id}' by {user}"},
-                status=CommandStatus.PENDING
+                action_type="isolate",
+                action_params={"reason": f"SOC Quick Action from Incident '{incident_id}' by {user}"},
+                incident_id=incident_id,
+                actor=user
             )
-            await cmd_repo.add(cmd)
-            await command_dispatcher.push_command(cmd.id, agent_id)
             inc.status = IncidentStatus.CONTAINED
-            result_msg = f"Isolated Agent '{agent_id}' and updated status to CONTAINED."
+            result_msg = f"Isolated Agent '{agent_id}' (Action: {act.id}) and updated status to CONTAINED."
 
         elif action_type == "unisolate":
-            from app.repositories.agent_repository import AgentRepository
-            agent_repo = AgentRepository(self.session)
-            agent = await agent_repo.get(agent_id)
-            if agent:
-                agent.activate()
+            from app.services.rollback_service import RollbackService
+            from app.repositories.response_action_repository import ResponseActionRepository
+            act_repo = ResponseActionRepository(self.session)
+            active_acts = await act_repo.get_active_applied_by_incident(incident_id)
+            isolate_acts = [a for a in active_acts if a.action_type in ("isolate", "auto_isolate")]
+            if isolate_acts:
+                rollback_service = RollbackService(self.session)
+                for act in isolate_acts:
+                    await rollback_service.rollback_action(
+                        action_id=act.id,
+                        reason=f"SOC Unisolate Action from Incident '{incident_id}' by {user}",
+                        actor=user
+                    )
+                result_msg = f"Unisolated Agent '{agent_id}' via RollbackService."
+            else:
+                from app.repositories.agent_repository import AgentRepository
+                agent_repo = AgentRepository(self.session)
+                agent = await agent_repo.get(agent_id)
+                if agent:
+                    agent.activate()
 
-            cmd = Command(
-                id=f"cmd_{uuid.uuid4().hex[:12]}",
-                agent_id=agent_id,
-                action="unisolate",
-                payload={"reason": f"SOC Action from Incident '{incident_id}' by {user}"},
-                status=CommandStatus.PENDING
-            )
-            await cmd_repo.add(cmd)
-            await command_dispatcher.push_command(cmd.id, agent_id)
-            result_msg = f"Unisolated Agent '{agent_id}'."
+                cmd = Command(
+                    id=f"cmd_{uuid.uuid4().hex[:12]}",
+                    agent_id=agent_id,
+                    action="unisolate",
+                    payload={"reason": f"SOC Action from Incident '{incident_id}' by {user}"},
+                    status=CommandStatus.PENDING
+                )
+                await cmd_repo.add(cmd)
+                await command_dispatcher.push_command(cmd.id, agent_id)
+                result_msg = f"Unisolated Agent '{agent_id}'."
 
         elif action_type == "kill_process_tree":
             pid = params.get("pid")

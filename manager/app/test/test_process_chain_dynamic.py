@@ -127,3 +127,68 @@ async def test_process_group_service_crud():
         await service.delete_group("grp-1")
     assert exc_info.value.status_code == 409
     assert "referenced by 2 process chain rule(s)" in exc_info.value.message
+
+
+async def test_process_chain_parent_pid_resolution_and_block_score():
+    """Verify that parent_name is resolved from parent_pid in process_list, action=block yields 70.0, and exact match works."""
+    RiskProcessChainRule.invalidate_cache()
+    rule = RiskProcessChainRule()
+
+    group_web = ProcessGroup(
+        id="grp-web",
+        name="Web Server Processes",
+        patterns=['"nginx"', '"apache2"', '"httpd"'],
+        description="Web servers"
+    )
+    group_shell = ProcessGroup(
+        id="grp-shell",
+        name="Command Shells",
+        patterns=["bash", "sh", "dash"],
+        description="Shells"
+    )
+
+    db_rule = ModelProcessChainRule(
+        id="pcr-web-shell",
+        name="Web Server Spawns Shell",
+        parent_group_id="grp-web",
+        child_group_id="grp-shell",
+        action="block",
+        is_active=True
+    )
+    db_rule.parent_group = group_web
+    db_rule.child_group = group_shell
+
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_execute_result = MagicMock()
+    mock_execute_result.scalars.return_value.all.return_value = [db_rule]
+    mock_session.execute = AsyncMock(return_value=mock_execute_result)
+
+    context = {"session": mock_session, "agent_id": "client1"}
+
+    # 1. Telemetry containing process_list with only pid and parent_pid (NO parent_name, NO process_tree)
+    telemetry = {
+        "process_list": [
+            {"pid": 100, "parent_pid": 1, "name": "nginx", "exe": "/usr/sbin/nginx"},
+            {"pid": 101, "parent_pid": 100, "name": "sh", "exe": "/bin/sh"},
+            {"pid": 102, "parent_pid": 101, "name": "sleep", "exe": "/bin/sleep"}
+        ]
+    }
+
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score == 70.0
+    assert "Web Server Spawns Shell" in reason
+    assert "BLOCK" in reason
+    assert "'nginx' spawned 'sh'" in reason
+
+    # 2. Test exact matching: nginx_worker should NOT match nginx
+    RiskProcessChainRule.invalidate_cache()
+    telemetry_fp = {
+        "process_list": [
+            {"pid": 200, "parent_pid": 1, "name": "nginx_worker", "exe": "/usr/sbin/nginx_worker"},
+            {"pid": 201, "parent_pid": 200, "name": "sh", "exe": "/bin/sh"}
+        ]
+    }
+    score_fp, reason_fp = await rule.evaluate(telemetry_fp, context)
+    assert score_fp == 0.0
+    assert reason_fp == ""
+

@@ -36,3 +36,27 @@ class IncidentStatus(str, Enum):
     RESOLVED = "resolved"
     FALSE_POSITIVE = "false_positive"
     CLOSED = "closed"
+
+
+class ResponseActionType(str, Enum):
+    ISOLATE = "isolate"
+    KILL = "kill"
+    BLOCK_IP = "block_ip"
+    QUARANTINE = "quarantine"
+
+
+class ResponseActionStatus(str, Enum):
+    PENDING = "pending"
+    APPLIED = "applied"
+    REVERTING = "reverting"
+    REVERTED = "reverted"
+    FAILED = "failed"
+
+
+class ActionAuditEvent(str, Enum):
+    CREATED = "created"
+    APPLIED = "applied"
+    UNDO_REQUESTED = "undo_requested"
+    UNDONE = "undone"
+    AUTO_UNDONE = "auto_undone"
+    FAILED = "failed"

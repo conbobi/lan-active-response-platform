@@ -48,6 +48,7 @@ services:
     environment:
       - MANAGER_URL=ws://manager:8000/ws/agent #Đây là "đường dây liên lạc" giữa máy trạm và tòa nhà Manager. Lưu ý: manager chính là tên dịch vụ Manager ở trên, không phải localhost hay 127.0.0.1
       - AGENT_ID=client1
+      - BASH_ENV=/etc/bash_env
     networks:
       - larp-net
     depends_on:

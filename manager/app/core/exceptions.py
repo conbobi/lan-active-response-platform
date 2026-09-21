@@ -42,3 +42,9 @@ class LockAcquisitionError(AppException):
 class BadRequestError(AppException):
     def __init__(self, message: str = "Bad request."):
         super().__init__(message=message, status_code=400)
+
+
+class FlappingCooldownError(AppException):
+    def __init__(self, message: str = "Action rejected due to anti-flapping cooldown."):
+        super().__init__(message=message, status_code=429)
+

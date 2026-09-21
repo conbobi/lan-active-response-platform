@@ -351,57 +351,78 @@ class RiskAssessmentService:
                 )
                 await self.notification_service.send_alert(msg)
 
-        # 3. Network Auto-Isolation
-        if action == "auto_isolate":
-            logger.warning(f"Critical risk score ({smoothed}) for agent '{agent_id}'. Triggering auto-isolation!")
-            agent.isolate()
-
-            # Create isolate command
-            cmd_repo = CommandRepository(self.session)
-            cmd = Command(
-                id=f"cmd_{uuid.uuid4().hex[:12]}",
+        # 3. Policy-Based Automated Response (Policy Engine v1.4)
+        policy_executed = False
+        try:
+            from app.services.policy_engine_service import PolicyEngineService
+            policy_engine = PolicyEngineService(self.session)
+            policy_res = await policy_engine.evaluate_and_execute(
                 agent_id=agent_id,
-                action="isolate",
-                payload={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
-                status=CommandStatus.PENDING
+                risk_score=smoothed,
+                context=factors,
+                dry_run=False
             )
-            await cmd_repo.add(cmd)
-            await command_dispatcher.push_command(cmd.id, agent_id)
+            if policy_res and policy_res.matched_policy and policy_res.executed:
+                policy_executed = True
+                logger.info(
+                    f"PolicyEngine successfully executed '{policy_res.action_type}' "
+                    f"with scope '{policy_res.scope}' for agent '{agent_id}' (policy: {policy_res.matched_policy.name})"
+                )
+        except Exception as pe_exc:
+            logger.error(f"Error in PolicyEngine execution for agent '{agent_id}': {pe_exc}", exc_info=True)
 
-            # Send critical Telegram notification
-            msg = (
-                f"🚨 <b>CRITICAL RISK ALERT</b> 🚨\n"
-                f"<b>Agent ID:</b> {agent_id}\n"
-                f"<b>Hostname:</b> {agent.hostname}\n"
-                f"<b>Risk Score:</b> {smoothed}/100\n"
-                f"<b>Action:</b> 🛡️ Automated Network Isolation Executed\n"
-                f"<b>Factors:</b> {factors}"
-            )
-            await self.notification_service.send_alert(msg)
+        # 4. Fallback legacy action trigger if no policy was executed
+        if not policy_executed:
+            if action == "auto_isolate":
+                logger.warning(f"Critical risk score ({smoothed}) for agent '{agent_id}'. Triggering fallback auto-isolation!")
+                agent.isolate()
 
-        elif action == "alert_with_buttons":
-            msg = (
-                f"⚠️ <b>HIGH RISK DETECTED</b> ⚠️\n"
-                f"<b>Agent ID:</b> {agent_id}\n"
-                f"<b>Hostname:</b> {agent.hostname}\n"
-                f"<b>Risk Score:</b> {smoothed}/100\n"
-                f"<b>Action Required:</b> Manual review or isolation recommended."
-            )
-            buttons = [
-                [
-                    {"text": "🔒 Cô lập ngay", "callback_data": f"isolate:{agent_id}"},
-                    {"text": "❌ Bỏ qua", "callback_data": f"ignore:{agent_id}"}
+                # Create isolate command
+                cmd_repo = CommandRepository(self.session)
+                cmd = Command(
+                    id=f"cmd_{uuid.uuid4().hex[:12]}",
+                    agent_id=agent_id,
+                    action="isolate",
+                    payload={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
+                    status=CommandStatus.PENDING
+                )
+                await cmd_repo.add(cmd)
+                await command_dispatcher.push_command(cmd.id, agent_id)
+
+                # Send critical Telegram notification
+                msg = (
+                    f"🚨 <b>CRITICAL RISK ALERT</b> 🚨\n"
+                    f"<b>Agent ID:</b> {agent_id}\n"
+                    f"<b>Hostname:</b> {agent.hostname}\n"
+                    f"<b>Risk Score:</b> {smoothed}/100\n"
+                    f"<b>Action:</b> 🛡️ Automated Network Isolation Executed\n"
+                    f"<b>Factors:</b> {factors}"
+                )
+                await self.notification_service.send_alert(msg)
+
+            elif action == "alert_with_buttons":
+                msg = (
+                    f"⚠️ <b>HIGH RISK DETECTED</b> ⚠️\n"
+                    f"<b>Agent ID:</b> {agent_id}\n"
+                    f"<b>Hostname:</b> {agent.hostname}\n"
+                    f"<b>Risk Score:</b> {smoothed}/100\n"
+                    f"<b>Action Required:</b> Manual review or isolation recommended."
+                )
+                buttons = [
+                    [
+                        {"text": "🔒 Cô lập ngay", "callback_data": f"isolate:{agent_id}"},
+                        {"text": "❌ Bỏ qua", "callback_data": f"ignore:{agent_id}"}
+                    ]
                 ]
-            ]
-            await self.notification_service.send_alert(msg, buttons=buttons)
+                await self.notification_service.send_alert(msg, buttons=buttons)
 
-        elif action == "alert":
-            msg = (
-                f"⚡ <b>MODERATE RISK ALERT</b> ⚡\n"
-                f"<b>Agent ID:</b> {agent_id}\n"
-                f"<b>Risk Score:</b> {smoothed}/100"
-            )
-            await self.notification_service.send_alert(msg)
+            elif action == "alert":
+                msg = (
+                    f"⚡ <b>MODERATE RISK ALERT</b> ⚡\n"
+                    f"<b>Agent ID:</b> {agent_id}\n"
+                    f"<b>Risk Score:</b> {smoothed}/100"
+                )
+                await self.notification_service.send_alert(msg)
 
         await self.session.flush()
         return record

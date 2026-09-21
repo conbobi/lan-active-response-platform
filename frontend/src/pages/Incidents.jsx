@@ -2,7 +2,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import useIncidents from '../hooks/useIncidents';
 import { useAgents } from '../hooks/useAgents';
+import useActions from '../hooks/useActions';
 import { getIncidentNotes } from '../api/incidents';
+import ActionTimeline from '../components/actions/ActionTimeline';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
@@ -94,6 +96,16 @@ export default function Incidents() {
   const [quickActionPID, setQuickActionPID] = useState('');
   const [quickActionIP, setQuickActionIP] = useState('');
   const [actionSuccessMsg, setActionSuccessMsg] = useState('');
+
+  // Stateful Response Actions for selectedIncident
+  const {
+    actions: incidentActions,
+    loading: actionsLoading,
+    actionLoading: actionsActionLoading,
+    fetchActions: refreshIncidentActions,
+    handleUndo: handleUndoIncidentAction,
+    handleUndoAll: handleUndoAllIncidentActions,
+  } = useActions({ incidentId: selectedIncident?.id });
 
   // Load Notes when selectedIncident opens or changes
   useEffect(() => {
@@ -365,6 +377,7 @@ export default function Incidents() {
       setActionSuccessMsg(res.message || `Action ${actionType} executed successfully.`);
       const updatedNotes = await getIncidentNotes(selectedIncident.id);
       setIncidentNotes(updatedNotes);
+      await refreshIncidentActions();
     } catch (err) {
       setActionSuccessMsg(`Action failed: ${err.message || 'Execution error'}`);
     }
@@ -899,6 +912,17 @@ export default function Incidents() {
                       Kill Process Tree (PID {quickActionPID || '...'})
                     </Button>
                   </div>
+                </div>
+
+                {/* Stateful Response Actions & Rollback Timeline */}
+                <div style={{ marginTop: '1.25rem' }}>
+                  <ActionTimeline
+                    actions={incidentActions}
+                    onUndo={handleUndoIncidentAction}
+                    onUndoAll={handleUndoAllIncidentActions}
+                    loading={actionsLoading}
+                    actionLoading={actionsActionLoading}
+                  />
                 </div>
               </div>
             )}

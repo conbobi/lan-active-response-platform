@@ -20,6 +20,9 @@ from app.routers.v1.docker_router import router as docker_router
 from app.routers.v1.process_group_router import router as process_group_router
 from app.routers.v1.process_chain_rule_router import router as process_chain_rule_router
 from app.routers.v1.yara_router import router as yara_router
+from app.routers.v1.response_action_router import router as response_action_router
+from app.routers.v1.agent_group_router import router as agent_group_router
+from app.routers.v1.response_policy_router import router as response_policy_router
 
 api_router = APIRouter()
 
@@ -38,6 +41,9 @@ api_router.include_router(whitelist_router, prefix="/whitelist", tags=["Whitelis
 api_router.include_router(risk_router, prefix="/risk", tags=["Risk Assessment"])
 api_router.include_router(threat_intel_router, prefix="/threat-intel", tags=["Threat Intelligence"])
 api_router.include_router(process_router, prefix="/process", tags=["Process & Root Cause Analysis"])
+api_router.include_router(response_action_router, tags=["Response Actions & Rollback"])
+api_router.include_router(agent_group_router, tags=["Agent Groups & Batch Actions"])
+api_router.include_router(response_policy_router, tags=["Response Policies & Policy Engine"])
 api_router.include_router(setting_router, prefix="/settings", tags=["Settings"])
 api_router.include_router(docker_router, prefix="/docker", tags=["Docker Monitor"])
 api_router.include_router(process_group_router, prefix="/process-groups", tags=["Process Groups"])

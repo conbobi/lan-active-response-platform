@@ -21,6 +21,9 @@ import Rules from './pages/Rules';
 import Attack from './pages/Attack';
 import Settings from './pages/Settings';
 import YaraRules from './pages/YaraRules';
+import Groups from './pages/Groups';
+import Policies from './pages/Policies';
+import ActionsHistory from './pages/ActionsHistory';
 
 export default function App() {
 
@@ -30,9 +33,12 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/groups" element={<Groups />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/network" element={<Network />} />
           <Route path="/incidents" element={<Incidents />} />
+          <Route path="/actions" element={<ActionsHistory />} />
+          <Route path="/policies" element={<Policies />} />
           <Route path="/commands" element={<Commands />} />
           <Route path="/risk" element={<RiskMonitor />} />
           <Route path="/risk-monitor" element={<RiskMonitor />} />
@@ -49,8 +55,6 @@ export default function App() {
           <Route path="/rules" element={<Rules />} />
           <Route path="/attack" element={<Attack />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/rules/process-chains" element={<DetectionRules initialTab="process-chains" />} />
-
         </Route>
       </Routes>
     </BrowserRouter>
