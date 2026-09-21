@@ -105,7 +105,7 @@ class AgentGroupService:
         if not group:
             raise NotFoundError(f"Agent group with ID '{group_id}' was not found.")
 
-        await self.group_repo.delete(group)
+        await self.group_repo.delete(group.id)
         await self.session.commit()
         logger.info(f"Deleted agent group '{group.id}'.")
 
@@ -212,6 +212,12 @@ class AgentGroupService:
             f"Batch action '{action_type}' on group '{group.name}' completed: "
             f"{succeeded_count}/{len(agents)} succeeded, {failed_count} failed."
         )
+
+        if succeeded_count == 0 and failed_count > 0:
+            for r in results:
+                if r.error and "cooldown" in r.error.lower():
+                    from app.core.exceptions import FlappingCooldownError
+                    raise FlappingCooldownError(r.error)
 
         return GroupBatchActionResponse(
             group_id=group_id,

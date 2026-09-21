@@ -20,4 +20,5 @@ export * from './processGroups';
 export * from './processChainRules';
 export * from './actions';
 export * from './groups';
+export * from './policies';
 

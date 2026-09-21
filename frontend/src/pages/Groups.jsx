@@ -73,9 +73,10 @@ export default function Groups() {
   const totalAgentsGrouped = groups.reduce((acc, g) => acc + (g.member_count || 0), 0);
   const groupsWithAgents = groups.filter((g) => (g.member_count || 0) > 0).length;
 
-  const handleOpenDetail = async (grp) => {
+  const handleOpenDetail = (grp) => {
+    setSelectedGroup(grp);
     setDetailModalOpen(true);
-    await fetchGroupDetail(grp.id);
+    fetchGroupDetail(grp.id);
   };
 
   const handleOpenEdit = (grp) => {
@@ -272,10 +273,7 @@ export default function Groups() {
         isOpen={detailModalOpen}
         onClose={() => setDetailModalOpen(false)}
         group={selectedGroup}
-        detail={selectedGroup}
-        loading={detailLoading}
-        onAddMember={addMember}
-        onRemoveMember={removeMember}
+        onRefresh={fetchGroups}
       />
     </div>
   );

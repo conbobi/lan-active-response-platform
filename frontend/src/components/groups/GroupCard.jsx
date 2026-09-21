@@ -209,7 +209,11 @@ export default function GroupCard({
             {memberCount} {memberCount === 1 ? 'agent' : 'agents'}
           </span>
 
-          <Badge status="active" label="Normal Zone" showDot={true} />
+          {group.has_isolated_agents ? (
+            <Badge status="danger" label="Has Isolated Agents" showDot={true} />
+          ) : (
+            <Badge status="active" label="Normal" showDot={true} />
+          )}
         </div>
       </div>
 

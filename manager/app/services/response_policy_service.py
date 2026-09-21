@@ -146,7 +146,7 @@ class ResponsePolicyService:
         if not policy:
             raise NotFoundError(f"ResponsePolicy with ID '{policy_id}' was not found.")
 
-        await self.policy_repo.delete(policy)
+        await self.policy_repo.delete(policy.id)
         await self.session.commit()
         logger.info(f"Deleted ResponsePolicy '{policy_id}'.")
 

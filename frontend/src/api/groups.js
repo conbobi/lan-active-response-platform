@@ -1,5 +1,6 @@
 // src/api/groups.js
 import api from './api';
+import { getAgentActions } from './actions';
 
 /**
  * Lấy danh sách tất cả các Agent Group kèm số lượng máy thành viên.
@@ -60,13 +61,26 @@ export const getAgentGroups = async (agentId) => {
 
 /**
  * Thực thi batch response action trên toàn bộ nhóm máy.
+ * Hỗ trợ cả 2 dạng:
+ * 1) executeGroupAction(groupId, { action_type, action_params, auto_rollback_seconds })
+ * 2) executeGroupAction(groupId, actionType, actionParams, autoRollbackSeconds)
  */
-export const executeGroupAction = async (groupId, actionType, actionParams = {}, autoRollbackSeconds = null) => {
-  return await api.post(`/groups/${groupId}/actions`, {
-    action_type: actionType,
-    action_params: actionParams,
-    auto_rollback_seconds: autoRollbackSeconds,
-  });
+export const executeGroupAction = async (groupId, actionTypeOrData, actionParams = {}, autoRollbackSeconds = null) => {
+  let payload;
+  if (typeof actionTypeOrData === 'object' && actionTypeOrData !== null) {
+    payload = {
+      action_type: actionTypeOrData.action_type || actionTypeOrData.actionType,
+      action_params: actionTypeOrData.action_params || actionTypeOrData.actionParams || {},
+      auto_rollback_seconds: actionTypeOrData.auto_rollback_seconds ?? actionTypeOrData.autoRollbackSeconds ?? null,
+    };
+  } else {
+    payload = {
+      action_type: actionTypeOrData,
+      action_params: actionParams,
+      auto_rollback_seconds: autoRollbackSeconds,
+    };
+  }
+  return await api.post(`/groups/${groupId}/actions`, payload);
 };
 
 /**
@@ -74,6 +88,52 @@ export const executeGroupAction = async (groupId, actionType, actionParams = {},
  */
 export const undoAllGroupActions = async (groupId, reason = 'Batch group undo via UI') => {
   return await api.post(`/groups/${groupId}/undo-all`, { reason });
+};
+
+/**
+ * Lấy toàn bộ actions liên quan tới nhóm máy:
+ * Truy vấn chi tiết nhóm để lấy danh sách members, sau đó lấy actions của từng member
+ * và gom lại, sắp xếp theo thời gian mới nhất.
+ */
+export const getGroupActions = async (groupId) => {
+  try {
+    const groupDetail = await getGroup(groupId);
+    const members = groupDetail?.members || [];
+    if (members.length === 0) return [];
+
+    const actionPromises = members.map(async (member) => {
+      try {
+        const actions = await getAgentActions(member.agent_id);
+        return Array.isArray(actions) ? actions : [];
+      } catch (err) {
+        console.warn(`Failed to fetch actions for agent ${member.agent_id}`, err);
+        return [];
+      }
+    });
+
+    const results = await Promise.all(actionPromises);
+    const allActions = results.flat();
+
+    // Loại bỏ duplicate action id (nếu có)
+    const map = new Map();
+    allActions.forEach((act) => {
+      if (act && act.id && !map.has(act.id)) {
+        map.set(act.id, act);
+      }
+    });
+
+    // Sắp xếp giảm dần theo applied_at || created_at
+    const sorted = Array.from(map.values()).sort((a, b) => {
+      const timeA = new Date(a.applied_at || a.created_at || 0).getTime();
+      const timeB = new Date(b.applied_at || b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+
+    return sorted;
+  } catch (err) {
+    console.error(`Failed to fetch actions for group ${groupId}`, err);
+    return [];
+  }
 };
 
 export default {
@@ -87,4 +147,5 @@ export default {
   getAgentGroups,
   executeGroupAction,
   undoAllGroupActions,
+  getGroupActions,
 };

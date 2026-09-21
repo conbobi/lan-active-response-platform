@@ -24,7 +24,23 @@ export const useGroups = ({ autoFetch = true } = {}) => {
     setLoading(true);
     try {
       const data = await listGroups();
-      setGroups(Array.isArray(data) ? data : []);
+      const rawGroups = Array.isArray(data) ? data : [];
+      // Enrich with isolation status and member list in parallel
+      const enriched = await Promise.all(
+        rawGroups.map(async (grp) => {
+          try {
+            if (!grp.member_count) {
+              return { ...grp, has_isolated_agents: false, members: [] };
+            }
+            const detail = await getGroup(grp.id);
+            const hasIsolated = detail.members?.some((m) => m.is_isolated === true);
+            return { ...grp, has_isolated_agents: !!hasIsolated, members: detail.members || [] };
+          } catch {
+            return { ...grp, has_isolated_agents: false, members: [] };
+          }
+        })
+      );
+      setGroups(enriched);
       setError(null);
     } catch (err) {
       console.error('Failed to fetch agent groups', err);
