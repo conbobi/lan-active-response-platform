@@ -1,19 +1,19 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.services.risk_rules import create_default_registry
-from app.services.risk_rules.cpu_spike_rule import CpuSpikeRule
-from app.services.risk_rules.suspicious_process_rule import SuspiciousProcessRule
-from app.services.risk_rules.network_connection_rule import NetworkConnectionRule
-from app.services.risk_rules.file_changes_rule import FileChangesRule
-from app.services.risk_rules.process_chain_rule import ProcessChainRule
-from app.services.risk_rules.injection_rule import InjectionRule
-from app.services.risk_rules.living_off_land_rule import LivingOffLandRule
-from app.services.risk_rules.registry_rule import RegistryRule
-from app.services.risk_rules.credential_dumping_rule import CredentialDumpingRule
-from app.services.risk_rules.shadow_copy_rule import ShadowCopyRule
-from app.services.risk_rules.c2_communication_rule import C2CommunicationRule
-from app.services.risk_rules.lateral_movement_rule import LateralMovementRule
-from app.services.risk_rules.mass_file_modification_rule import MassFileModificationRule
+from app.services.detection.risk_rules import create_default_registry
+from app.services.detection.risk_rules.cpu_spike_rule import CpuSpikeRule
+from app.services.detection.risk_rules.suspicious_process_rule import SuspiciousProcessRule
+from app.services.detection.risk_rules.network_connection_rule import NetworkConnectionRule
+from app.services.detection.risk_rules.file_changes_rule import FileChangesRule
+from app.services.detection.risk_rules.process_chain_rule import ProcessChainRule
+from app.services.detection.risk_rules.injection_rule import InjectionRule
+from app.services.detection.risk_rules.living_off_land_rule import LivingOffLandRule
+from app.services.detection.risk_rules.registry_rule import RegistryRule
+from app.services.detection.risk_rules.credential_dumping_rule import CredentialDumpingRule
+from app.services.detection.risk_rules.shadow_copy_rule import ShadowCopyRule
+from app.services.detection.risk_rules.c2_communication_rule import C2CommunicationRule
+from app.services.detection.risk_rules.lateral_movement_rule import LateralMovementRule
+from app.services.detection.risk_rules.mass_file_modification_rule import MassFileModificationRule
 
 pytestmark = pytest.mark.asyncio
 

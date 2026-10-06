@@ -1,5 +1,5 @@
 import pytest
-from app.services.risk_rules.dns_tunneling_rule import (
+from app.services.detection.risk_rules.dns_tunneling_rule import (
     DnsAnalyzerService,
     DnsTunnelingRule,
 )

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import pytest
 from unittest.mock import AsyncMock
-from app.services.whitelist_service import WhitelistService
+from app.services.common.whitelist_service import WhitelistService
 from app.models.whitelist import WhitelistEntry
 from app.schemas.whitelist import WhitelistEntryCreate
 

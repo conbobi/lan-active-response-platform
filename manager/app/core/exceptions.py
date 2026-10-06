@@ -22,7 +22,7 @@ class ConflictError(AppException):
 
 
 class BandwidthExceededError(AppException):
-    def __init__(self, message: str = "Requested bandwidth exceeds available topology link capacity."):
+    def __init__(self, message: str = "Requested bandwidth exceeds available network capacity."):
         super().__init__(message=message, status_code=400)
 
 

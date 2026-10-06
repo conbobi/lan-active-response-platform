@@ -8,7 +8,7 @@ from app.schemas.process_chain_rule import (
     ProcessChainRuleUpdate,
     ProcessChainRuleOut
 )
-from app.services.process_chain_rule_service import ProcessChainRuleService
+from app.services.detection.process_chain_rule_service import ProcessChainRuleService
 
 router = APIRouter(tags=["Process Chain Rules"])
 

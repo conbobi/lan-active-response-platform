@@ -11,7 +11,7 @@ from app.schemas.incident import (
     IncidentNoteAddDTO,
     IncidentNoteOut
 )
-from app.services.incident_service import IncidentService
+from app.services.incident.incident_service import IncidentService
 
 router = APIRouter(tags=["Incidents"])
 

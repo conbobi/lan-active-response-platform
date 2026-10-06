@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, status, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
-from app.services.process_tree_service import ProcessTreeService
+from app.services.process.process_tree_service import ProcessTreeService
 from app.schemas.command import CommandOut
 
 router = APIRouter(tags=["Process & Root Cause Analysis"])

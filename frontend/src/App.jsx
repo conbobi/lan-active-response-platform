@@ -5,7 +5,6 @@ import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
 import Alerts from './pages/Alerts';
-import Network from './pages/Network';
 import Incidents from './pages/Incidents';
 import Commands from './pages/Commands';
 import RiskAssessment from './pages/RiskAssessment';
@@ -35,7 +34,6 @@ export default function App() {
           <Route path="/agents" element={<Agents />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/alerts" element={<Alerts />} />
-          <Route path="/network" element={<Network />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/actions" element={<ActionsHistory />} />
           <Route path="/policies" element={<Policies />} />

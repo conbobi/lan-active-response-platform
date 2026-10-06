@@ -15,10 +15,10 @@ from app.schemas.auto_rollback_setting import (
     AutoRollbackSettingRequest,
     AutoRollbackSettingResponse
 )
-from app.services.response_action_service import ResponseActionService
-from app.services.rollback_service import RollbackService
-from app.services.action_audit_log_service import ActionAuditLogService
-from app.services.setting_service import SettingService
+from app.services.response.response_action_service import ResponseActionService
+from app.services.response.rollback_service import RollbackService
+from app.services.common.audit_log_service import ActionAuditLogService
+from app.services.common.setting_service import SettingService
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(tags=["Response Actions & Rollback"])

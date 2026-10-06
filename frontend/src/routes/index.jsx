@@ -3,7 +3,6 @@ import React from 'react';
 import Dashboard from '../pages/Dashboard';
 import Agents from '../pages/Agents';
 import Alerts from '../pages/Alerts';
-import Network from '../pages/Network';
 import Incidents from '../pages/Incidents';
 import Commands from '../pages/Commands';
 import RiskAssessment from '../pages/RiskAssessment';
@@ -21,7 +20,6 @@ export const routes = [
   { path: '/', element: <Dashboard /> },
   { path: '/agents', element: <Agents /> },
   { path: '/alerts', element: <Alerts /> },
-  { path: '/network', element: <Network /> },
   { path: '/incidents', element: <Incidents /> },
   { path: '/commands', element: <Commands /> },
   { path: '/risk', element: <RiskAssessment /> },

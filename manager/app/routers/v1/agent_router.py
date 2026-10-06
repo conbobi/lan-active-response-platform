@@ -9,9 +9,8 @@ from app.schemas.heartbeat import HeartbeatDTO
 from app.schemas.command import CommandOut
 from app.schemas.enums import CommandStatus, AgentStatus
 from app.models.command import Command
-from app.services.agent_service import AgentService
-from app.services.topology_service import topology_facade
-from app.services.command_dispatcher import command_dispatcher
+from app.services.agent.agent_service import AgentService
+from app.services.core.command_dispatcher import command_dispatcher
 from app.repositories.agent_history_repository import AgentHistoryRepository
 from app.repositories.command_repository import CommandRepository
 
@@ -21,7 +20,8 @@ router = APIRouter(tags=["Agents"])
 @router.post("/heartbeat", status_code=status.HTTP_200_OK)
 async def agent_heartbeat(dto: HeartbeatDTO, db: AsyncSession = Depends(get_db)):
     """Update agent heartbeat and metrics."""
-    await topology_facade.process_heartbeat(dto, db)
+    service = AgentService(db)
+    await service.process_heartbeat(dto)
     return {"status": "ok", "message": "Heartbeat received"}
 
 

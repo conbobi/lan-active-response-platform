@@ -90,7 +90,7 @@ export default function Dashboard() {
     const handleSocketMessage = useCallback((msg) => {
         console.log('[Dashboard] WS Message received:', msg);
         const evt = msg.event || msg.type;
-        if (evt === 'heartbeat' || evt === 'topology_update' || evt === 'dead_agent') {
+        if (evt === 'heartbeat' || evt === 'dead_agent') {
             if (refreshAgents) refreshAgents();
         }
     }, [refreshAgents]);

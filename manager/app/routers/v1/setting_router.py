@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.schemas.setting import SystemSettingOut, SystemSettingUpdate
-from app.services.setting_service import SettingService
+from app.services.common.setting_service import SettingService
 
 router = APIRouter(tags=["Settings"])
 

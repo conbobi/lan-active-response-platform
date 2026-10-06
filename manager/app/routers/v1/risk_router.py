@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db
 from app.models.risk_score import RiskScoreRecord
 from app.schemas.risk import RiskAssessmentDTO, RiskScoreOut
-from app.services.risk_assessment_service import RiskAssessmentService
+from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.repositories.risk_score_repository import RiskScoreRepository
 
 router = APIRouter(tags=["Risk Assessment"])

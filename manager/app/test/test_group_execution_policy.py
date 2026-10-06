@@ -7,10 +7,10 @@ from app.models.agent import Agent
 from app.models.agent_group import AgentGroup, AgentGroupMember
 from app.models.response_policy import ResponsePolicy
 from app.models.response_action import ResponseAction
-from app.services.agent_group_service import AgentGroupService
-from app.services.response_policy_service import ResponsePolicyService
-from app.services.policy_engine_service import PolicyEngineService
-from app.services.rollback_service import RollbackService
+from app.services.agent.agent_group_service import AgentGroupService
+from app.services.response.response_policy_service import ResponsePolicyService
+from app.services.response.policy_engine_service import PolicyEngineService
+from app.services.response.rollback_service import RollbackService
 from app.schemas.response_action import UndoBatchResponse
 
 

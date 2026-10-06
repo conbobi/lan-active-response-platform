@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.schemas.flow import FlowCreate, FlowOut
-from app.services.flow_service import FlowService
+from app.services.network.flow_service import FlowService
 
 router = APIRouter(tags=["Flows"])
 

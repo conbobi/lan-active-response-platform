@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, status, Query
 
 from app.schemas.docker_status import ContainerStatusOut
-from app.services.docker_monitor_service import DockerMonitorService
+from app.services.agent.docker_monitor_service import DockerMonitorService
 
 logger = logging.getLogger("docker_router")
 

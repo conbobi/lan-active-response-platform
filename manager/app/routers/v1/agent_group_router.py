@@ -14,8 +14,8 @@ from app.schemas.agent_group import (
     GroupBatchActionResponse
 )
 from app.schemas.response_action import UndoBatchRequest, UndoBatchResponse
-from app.services.agent_group_service import AgentGroupService
-from app.services.rollback_service import RollbackService
+from app.services.agent.agent_group_service import AgentGroupService
+from app.services.response.rollback_service import RollbackService
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(tags=["Agent Groups & Batch Actions"])

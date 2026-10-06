@@ -10,7 +10,7 @@ from app.schemas.notification import (
     NotificationLogOut
 )
 from app.repositories.notification_repository import NotificationRepository
-from app.services.notification_service import NotificationService
+from app.services.common.notification_service import NotificationService
 from fastapi import Request, HTTPException
 router = APIRouter(tags=["Notifications"])
 

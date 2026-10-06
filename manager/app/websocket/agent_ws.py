@@ -9,12 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.websocket.connection_manager import connection_manager
 from app.schemas.heartbeat import HeartbeatDTO
-from app.schemas.topology import TopologyUpdateDTO
-from app.schemas.path_release import PathReleaseDTO
 from app.schemas.command_ack import CommandAckDTO
-from app.services.topology_service import topology_facade
-from app.services.command_dispatcher import command_dispatcher
-from app.services.risk_assessment_service import RiskAssessmentService
+from app.services.agent.agent_service import AgentService
+from app.services.core.command_dispatcher import command_dispatcher
+from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.models.process_info import ProcessInfo
 from app.repositories.process_info_repository import ProcessInfoRepository
 from app.models.flow import Flow
@@ -23,7 +21,7 @@ from app.models.event import Event
 from app.repositories.event_repository import EventRepository
 from app.schemas.enums import IncidentSeverity
 from app.schemas.incident import IncidentCreate
-from app.services.incident_service import IncidentService
+from app.services.incident.incident_service import IncidentService
 from app.models.auth_event import AuthEvent
 from app.repositories.auth_event_repository import AuthEventRepository
 from app.core.database import AsyncSessionLocal
@@ -65,7 +63,8 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str, proces
 async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) -> Tuple[Optional[dict], str]:
     dto = HeartbeatDTO(**data.get("payload", {}))
     active_agent_id = dto.agent_id or agent_id
-    await topology_facade.process_heartbeat(dto, session)
+    agent_svc = AgentService(session)
+    await agent_svc.process_heartbeat(dto)
     pending_cmds = await command_dispatcher.pull_pending_commands(active_agent_id, session)
     response_payload = {
         "status": "ack",
@@ -212,16 +211,6 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
     return None
 
 
-async def _handle_topology_update(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
-    dto = TopologyUpdateDTO(**data.get("payload", {}))
-    await topology_facade.handle_topology_update(dto, session)
-    return {"status": "ack", "message": "Topology update processed"}
-
-
-async def _handle_path_release(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
-    dto = PathReleaseDTO(**data.get("payload", {}))
-    released = await topology_facade.release_path(dto, session)
-    return {"status": "ack", "released": released}
 
 
 async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
@@ -311,8 +300,6 @@ MESSAGE_HANDLERS = {
     "TELEMETRY_RISK": _handle_telemetry_risk,
     "FLOW_STATS": _handle_flow_stats,
     "FIM_ALERT": _handle_fim_alert,
-    "TOPOLOGY_UPDATE": _handle_topology_update,
-    "PATH_RELEASE": _handle_path_release,
     "COMMAND_ACK": _handle_command_ack,
     "AUTH_EVENT": _handle_auth_event,
     "YARA_SCAN_ALERT": _handle_yara_scan_alert,

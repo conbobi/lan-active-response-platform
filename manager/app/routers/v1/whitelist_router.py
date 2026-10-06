@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db
 from app.core.exceptions import NotFoundError
 from app.schemas.whitelist import WhitelistEntryCreate, WhitelistEntryOut
-from app.services.whitelist_service import WhitelistService
+from app.services.common.whitelist_service import WhitelistService
 
 router = APIRouter(tags=["Whitelist"])
 
