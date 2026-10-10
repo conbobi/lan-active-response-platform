@@ -149,7 +149,7 @@ def collect_process_info():
     suspicious_keywords = [
         "mimikatz", "psexec", "chisel", "lazagne", "vssadmin", "ransomware_sim",
         "meterpreter", "cobaltstrike", "lsass.dump", "backdoor_sim", "credential_dump",
-        "lateral_movement", "c2_communication"
+        "lateral_movement", "c2_communication", "key_test", "keylog", "keylogger"
     ]
     processes = []
     try:

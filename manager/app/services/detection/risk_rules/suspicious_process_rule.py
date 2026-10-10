@@ -6,6 +6,15 @@ from typing import Any, Dict, Tuple, List, Set
 from app.services.detection.risk_rules.base import RiskRule
 
 TEMP_DIRECTORIES = ("/tmp/", "/dev/shm/", "/var/tmp/")
+SUSPICIOUS_TEMP_PATHS = (
+    # Linux
+    "/tmp/", "/dev/shm/", "/var/tmp/",
+    # Windows
+    "\\appdata\\local\\temp\\", "/appdata/local/temp/",
+    "\\windows\\temp\\", "/windows/temp/",
+    "c:\\temp\\", "c:/temp/",
+    "\\temp\\", "/temp/",
+)
 INTERPRETERS = {"python", "python3", "bash", "sh", "zsh", "perl", "ruby", "php"}
 
 
@@ -48,11 +57,15 @@ def is_name_in_blacklist(name: str, exe: str, cmdline: str, blacklist: List[str]
 
 def is_running_from_temp(p_dict: Dict[str, Any]) -> bool:
     """
-    Check if process executable or executed script is located in /tmp, /dev/shm, or /var/tmp.
+    Check if process executable or executed script is located in Linux or Windows temporary directories.
     """
     for field in ("exe", "path", "exe_path", "cwd"):
         val = str(p_dict.get(field) or "").strip().lower()
+        if not val:
+            continue
         if any(val.startswith(td) or val == td.rstrip("/") for td in TEMP_DIRECTORIES):
+            return True
+        if any(sp in val for sp in SUSPICIOUS_TEMP_PATHS):
             return True
 
     cmdline = str(p_dict.get("cmdline") or "").strip().lower()
@@ -62,12 +75,16 @@ def is_running_from_temp(p_dict: Dict[str, Any]) -> bool:
             first_tok = parts[0]
             if any(first_tok.startswith(td) for td in TEMP_DIRECTORIES):
                 return True
+            if any(sp in first_tok for sp in SUSPICIOUS_TEMP_PATHS):
+                return True
             first_name = Path(first_tok).name.removesuffix(".exe")
             if first_name in INTERPRETERS:
                 for arg in parts[1:]:
                     if arg.startswith("-"):
                         continue
                     if any(arg.startswith(td) for td in TEMP_DIRECTORIES):
+                        return True
+                    if any(sp in arg for sp in SUSPICIOUS_TEMP_PATHS):
                         return True
                     break
     return False
@@ -180,6 +197,9 @@ class SuspiciousProcessRule(RiskRule):
         "ransomware_sim",
         "meterpreter",
         "cobaltstrike",
+        "key_test",
+        "keylog",
+        "keylogger",
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:

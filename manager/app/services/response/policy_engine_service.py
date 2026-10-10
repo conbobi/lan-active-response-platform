@@ -39,7 +39,8 @@ class PolicyEngineService:
         agent_id: str,
         risk_score: float,
         context: Optional[Dict[str, Any]] = None,
-        dry_run: bool = True
+        dry_run: bool = True,
+        incident_id: Optional[str] = None
     ) -> PolicyEvaluateResponse:
         """
         Đánh giá điểm rủi ro của agent, xác định policy phù hợp và thực thi (hoặc dry-run).
@@ -172,12 +173,18 @@ class PolicyEngineService:
         action_params["policy_name"] = matched_policy.name
         action_params["reason"] = f"Auto policy '{matched_policy.name}' triggered by score {risk_score}"
 
+        # Resolve incident_id from context if not explicitly provided
+        effective_incident_id = incident_id
+        if not effective_incident_id and context and isinstance(context, dict):
+            effective_incident_id = context.get("incident_id")
+
         if scope == "agent":
             try:
                 act = await self.action_service.create_and_apply_action(
                     agent_id=agent_id,
                     action_type=matched_policy.action_type,
                     action_params=action_params,
+                    incident_id=effective_incident_id,
                     actor="policy_engine",
                     auto_rollback_seconds=matched_policy.auto_rollback_seconds
                 )
@@ -193,6 +200,7 @@ class PolicyEngineService:
                         group_id=g.id,
                         action_type=matched_policy.action_type,
                         action_params=action_params,
+                        incident_id=effective_incident_id,
                         actor="policy_engine",
                         auto_rollback_seconds=matched_policy.auto_rollback_seconds
                     )

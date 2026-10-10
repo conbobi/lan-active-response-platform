@@ -157,7 +157,8 @@ class AgentGroupService:
         action_type: str,
         action_params: Optional[Dict[str, Any]] = None,
         actor: str = "analyst",
-        auto_rollback_seconds: Optional[int] = None
+        auto_rollback_seconds: Optional[int] = None,
+        incident_id: Optional[str] = None
     ) -> GroupBatchActionResponse:
         """
         Thực thi batch Response Action trên tất cả các agent thuộc một nhóm.
@@ -189,6 +190,7 @@ class AgentGroupService:
                     agent_id=agent.id,
                     action_type=action_type,
                     action_params=enriched_params,
+                    incident_id=incident_id,
                     actor=actor,
                     auto_rollback_seconds=auto_rollback_seconds
                 )

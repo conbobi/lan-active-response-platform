@@ -290,6 +290,7 @@ class RiskAssessmentService:
         auto_kill_th = thresholds.get("auto_kill_threshold", 85.0)
 
         # 1. Automated Incident Creation if smoothed >= incident_creation_threshold
+        inc = None
         if smoothed >= incident_creation_th:
             incident_service = IncidentService(self.session)
             inc = await incident_service.create_from_risk(agent_id, smoothed, factors)
@@ -307,7 +308,7 @@ class RiskAssessmentService:
             suspect_keywords = [
                 "mimikatz", "nmap", "chisel", "psexec", "procdump",
                 "ransomware_sim", "backdoor_sim", "credential_dump", "lazagne",
-                "vssadmin", "meterpreter", "cobaltstrike"
+                "vssadmin", "meterpreter", "cobaltstrike", "key_test", "keylog", "keylogger"
             ]
             
             for proc in processes:
@@ -326,19 +327,35 @@ class RiskAssessmentService:
 
             killed_details = []
             for sproc in suspicious_procs:
-                kill_cmd = Command(
-                    id=f"cmd_{uuid.uuid4().hex[:12]}",
-                    agent_id=agent_id,
-                    action="kill_process_tree",
-                    payload={
-                        "pid": sproc["pid"],
-                        "process_name": sproc["name"],
-                        "reason": f"Automated Process Tree Kill triggered by Risk Score {smoothed} (threshold: {auto_kill_th})"
-                    },
-                    status=CommandStatus.PENDING
-                )
-                await cmd_repo.add(kill_cmd)
-                await command_dispatcher.push_command(kill_cmd.id, agent_id)
+                from app.services.response.response_action_service import ResponseActionService
+                act_service = ResponseActionService(self.session)
+                try:
+                    await act_service.create_and_apply_action(
+                        agent_id=agent_id,
+                        action_type="kill_process_tree",
+                        action_params={
+                            "pid": sproc["pid"],
+                            "process_name": sproc["name"],
+                            "reason": f"Automated Process Tree Kill triggered by Risk Score {smoothed} (threshold: {auto_kill_th})"
+                        },
+                        incident_id=inc.id if inc else None,
+                        actor="risk_assessment"
+                    )
+                except Exception as kill_act_err:
+                    logger.warning(f"ResponseActionService kill_process_tree failed, using raw command: {kill_act_err}")
+                    kill_cmd = Command(
+                        id=f"cmd_{uuid.uuid4().hex[:12]}",
+                        agent_id=agent_id,
+                        action="kill_process_tree",
+                        payload={
+                            "pid": sproc["pid"],
+                            "process_name": sproc["name"],
+                            "reason": f"Automated Process Tree Kill triggered by Risk Score {smoothed} (threshold: {auto_kill_th})"
+                        },
+                        status=CommandStatus.PENDING
+                    )
+                    await cmd_repo.add(kill_cmd)
+                    await command_dispatcher.push_command(kill_cmd.id, agent_id)
                 killed_details.append(f"PID {sproc['pid']} ({sproc['name']})")
                 logger.info(f"Dispatched kill_process_tree for PID {sproc['pid']} ({sproc['name']}) on agent '{agent_id}'")
 
@@ -360,7 +377,8 @@ class RiskAssessmentService:
                 agent_id=agent_id,
                 risk_score=smoothed,
                 context=factors,
-                dry_run=False
+                dry_run=False,
+                incident_id=inc.id if inc else None
             )
             if policy_res and policy_res.matched_policy and policy_res.executed:
                 policy_executed = True
@@ -375,19 +393,29 @@ class RiskAssessmentService:
         if not policy_executed:
             if action == "auto_isolate":
                 logger.warning(f"Critical risk score ({smoothed}) for agent '{agent_id}'. Triggering fallback auto-isolation!")
-                agent.isolate()
-
-                # Create isolate command
-                cmd_repo = CommandRepository(self.session)
-                cmd = Command(
-                    id=f"cmd_{uuid.uuid4().hex[:12]}",
-                    agent_id=agent_id,
-                    action="isolate",
-                    payload={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
-                    status=CommandStatus.PENDING
-                )
-                await cmd_repo.add(cmd)
-                await command_dispatcher.push_command(cmd.id, agent_id)
+                from app.services.response.response_action_service import ResponseActionService
+                act_service = ResponseActionService(self.session)
+                try:
+                    await act_service.create_and_apply_action(
+                        agent_id=agent_id,
+                        action_type="isolate",
+                        action_params={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
+                        incident_id=inc.id if inc else None,
+                        actor="policy_engine"
+                    )
+                except Exception as iso_err:
+                    logger.warning(f"ResponseActionService isolate failed, using raw command: {iso_err}")
+                    agent.isolate()
+                    cmd_repo = CommandRepository(self.session)
+                    cmd = Command(
+                        id=f"cmd_{uuid.uuid4().hex[:12]}",
+                        agent_id=agent_id,
+                        action="isolate",
+                        payload={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
+                        status=CommandStatus.PENDING
+                    )
+                    await cmd_repo.add(cmd)
+                    await command_dispatcher.push_command(cmd.id, agent_id)
 
                 # Send critical Telegram notification
                 msg = (
