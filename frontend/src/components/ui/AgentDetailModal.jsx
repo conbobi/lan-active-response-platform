@@ -4,12 +4,13 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import { useAgentHistory } from '../../hooks/useAgentHistory';
 import useActions from '../../hooks/useActions';
 import ActionTimeline from '../actions/ActionTimeline';
+import AgentSecurityContext from '../agents/AgentSecurityContext';
 import Badge from './Badge';
 import { FiX, FiCpu, FiHardDrive, FiShield, FiGlobe } from 'react-icons/fi';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-const TABS = ['Overview', 'CPU/RAM', 'Info', 'Mitigations'];
+const TABS = ['Overview', '🚨 Active Threats', 'CPU/RAM', 'Info', 'Mitigations'];
 
 export default function AgentDetailModal({ agent, onClose }) {
     const { history, loading } = useAgentHistory(agent?.id);
@@ -72,6 +73,9 @@ export default function AgentDetailModal({ agent, onClose }) {
                                 </div>
                             ))}
                         </div>
+                    )}
+                    {tab === '🚨 Active Threats' && (
+                        <AgentSecurityContext agent={agent} />
                     )}
                     {tab === 'CPU/RAM' && (
                         loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading...</p> : (

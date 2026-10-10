@@ -2,9 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import useIncidents from '../hooks/useIncidents';
 import { useAgents } from '../hooks/useAgents';
-import useActions from '../hooks/useActions';
-import { getIncidentNotes } from '../api/incidents';
-import ActionTimeline from '../components/actions/ActionTimeline';
+import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
@@ -88,36 +86,7 @@ export default function Incidents() {
   const [assignModalInc, setAssignModalInc] = useState(null);
   const [assigneeInput, setAssigneeInput] = useState('');
 
-  // Incident Notes & Quick Action State within Detail Modal
-  const [detailTab, setDetailTab] = useState('overview'); // 'overview', 'notes', 'actions'
-  const [incidentNotes, setIncidentNotes] = useState([]);
-  const [loadingNotes, setLoadingNotes] = useState(false);
-  const [newNoteContent, setNewNoteContent] = useState('');
-  const [quickActionPID, setQuickActionPID] = useState('');
-  const [quickActionIP, setQuickActionIP] = useState('');
-  const [actionSuccessMsg, setActionSuccessMsg] = useState('');
 
-  // Stateful Response Actions for selectedIncident
-  const {
-    actions: incidentActions,
-    loading: actionsLoading,
-    actionLoading: actionsActionLoading,
-    fetchActions: refreshIncidentActions,
-    handleUndo: handleUndoIncidentAction,
-    handleUndoAll: handleUndoAllIncidentActions,
-  } = useActions({ incidentId: selectedIncident?.id });
-
-  // Load Notes when selectedIncident opens or changes
-  useEffect(() => {
-    if (selectedIncident) {
-      setLoadingNotes(true);
-      setActionSuccessMsg('');
-      getIncidentNotes(selectedIncident.id)
-        .then((notes) => setIncidentNotes(notes))
-        .catch(() => setIncidentNotes([]))
-        .finally(() => setLoadingNotes(false));
-    }
-  }, [selectedIncident]);
 
   // KPI Calculations
   const kpis = useMemo(() => {
@@ -357,31 +326,7 @@ export default function Incidents() {
     }
   };
 
-  const onAddNoteSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedIncident || !newNoteContent.trim()) return;
-    try {
-      await handleAddNote(selectedIncident.id, newNoteContent.trim(), 'SOC Analyst');
-      setNewNoteContent('');
-      const updatedNotes = await getIncidentNotes(selectedIncident.id);
-      setIncidentNotes(updatedNotes);
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
-  const onRunAction = async (actionType, params = {}) => {
-    if (!selectedIncident) return;
-    try {
-      const res = await handleExecuteAction(selectedIncident.id, actionType, params, 'SOC Lead');
-      setActionSuccessMsg(res.message || `Action ${actionType} executed successfully.`);
-      const updatedNotes = await getIncidentNotes(selectedIncident.id);
-      setIncidentNotes(updatedNotes);
-      await refreshIncidentActions();
-    } catch (err) {
-      setActionSuccessMsg(`Action failed: ${err.message || 'Execution error'}`);
-    }
-  };
 
   const renderStatusBadge = (status) => {
     switch (status) {
@@ -659,276 +604,15 @@ export default function Incidents() {
         )}
       </div>
 
-      {/* Comprehensive Incident Detail & SOC Action Modal */}
-      <Modal
-        isOpen={!!selectedIncident}
-        onClose={() => setSelectedIncident(null)}
-        title={selectedIncident ? `Incident Investigation: ${selectedIncident.id}` : ''}
-      >
-        {selectedIncident && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', width: '100%', maxWidth: 780 }}>
-            {/* Modal Sub-Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: 'var(--bg-secondary)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-              <div>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.3rem' }}>
-                  {selectedIncident.title}
-                </h3>
-                <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.82rem', color: 'var(--text-tertiary)' }}>
-                  <span>Agent ID: <strong style={{ color: 'var(--primary)' }}>{selectedIncident.agentId}</strong></span>
-                  <span>Assigned: <strong>{selectedIncident.assignedTo}</strong></span>
-                  <span>Created: <strong>{new Date(selectedIncident.createdAt).toLocaleString()}</strong></span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                {renderSeverityBadge(selectedIncident.severity)}
-                {renderStatusBadge(selectedIncident.status)}
-              </div>
-            </div>
-
-            {/* Modal Tabs */}
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', gap: '1rem' }}>
-              <button
-                onClick={() => setDetailTab('overview')}
-                style={{
-                  padding: '0.5rem 0.85rem',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: detailTab === 'overview' ? '2px solid var(--primary)' : 'none',
-                  color: detailTab === 'overview' ? 'var(--primary)' : 'var(--text-secondary)',
-                  fontWeight: detailTab === 'overview' ? 700 : 500,
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                <FiFileText size={14} /> Overview & Telemetry
-              </button>
-              <button
-                onClick={() => setDetailTab('notes')}
-                style={{
-                  padding: '0.5rem 0.85rem',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: detailTab === 'notes' ? '2px solid var(--primary)' : 'none',
-                  color: detailTab === 'notes' ? 'var(--primary)' : 'var(--text-secondary)',
-                  fontWeight: detailTab === 'notes' ? 700 : 500,
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                <FiActivity size={14} /> Audit Trail & Notes ({incidentNotes.length})
-              </button>
-              <button
-                onClick={() => setDetailTab('actions')}
-                style={{
-                  padding: '0.5rem 0.85rem',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: detailTab === 'actions' ? '2px solid var(--primary)' : 'none',
-                  color: detailTab === 'actions' ? 'var(--primary)' : 'var(--text-secondary)',
-                  fontWeight: detailTab === 'actions' ? 700 : 500,
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                <FiShield size={14} color="var(--error)" /> Quick Mitigation Response
-              </button>
-            </div>
-
-            {/* TAB 1: OVERVIEW */}
-            {detailTab === 'overview' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div>
-                  <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
-                    Detailed Incident Description
-                  </h4>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', whiteSpace: 'pre-wrap' }}>
-                    {selectedIncident.description}
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Risk Score Assessment</div>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: selectedIncident.riskScore >= 80 ? 'var(--error)' : 'var(--primary)', marginTop: '0.2rem' }}>
-                      {selectedIncident.riskScore} / 100
-                    </div>
-                  </div>
-
-                  <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Target Host Agent</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)', marginTop: '0.2rem' }}>
-                      {selectedIncident.agentId}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Status Transition Quick Bar */}
-                <div style={{ marginTop: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
-                    Change Incident Lifecycle Status:
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <Button variant={selectedIncident.status === 'contained' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'contained')}>
-                      Mark Contained
-                    </Button>
-                    <Button variant={selectedIncident.status === 'resolved' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'resolved')}>
-                      Mark Resolved
-                    </Button>
-                    <Button variant={selectedIncident.status === 'false_positive' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'false_positive')}>
-                      Mark False Positive
-                    </Button>
-                    <Button variant={selectedIncident.status === 'closed' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'closed')}>
-                      Close Incident
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 2: AUDIT TRAIL & NOTES */}
-            {detailTab === 'notes' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem', paddingRight: '0.3rem' }}>
-                  {loadingNotes ? (
-                    <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading audit trail...</div>
-                  ) : incidentNotes.length === 0 ? (
-                    <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
-                      No analyst notes or audit logs recorded yet.
-                    </div>
-                  ) : (
-                    incidentNotes.map((note) => (
-                      <div
-                        key={note.id || Math.random()}
-                        style={{
-                          padding: '0.65rem 0.85rem',
-                          background: 'var(--bg-secondary)',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          fontSize: '0.85rem',
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                          <span style={{ fontWeight: 700, color: 'var(--primary)' }}>[{note.user || 'system'}]</span>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                            {note.created_at ? new Date(note.created_at).toLocaleString() : ''}
-                          </span>
-                        </div>
-                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{note.content}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Add Note Form */}
-                <form onSubmit={onAddNoteSubmit} style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                  <input
-                    type="text"
-                    placeholder="Type an analyst note or investigation log comment..."
-                    value={newNoteContent}
-                    onChange={(e) => setNewNoteContent(e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: '0.55rem 0.8rem',
-                      background: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.875rem',
-                    }}
-                  />
-                  <Button type="submit" variant="primary" iconLeft={<FiSend size={14} />}>
-                    Add Note
-                  </Button>
-                </form>
-              </div>
-            )}
-
-            {/* TAB 3: QUICK MITIGATION RESPONSE */}
-            {detailTab === 'actions' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {actionSuccessMsg && (
-                  <div style={{ padding: '0.6rem 0.85rem', background: 'rgba(34,197,94,0.1)', border: '1px solid var(--success)', borderRadius: 'var(--radius-sm)', color: 'var(--success)', fontSize: '0.85rem' }}>
-                    {actionSuccessMsg}
-                  </div>
-                )}
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  {/* Action 1: Isolate Agent */}
-                  <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                    <div>
-                      <h4 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
-                        <FiLock size={16} /> Isolate Host Network
-                      </h4>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-                        Immediately isolate agent <strong>{selectedIncident.agentId}</strong> from network communications to prevent lateral movement.
-                      </p>
-                    </div>
-                    <Button variant="danger" size="sm" style={{ marginTop: '0.75rem' }} disabled={actionLoading} onClick={() => onRunAction('isolate')}>
-                      Isolate Host ({selectedIncident.agentId})
-                    </Button>
-                  </div>
-
-                  {/* Action 2: Kill Process Tree */}
-                  <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                    <div>
-                      <h4 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
-                        <FiLayers size={16} /> Terminate Process Tree
-                      </h4>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
-                        Dispatch kill_process_tree command to recursively kill malicious process and its children.
-                      </p>
-                      <input
-                        type="number"
-                        placeholder="Enter Target PID (e.g. 4444)..."
-                        value={quickActionPID}
-                        onChange={(e) => setQuickActionPID(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '0.45rem 0.6rem',
-                          background: 'var(--bg-primary)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius-sm)',
-                          color: 'var(--text-primary)',
-                          fontSize: '0.8rem',
-                        }}
-                      />
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      style={{ marginTop: '0.75rem' }}
-                      disabled={actionLoading || !quickActionPID}
-                      onClick={() => onRunAction('kill_process_tree', { pid: quickActionPID })}
-                    >
-                      Kill Process Tree (PID {quickActionPID || '...'})
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Stateful Response Actions & Rollback Timeline */}
-                <div style={{ marginTop: '1.25rem' }}>
-                  <ActionTimeline
-                    actions={incidentActions}
-                    onUndo={handleUndoIncidentAction}
-                    onUndoAll={handleUndoAllIncidentActions}
-                    loading={actionsLoading}
-                    actionLoading={actionsActionLoading}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+      {/* 5-Tab Storyboard Incident Detail Modal */}
+      {selectedIncident && (
+        <IncidentDetailModal
+          incident={selectedIncident}
+          isOpen={!!selectedIncident}
+          onClose={() => setSelectedIncident(null)}
+          onRefresh={refreshIncidents}
+        />
+      )}
 
       {/* Assign Analyst Modal */}
       <Modal
