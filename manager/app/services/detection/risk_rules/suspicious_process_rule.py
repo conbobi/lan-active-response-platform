@@ -209,6 +209,7 @@ class SuspiciousProcessRule(RiskRule):
 
         suspicious_list = self.config.get("suspicious_names", self.DEFAULT_SUSPICIOUS_NAMES)
         suspicious_proc_count = 0
+        high_severity_count = 0
         threat_hash_count = 0
         proc_names: List[str] = []
 
@@ -241,7 +242,7 @@ class SuspiciousProcessRule(RiskRule):
             # 1. Tên trong blacklist
             c1_blacklist = is_name_in_blacklist(name, exe, cmdline, suspicious_list)
 
-            # 2. Chạy từ /tmp, /dev/shm, /var/tmp
+            # 2. Chạy từ /tmp, /dev/shm, /var/tmp hoặc Windows temp
             c2_temp_dir = is_running_from_temp(p_dict)
 
             # 3. Có kết nối mạng ra ngoài
@@ -261,6 +262,8 @@ class SuspiciousProcessRule(RiskRule):
             # Only count as suspicious if at least one condition is met
             if c1_blacklist or c2_temp_dir or c3_outbound or c4_threat_intel:
                 suspicious_proc_count += 1
+                if (c1_blacklist and c2_temp_dir) or (c1_blacklist and c3_outbound) or (c2_temp_dir and c3_outbound):
+                    high_severity_count += 1
                 display_name = p_dict.get("name") or name or "suspicious_process"
                 if display_name not in proc_names:
                     proc_names.append(display_name)
@@ -269,7 +272,10 @@ class SuspiciousProcessRule(RiskRule):
         reasons = []
 
         if suspicious_proc_count > 0:
-            score += min(45.0, suspicious_proc_count * 25.0)
+            if high_severity_count > 0:
+                score += min(60.0, 50.0 + (suspicious_proc_count - 1) * 15.0)
+            else:
+                score += min(45.0, suspicious_proc_count * 25.0)
             reasons.append(f"Found {suspicious_proc_count} suspicious processes: {', '.join(proc_names)}")
 
         if threat_hash_count > 0:
