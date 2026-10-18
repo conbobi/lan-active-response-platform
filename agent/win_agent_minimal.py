@@ -12,10 +12,58 @@ MANAGER_URL = os.getenv("MANAGER_URL", "ws://192.168.30.105:8005/ws/agent")
 INTERVAL = 15
 
 
+import re
+
+SUSPICIOUS_PATTERNS = [
+    # Tool tấn công cụ thể — match full word/pattern
+    r"\bmimikatz\b",
+    r"\bmeterpreter\b",
+    r"\bcobaltstrike\b",
+    r"\blazagne\b",
+    r"\bprocdump(?:\.exe)?\b.*\blsass\b",       # procdump dump lsass
+    r"\bcomsvcs\.dll\b.*MiniDump",              # LOLBin
+    r"\bsekurlsa::",                            # mimikatz commands
+    r"\blsadump::",
+    r"\bkerberos::golden",
+
+    # Reverse shell patterns
+    r"\bnc(?:\.exe)?\b.*-e\b.*(?:cmd|powershell|sh|bash)",  # nc reverse shell
+    r"\bncat\b.*-e\b",
+    r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",         # PS encoded
+    r"\bpowershell\b.*-w(?:indowstyle)?\s+hidden",
+
+    # MSBuild inline exec (đã có trong living_off_land nhưng backup)
+    r"\bmsbuild(?:\.exe)?\b.*/t:Run",
+
+    # Certificate abuse
+    r"\bcertutil\b.*-urlcache.*-split.*-f\s+http",
+    r"\bcertutil\b.*-decodehex",
+
+    # Suspicious paths
+    r"\\users\\public\\.*\.(?:exe|dll|ps1|vbs|js)",
+    r"\\appdata\\local\\temp\\.*\.(?:exe|dll|ps1|vbs|js)",
+]
+
+
+def is_process_suspicious(name: str, cmdline: str, exe: str = "") -> bool:
+    """Check process suspicion — KHÔNG dựa vào tên process, chỉ cmdline/path."""
+    if not cmdline or not name:
+        return False
+
+    full_str = f"{name} {cmdline} {exe}".lower()
+
+    # Match patterns (regex)
+    for pattern in SUSPICIOUS_PATTERNS:
+        if re.search(pattern, full_str, re.IGNORECASE):
+            return True
+
+    return False
+
+
 def collect_processes() -> List[Dict[str, Any]]:
     """
     Collect running processes on Windows using psutil.
-    Extracts pid, ppid, name, exe path, and command line arguments.
+    Extracts pid, ppid, name, exe path, command line arguments, and marks is_suspicious.
     """
     processes = []
     for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline']):
@@ -27,12 +75,17 @@ def collect_processes() -> List[Dict[str, Any]]:
             else:
                 cmdline = str(cmdline_raw or "")
 
+            name = info.get("name") or ""
+            exe = info.get("exe") or ""
+            is_susp = is_process_suspicious(name, cmdline, exe)
+
             processes.append({
                 "pid": info.get("pid"),
                 "ppid": info.get("ppid"),
-                "name": info.get("name") or "",
-                "exe": info.get("exe") or "",
+                "name": name,
+                "exe": exe,
                 "cmdline": cmdline,
+                "is_suspicious": is_susp,
             })
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue

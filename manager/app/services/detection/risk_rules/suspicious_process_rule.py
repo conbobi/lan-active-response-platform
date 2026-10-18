@@ -1,180 +1,7 @@
 import os
 import re
-import socket
-from pathlib import Path
-from typing import Any, Dict, Tuple, List, Set
+from typing import Any, Dict, Tuple, List
 from app.services.detection.risk_rules.base import RiskRule
-
-TEMP_DIRECTORIES = ("/tmp/", "/dev/shm/", "/var/tmp/")
-SUSPICIOUS_TEMP_PATHS = (
-    # Linux
-    "/tmp/", "/dev/shm/", "/var/tmp/",
-    # Windows
-    "\\appdata\\local\\temp\\", "/appdata/local/temp/",
-    "\\windows\\temp\\", "/windows/temp/",
-    "c:\\temp\\", "c:/temp/",
-    "\\temp\\", "/temp/",
-)
-INTERPRETERS = {"python", "python3", "bash", "sh", "zsh", "perl", "ruby", "php"}
-
-
-def is_name_in_blacklist(name: str, exe: str, cmdline: str, blacklist: List[str]) -> bool:
-    """
-    Check if process name, executable basename, or command line matches any blacklist entry.
-    Uses word-boundary checks to prevent substring false positives (e.g. 'nc' matching 'async' or 'function').
-    """
-    if not blacklist:
-        return False
-
-    normalized_bl = {s.lower().removesuffix(".exe").strip() for s in blacklist if s}
-
-    # 1. Exact name match (stripping .exe)
-    name_clean = name.lower().removesuffix(".exe").strip()
-    if name_clean:
-        if name_clean in normalized_bl:
-            return True
-        if any(name_clean.startswith(f"{b}.") for b in normalized_bl):
-            return True
-
-    # 2. Exe basename match
-    if exe:
-        exe_clean = Path(exe).name.lower().removesuffix(".exe").strip()
-        if exe_clean:
-            if exe_clean in normalized_bl:
-                return True
-            if any(exe_clean.startswith(f"{b}.") for b in normalized_bl):
-                return True
-
-    # 3. Cmdline word-boundary match
-    if cmdline:
-        for b in normalized_bl:
-            pattern = rf"(?:\A|[^a-zA-Z0-9_\-\.]){re.escape(b)}(?:\.exe)?(?:\Z|[^a-zA-Z0-9_\-\.])"
-            if re.search(pattern, cmdline, re.IGNORECASE):
-                return True
-
-    return False
-
-
-def is_running_from_temp(p_dict: Dict[str, Any]) -> bool:
-    """
-    Check if process executable or executed script is located in Linux or Windows temporary directories.
-    """
-    for field in ("exe", "path", "exe_path", "cwd"):
-        val = str(p_dict.get(field) or "").strip().lower()
-        if not val:
-            continue
-        if any(val.startswith(td) or val == td.rstrip("/") for td in TEMP_DIRECTORIES):
-            return True
-        if any(sp in val for sp in SUSPICIOUS_TEMP_PATHS):
-            return True
-
-    cmdline = str(p_dict.get("cmdline") or "").strip().lower()
-    if cmdline:
-        parts = cmdline.split()
-        if parts:
-            first_tok = parts[0]
-            if any(first_tok.startswith(td) for td in TEMP_DIRECTORIES):
-                return True
-            if any(sp in first_tok for sp in SUSPICIOUS_TEMP_PATHS):
-                return True
-            first_name = Path(first_tok).name.removesuffix(".exe")
-            if first_name in INTERPRETERS:
-                for arg in parts[1:]:
-                    if arg.startswith("-"):
-                        continue
-                    if any(arg.startswith(td) for td in TEMP_DIRECTORIES):
-                        return True
-                    if any(sp in arg for sp in SUSPICIOUS_TEMP_PATHS):
-                        return True
-                    break
-    return False
-
-
-def extract_outbound_network_entities(telemetry: Dict[str, Any]) -> Tuple[Set[int], Set[str]]:
-    """
-    Extract set of PIDs and process names that have outbound network connections
-    (non-loopback destination, non-LISTEN status, ignoring Manager IP and agent heartbeat port 8000).
-    """
-    outbound_pids: Set[int] = set()
-    outbound_proc_names: Set[str] = set()
-
-    ignored_ips = {"127.0.0.1", "0.0.0.0", "localhost", "::1"}
-    manager_ip = os.getenv("MANAGER_IP", "").strip()
-    if manager_ip:
-        ignored_ips.add(manager_ip)
-
-    try:
-        ignored_ips.add(socket.gethostbyname("manager"))
-    except Exception:
-        pass
-
-    try:
-        ignored_ips.add(socket.gethostbyname(socket.gethostname()))
-    except Exception:
-        pass
-
-    for conn in telemetry.get("network_connections", []):
-        c_dict = conn if isinstance(conn, dict) else conn.model_dump() if hasattr(conn, "model_dump") else getattr(conn, "__dict__", {})
-        dst_ip = str(c_dict.get("dst_ip") or "").strip()
-        dst_port = int(c_dict.get("dst_port") or 0)
-        status = str(c_dict.get("status") or "").upper()
-
-        # Ignore local, docker DNS (127.0.0.11), manager IP, and manager port 8000/8005
-        if dst_ip.startswith("127.") or dst_ip in ignored_ips or dst_port in (8000, 8005):
-            continue
-
-        if dst_ip and status != "LISTEN":
-            pid = c_dict.get("pid")
-            if pid is not None:
-                try:
-                    outbound_pids.add(int(pid))
-                except (ValueError, TypeError):
-                    pass
-            p_name = str(c_dict.get("process_name") or c_dict.get("name") or "").strip().lower()
-            if p_name:
-                outbound_proc_names.add(p_name)
-
-    return outbound_pids, outbound_proc_names
-
-
-def has_outbound_network(
-    p_dict: Dict[str, Any],
-    outbound_pids: Set[int],
-    outbound_proc_names: Set[str]
-) -> bool:
-    """
-    Check if process has an active outbound network connection.
-    """
-    # 1. Explicit flag on process dictionary
-    if p_dict.get("has_outbound_network") or p_dict.get("has_outbound") or p_dict.get("has_network"):
-        return True
-
-    # 2. PID correlation from telemetry network_connections
-    pid = p_dict.get("pid")
-    if pid is not None:
-        try:
-            if int(pid) in outbound_pids:
-                return True
-        except (ValueError, TypeError):
-            pass
-
-    # 3. Process name correlation if network_connections specifically named it
-    name = str(p_dict.get("name") or "").strip().lower()
-    if name and name in outbound_proc_names:
-        return True
-
-    # 4. Nested connections in process dict
-    for conn_key in ("connections", "network_connections"):
-        proc_conns = p_dict.get(conn_key)
-        if isinstance(proc_conns, list):
-            for c in proc_conns:
-                if isinstance(c, dict):
-                    dst = str(c.get("dst_ip") or "").strip()
-                    status = str(c.get("status") or "").upper()
-                    if dst and dst not in {"127.0.0.1", "0.0.0.0", "localhost", "::1"} and status != "LISTEN":
-                        return True
-
-    return False
 
 
 class SuspiciousProcessRule(RiskRule):
@@ -184,22 +11,55 @@ class SuspiciousProcessRule(RiskRule):
     enabled = True
     weight = 1.0
     category = "os"
+    base_score = 1.0
 
-    DEFAULT_SUSPICIOUS_NAMES = [
-        "mimikatz",
-        "psexec",
-        "nc",
-        "ncat",
-        "nmap",
-        "chisel",
-        "lazagne",
-        "vssadmin",
-        "ransomware_sim",
-        "meterpreter",
-        "cobaltstrike",
-        "key_test",
-        "keylog",
-        "keylogger",
+    SUSPICIOUS_PATTERNS = [
+        # Tool tấn công cụ thể — match full word/pattern
+        r"\bmimikatz\b",
+        r"\bmeterpreter\b",
+        r"\bcobaltstrike\b",
+        r"\blazagne\b",
+        r"\bprocdump(?:\.exe)?\b.*\blsass\b",
+        r"\bcomsvcs\.dll\b.*MiniDump",
+        r"\bsekurlsa::",
+        r"\blsadump::",
+        r"\bkerberos::golden",
+
+        # Reverse shell patterns
+        r"\bnc(?:\.exe)?\b.*-e\b",
+        r"\bnc(?:\.exe)?\b.*-l",
+        r"\bncat\b.*-e\b",
+        r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",
+        r"\bpowershell\b.*-w(?:indowstyle)?\s+hidden",
+
+        # MSBuild inline exec
+        r"\bmsbuild(?:\.exe)?\b.*/t:Run",
+
+        # Certificate abuse
+        r"\bcertutil\b.*-urlcache.*-split",
+        r"\bcertutil\b.*-decodehex",
+
+        # Suspicious paths
+        r"\\users\\public\\.*\.(?:exe|dll|ps1)",
+        r"\\appdata\\local\\temp\\.*\.(?:exe|dll|ps1)",
+
+        # Test simulations & admin abuse
+        r"\bkey_test\b",
+        r"\bransomware_sim\b",
+        r"\bbackdoor_sim\b",
+        r"\bpsexec\b",
+        r"\bchisel\b",
+    ]
+
+    HIGH_SEVERITY_PATTERNS = [
+        r"\bnc(?:\.exe)?\b.*-e\b",
+        r"\bncat\b.*-e\b",
+        r"\bmimikatz\b",
+        r"\bmeterpreter\b",
+        r"\bcobaltstrike\b",
+        r"\bprocdump(?:\.exe)?\b.*\blsass\b",
+        r"\bcomsvcs\.dll\b.*MiniDump",
+        r"\bpowershell\b.*-enc\b",
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
@@ -207,30 +67,28 @@ class SuspiciousProcessRule(RiskRule):
         if not processes:
             return 0.0, ""
 
-        suspicious_list = self.config.get("suspicious_names", self.DEFAULT_SUSPICIOUS_NAMES)
-        suspicious_proc_count = 0
-        high_severity_count = 0
-        threat_hash_count = 0
-        proc_names: List[str] = []
-
         threat_intel_service = context.get("threat_intel_service")
         whitelist_service = context.get("whitelist_service")
         agent_id = context.get("agent_id")
 
-        outbound_pids, outbound_proc_names = extract_outbound_network_entities(telemetry)
+        suspicious_count = 0
+        has_high_severity = False
+        threat_hash_count = 0
+        proc_names: List[str] = []
 
         for proc in processes:
             p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
-            name = str(p_dict.get("name", "")).strip().lower()
-            exe = str(p_dict.get("exe") or p_dict.get("path") or p_dict.get("exe_path") or "").strip()
-            cmdline = str(p_dict.get("cmdline", "")).strip().lower()
+            name = str(p_dict.get("name") or "").strip().lower()
+            cmdline = str(p_dict.get("cmdline") or "").strip().lower()
+            exe = str(p_dict.get("exe") or p_dict.get("path") or p_dict.get("exe_path") or "").strip().lower()
+            is_susp_flag = bool(p_dict.get("is_suspicious", False))
             p_hash = p_dict.get("hash")
 
             # Skip the LARP agent process itself
             if "agent.py" in cmdline or name == "agent.py":
                 continue
 
-            # Check whitelist first
+            # Check whitelist first if available
             if whitelist_service:
                 try:
                     if await whitelist_service.is_whitelisted(agent_id=agent_id, process_name=name, path=exe):
@@ -238,45 +96,55 @@ class SuspiciousProcessRule(RiskRule):
                 except Exception:
                     pass
 
-            # 4 conditions:
-            # 1. Tên trong blacklist
-            c1_blacklist = is_name_in_blacklist(name, exe, cmdline, suspicious_list)
-
-            # 2. Chạy từ /tmp, /dev/shm, /var/tmp hoặc Windows temp
-            c2_temp_dir = is_running_from_temp(p_dict)
-
-            # 3. Có kết nối mạng ra ngoài
-            c3_outbound = has_outbound_network(p_dict, outbound_pids, outbound_proc_names)
-
-            # 4. Hash khớp Threat Intel
-            c4_threat_intel = False
+            # Threat Intel hash check
             if p_hash and threat_intel_service:
                 try:
                     intel_res = await threat_intel_service.check_hash(p_hash)
                     if intel_res and intel_res.get("is_malicious"):
-                        c4_threat_intel = True
                         threat_hash_count += 1
                 except Exception:
                     pass
 
-            # Only count as suspicious if at least one condition is met
-            if c1_blacklist or c2_temp_dir or c3_outbound or c4_threat_intel:
-                suspicious_proc_count += 1
-                if (c1_blacklist and c2_temp_dir) or (c1_blacklist and c3_outbound) or (c2_temp_dir and c3_outbound):
-                    high_severity_count += 1
+            if not cmdline and not exe and not is_susp_flag:
+                continue
+
+            full_str = f"{name} {cmdline} {exe}".strip()
+            matched = False
+
+            # Match patterns cụ thể (KHÔNG substring match tên process)
+            for pattern in self.SUSPICIOUS_PATTERNS:
+                if re.search(pattern, full_str, re.IGNORECASE):
+                    matched = True
+                    break
+
+            # Check if binary executable itself is located directly in temp directories
+            if not matched and exe:
+                if exe.startswith(("/tmp/", "/dev/shm/", "/var/tmp/", "\\temp\\", "c:\\temp\\")):
+                    matched = True
+
+            if not matched and is_susp_flag:
+                matched = True
+
+            if matched:
+                suspicious_count += 1
                 display_name = p_dict.get("name") or name or "suspicious_process"
                 if display_name not in proc_names:
                     proc_names.append(display_name)
 
+                for hp in self.HIGH_SEVERITY_PATTERNS:
+                    if re.search(hp, full_str, re.IGNORECASE):
+                        has_high_severity = True
+                        break
+
         score = 0.0
         reasons = []
 
-        if suspicious_proc_count > 0:
-            if high_severity_count > 0:
-                score += min(60.0, 50.0 + (suspicious_proc_count - 1) * 15.0)
+        if suspicious_count > 0:
+            if has_high_severity:
+                score += min(60.0, max(50.0, suspicious_count * 25.0))
             else:
-                score += min(45.0, suspicious_proc_count * 25.0)
-            reasons.append(f"Found {suspicious_proc_count} suspicious processes: {', '.join(proc_names)}")
+                score += min(45.0, suspicious_count * 25.0)
+            reasons.append(f"Found {suspicious_count} suspicious processes: {', '.join(proc_names[:5])}")
 
         if threat_hash_count > 0:
             score += 40.0

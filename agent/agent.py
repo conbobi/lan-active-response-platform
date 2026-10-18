@@ -141,16 +141,64 @@ def collect_stats():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
+SUSPICIOUS_PATTERNS = [
+    # Tool tấn công cụ thể — match full word/pattern
+    r"\bmimikatz\b",
+    r"\bmeterpreter\b",
+    r"\bcobaltstrike\b",
+    r"\blazagne\b",
+    r"\bprocdump(?:\.exe)?\b.*\blsass\b",
+    r"\bcomsvcs\.dll\b.*MiniDump",
+    r"\bsekurlsa::",
+    r"\blsadump::",
+    r"\bkerberos::golden",
+    r"\bkey_test\b",
+    r"\bransomware_sim\b",
+    r"\bbackdoor_sim\b",
+    r"\bpsexec\b",
+    r"\bchisel\b",
+    r"\bvssadmin\b",
+
+    # Reverse shell patterns
+    r"\bnc(?:\.exe)?\b.*-e\b.*(?:cmd|powershell|sh|bash)",
+    r"\bnc(?:\.exe)?\b\s+-[a-zA-Z0-9]*[e|l]",
+    r"\bncat\b.*-e\b",
+    r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",
+    r"\bpowershell\b.*-w(?:indowstyle)?\s+hidden",
+
+    # MSBuild inline exec
+    r"\bmsbuild(?:\.exe)?\b.*/t:Run",
+
+    # Certificate abuse
+    r"\bcertutil\b.*-urlcache.*-split.*-f\s+http",
+    r"\bcertutil\b.*-decodehex",
+
+    # Suspicious paths
+    r"\\users\\public\\.*\.(?:exe|dll|ps1|vbs|js)",
+    r"\\appdata\\local\\temp\\.*\.(?:exe|dll|ps1|vbs|js)",
+    r"(?:/tmp/|/dev/shm/|/var/tmp/).+\.(?:sh|py|elf|bin)",
+]
+
+
+def is_process_suspicious(name: str, cmdline: str, exe: str = "") -> bool:
+    """Check process suspicion — KHÔNG dựa vào tên process, chỉ cmdline/path."""
+    if not cmdline and not exe:
+        return False
+
+    full_str = f"{name} {cmdline} {exe}".lower()
+
+    for pattern in SUSPICIOUS_PATTERNS:
+        if re.search(pattern, full_str, re.IGNORECASE):
+            return True
+
+    return False
+
+
 def collect_process_info():
     """
     Thu thập thông tin toàn bộ tiến trình đang chạy trên host agent.
     Bao gồm PID, parent PID (ppid), name, exe, cmdline, cpu/memory %, và đánh dấu is_suspicious.
     """
-    suspicious_keywords = [
-        "mimikatz", "psexec", "chisel", "lazagne", "vssadmin", "ransomware_sim",
-        "meterpreter", "cobaltstrike", "lsass.dump", "backdoor_sim", "credential_dump",
-        "lateral_movement", "c2_communication", "key_test", "keylog", "keylogger"
-    ]
     processes = []
     try:
         for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent','status']):
@@ -168,17 +216,7 @@ def collect_process_info():
                 cpu_pct = float(info.get('cpu_percent') or 0.0)
                 mem_pct = float(info.get('memory_percent') or 0.0)
 
-                full_str = f"{name} {exe} {cmdline}".lower()
-                is_suspicious = False
-                for s in suspicious_keywords:
-                    if s.lower() in full_str:
-                        is_suspicious = True
-                        break
-                if not is_suspicious:
-                    for s in ("nc", "ncat", "nmap"):
-                        if re.search(rf"(?:\A|[^a-zA-Z0-9_\-\.]){s}(?:\.exe)?(?:\Z|[^a-zA-Z0-9_\-\.])", full_str):
-                            is_suspicious = True
-                            break
+                is_suspicious = is_process_suspicious(name, cmdline, exe)
 
                 processes.append({
                     "pid": pid,

