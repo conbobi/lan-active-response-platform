@@ -21,6 +21,29 @@ class ProcessChainRule(RiskRule):
     base_score = 1.0
     category = "process"
 
+    # Default suspicious parent-child process chains with custom score weighting
+    SUSPICIOUS_CHAINS: Dict[Tuple[str, str], float] = {
+        # Browser → compiler (KHÔNG BAO GIỜ xảy ra bình thường)
+        ("electron.exe", "msbuild.exe"): 50.0,
+        ("chrome.exe", "msbuild.exe"): 50.0,
+        ("msedge.exe", "msbuild.exe"): 50.0,
+        ("firefox.exe", "msbuild.exe"): 50.0,
+        ("winword.exe", "msbuild.exe"): 60.0,
+        ("excel.exe", "msbuild.exe"): 60.0,
+
+        # Browser/Office → shell
+        ("electron.exe", "powershell.exe"): 40.0,
+        ("electron.exe", "cmd.exe"): 40.0,
+        ("chrome.exe", "powershell.exe"): 40.0,
+        ("winword.exe", "powershell.exe"): 50.0,
+        ("winword.exe", "cmd.exe"): 50.0,
+
+        # Compiler → shell (chain dài)
+        ("msbuild.exe", "powershell.exe"): 40.0,
+        ("msbuild.exe", "cmd.exe"): 40.0,
+        ("msbuild.exe", "csc.exe"): 5.0,
+    }
+
     # In-memory rule cache
     _cache_rules: Optional[List[Dict[str, Any]]] = None
     _cache_timestamp: float = 0.0
@@ -43,6 +66,13 @@ class ProcessChainRule(RiskRule):
                 "action": "alert",
                 "parent_patterns": ("winword.exe", "word.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "acrord32.exe", "acrobat.exe"),
                 "child_patterns": ("cmd.exe", "cmd", "powershell.exe", "powershell", "pwsh.exe", "wscript.exe", "cscript.exe", "bash", "sh"),
+            },
+            {
+                "id": "fallback_browser_spawning",
+                "name": "Suspicious Browser Spawning (Fallback)",
+                "action": "alert",
+                "parent_patterns": ("electron.exe", "chrome.exe", "msedge.exe", "firefox.exe"),
+                "child_patterns": ("msbuild.exe", "csc.exe", "vbc.exe", "cmd.exe", "powershell.exe"),
             }
         ]
 
@@ -197,8 +227,9 @@ class ProcessChainRule(RiskRule):
             if raw_p:
                 parent_names.append(raw_p)
 
-            if "parent_pid" in p_dict:
-                parent_proc = pid_map.get(p_dict.get("parent_pid"))
+            parent_pid = p_dict.get("parent_pid") if p_dict.get("parent_pid") is not None else p_dict.get("ppid")
+            if parent_pid is not None:
+                parent_proc = pid_map.get(parent_pid)
                 if parent_proc:
                     for p_n in self._extract_proc_names(parent_proc):
                         if p_n not in parent_names:
@@ -214,6 +245,7 @@ class ProcessChainRule(RiskRule):
         anomalies: List[str] = []
         highest_action = "alert"
         action_priority = {"alert": 1, "block": 2, "isolate": 3}
+        max_chain_score = 0.0
 
         # Evaluate pairs against compiled active chain rules
         for raw_p, raw_c, clean_p, clean_c in pairs:
@@ -240,8 +272,23 @@ class ProcessChainRule(RiskRule):
                 if action_priority.get(action, 1) > action_priority.get(highest_action, 1):
                     highest_action = action
 
+            # Evaluate against built-in SUSPICIOUS_CHAINS
+            for (parent_pat, child_pat), chain_score in self.SUSPICIOUS_CHAINS.items():
+                if self._matches_pattern(clean_p, parent_pat) and self._matches_pattern(clean_c, child_pat):
+                    anomaly_desc = f"[Rule: Suspicious Execution Chain] '{raw_p}' spawned '{raw_c}'"
+                    if anomaly_desc not in anomalies:
+                        anomalies.append(anomaly_desc)
+                        max_chain_score = max(max_chain_score, chain_score)
+                        logger.info(
+                            f"[PROCESS_CHAIN MATCH] Agent: {agent_id} | Suspicious Chain: "
+                            f"Parent: '{raw_p}' -> Child: '{raw_c}' (+{chain_score} score)"
+                        )
+
         if anomalies:
-            score = ACTION_TO_SCORE.get(highest_action, 40.0) * self.base_score
-            return score, f"Process chain anomaly detected: {'; '.join(anomalies)}"
+            base_score = ACTION_TO_SCORE.get(highest_action, 40.0)
+            if max_chain_score > 0.0:
+                base_score = max(base_score, max_chain_score)
+            score = base_score * self.base_score
+            return min(100.0, score), f"Process chain anomaly detected: {'; '.join(anomalies)}"
 
         return 0.0, ""

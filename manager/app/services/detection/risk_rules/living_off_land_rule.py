@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, Tuple, List
 from app.services.detection.risk_rules.base import RiskRule
 
@@ -9,56 +10,130 @@ class LivingOffLandRule(RiskRule):
     enabled = True
     weight = 1.0
     category = "behavior"
+    base_score = 45.0
 
-    LOLBIN_BINARIES = [
-        "curl.exe", "curl", "wget.exe", "wget",
-        "powershell.exe", "powershell", "pwsh.exe", "wmic.exe", "wmic",
-        "certutil.exe", "certutil", "bitsadmin.exe", "bitsadmin",
-        "mshta.exe", "mshta", "regsvr32.exe", "regsvr32", "rundll32.exe", "rundll32",
-        "cscript.exe", "wscript.exe", "schtasks.exe", "schtasks"
-    ]
+    LOLBINS = {
+        "msbuild.exe", "msbuild", "certutil.exe", "certutil",
+        "rundll32.exe", "regsvr32.exe", "mshta.exe",
+        "wmic.exe", "bitsadmin.exe", "schtasks.exe",
+        "cscript.exe", "wscript.exe",
+        "powershell.exe", "powershell", "pwsh.exe",
+    }
 
-    SUSPICIOUS_PATTERNS = [
-        "-enc", "-encodedcommand", "downloadstring", "downloadfile", "iex",
-        "/urlcache", "-urlcache", "/transfer", "-split", "-o", "-O",
-        "process call create", "javascript:", "vbscript:", "/s /u /i:",
-        "http://", "https://", "invoke-webrequest", "invoke-restmethod"
+    # Parent context — quan trọng nhất
+    PARENT_SCORES = {
+        # Legit dev tools → GIẢM điểm (không flag dev thật)
+        "devenv.exe": -25,
+        "msbuild.exe": -15,
+        "code.exe": -20,
+
+        # User-initiated → trung bình
+        "explorer.exe": 0,
+        "cmd.exe": 10,
+        "powershell.exe": 15,
+
+        # HIGH SUSPICIOUS — parent không bao giờ nên spawn LOLBin
+        "electron.exe": 50,
+        "winword.exe": 50,
+        "excel.exe": 50,
+        "powerpnt.exe": 50,
+        "outlook.exe": 50,
+        "chrome.exe": 40,
+        "firefox.exe": 40,
+    }
+
+    CMDLINE_PATTERNS = [
+        (r"\.csproj", 30),
+        (r"/t:Run", 40),
+        (r"-urlcache", 40),
+        (r"-decodehex", 40),
+        (r"-encodedcommand", 40),
+        (r"-enc\b", 40),
+        (r"-windowstyle hidden", 30),
+        (r"\\users\\public\\", 30),
+        (r"\\appdata\\local\\temp\\", 30),
+        (r"\\windows\\temp\\", 30),
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         processes = telemetry.get("process_list", [])
         commands = telemetry.get("suspicious_commands", [])
 
-        lol_matches: List[str] = []
+        # Build pid_map
+        pid_map: Dict[Any, Dict[str, Any]] = {}
+        for p in processes:
+            p_dict = p if isinstance(p, dict) else p.model_dump() if hasattr(p, "model_dump") else getattr(p, "__dict__", {})
+            if p_dict.get("pid") is not None:
+                pid_map[p_dict.get("pid")] = p_dict
 
-        # Check processes & command line arguments
+        total_score = 0
+        all_reasons: List[str] = []
+
         for proc in processes:
             p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
-            name = str(p_dict.get("name", "")).strip().lower()
-            cmdline = str(p_dict.get("cmdline", "")).strip().lower()
+            name = str(p_dict.get("name") or "").lower()
+            name_base = name.replace("\\", "/").split("/")[-1]
+            if name not in self.LOLBINS and name_base not in self.LOLBINS:
+                continue
+            matched_bin = name if name in self.LOLBINS else name_base
 
-            is_lolbin = any(
-                name == bin_name or name.endswith("/" + bin_name) or name.endswith("\\" + bin_name) or (bin_name in name)
-                for bin_name in self.LOLBIN_BINARIES
-            )
+            cmdline_raw = p_dict.get("cmdline") or ""
+            if isinstance(cmdline_raw, list):
+                cmdline = " ".join(str(x) for x in cmdline_raw).lower()
+            else:
+                cmdline = str(cmdline_raw).lower()
 
-            if is_lolbin:
-                if any(pat in cmdline for pat in self.SUSPICIOUS_PATTERNS):
-                    lol_matches.append(f"'{p_dict.get('name')}' with suspicious cmdline: {p_dict.get('cmdline')}")
-                elif p_dict.get("is_suspicious"):
-                    lol_matches.append(f"'{p_dict.get('name')}' execution flagged suspicious")
+            proc_score = 0
+            proc_reasons: List[str] = []
+
+            # Signal 1: Parent context
+            parent_pid = p_dict.get("ppid") or p_dict.get("parent_pid")
+            parent = pid_map.get(parent_pid)
+            if parent:
+                parent_name = str(parent.get("name") or "").lower()
+                parent_base = parent_name.replace("\\", "/").split("/")[-1]
+                parent_score = self.PARENT_SCORES.get(parent_base, self.PARENT_SCORES.get(parent_name, 0))
+                proc_score += parent_score
+                if parent_score != 0:
+                    proc_reasons.append(f"parent={parent_base} ({parent_score:+d})")
+
+            # Signal 2: Cmdline patterns
+            for pattern, score in self.CMDLINE_PATTERNS:
+                if re.search(pattern, cmdline, re.IGNORECASE):
+                    proc_score += score
+                    proc_reasons.append(f"pattern={pattern} (+{score})")
+
+            # Signal 3: Child process suspicious
+            my_pid = p_dict.get("pid")
+            if my_pid is not None:
+                children = [
+                    p for p in processes
+                    if (isinstance(p, dict) and (p.get("ppid") == my_pid or p.get("parent_pid") == my_pid))
+                ]
+                suspicious_children = [
+                    c for c in children
+                    if str(c.get("name") or "").lower().replace("\\", "/").split("/")[-1] in ["powershell.exe", "powershell", "cmd.exe", "cmd", "cscript.exe", "wscript.exe"]
+                ]
+                if suspicious_children:
+                    proc_score += 40
+                    proc_reasons.append("spawns shell (+40)")
+
+            if proc_score > 0:
+                total_score += proc_score
+                all_reasons.extend(proc_reasons)
 
         # Check explicit suspicious commands list
         for cmd in commands:
-            cmd_lower = cmd.lower()
-            if any(bin_name in cmd_lower for bin_name in self.LOLBIN_BINARIES):
-                if any(pat in cmd_lower for pat in self.SUSPICIOUS_PATTERNS) or "curl" in cmd_lower or "wget" in cmd_lower or "certutil" in cmd_lower:
-                    match_str = f"LOLBin command: {cmd}"
-                    if match_str not in lol_matches:
-                        lol_matches.append(match_str)
+            cmd_str = str(cmd)
+            cmd_lower = cmd_str.lower()
+            if any(b in cmd_lower for b in self.LOLBINS):
+                for pattern, score in self.CMDLINE_PATTERNS:
+                    if re.search(pattern, cmd_str, re.IGNORECASE):
+                        total_score += score
+                        all_reasons.append(f"command pattern={pattern} (+{score})")
 
-        if lol_matches:
-            score = min(45.0, len(lol_matches) * 12.5) * self.base_score
-            return score, f"LOLBin execution detected: {', '.join(lol_matches)}"
+        if total_score > 0:
+            final_score = min(100.0, max(0.0, float(total_score)))
+            return final_score, f"LOLBin execution detected: {'; '.join(all_reasons)}"
 
         return 0.0, ""
