@@ -17,11 +17,36 @@ from app.core.exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
 
+POLICY_LEVELS = [
+    {"min_score": 0, "max_score": 29, "action": "log_only", "auto": True},
+    {"min_score": 30, "max_score": 49, "action": "alert", "auto": True},
+    {"min_score": 50, "max_score": 69, "action": "alert_with_action", "auto": False},
+    {"min_score": 70, "max_score": 84, "action": "kill_process_tree", 
+     "auto": True, "rollback_window": 300},
+    {"min_score": 85, "max_score": 100, "action": "isolate", 
+     "auto": True, "rollback_window": 300},
+]
+
+
+def get_action_for_score(score: float) -> dict:
+    for level in POLICY_LEVELS:
+        if level["min_score"] <= score <= level["max_score"]:
+            return level
+    if score >= 85:
+        return POLICY_LEVELS[-1]
+    return POLICY_LEVELS[0]
+
 
 class PolicyEngineService:
     """
     Engine đánh giá chính sách phản ứng tự động (Policy Engine):
-    - Đánh giá risk score đối chiếu với các ResponsePolicy đã cấu hình
+    - Đánh giá risk score đối chiếu với các ResponsePolicy đã cấu hình trong DB
+    - Nếu không có custom ResponsePolicy khớp, kích hoạt Graduated Response 5 cấp độ:
+      + 0-29: log_only (auto)
+      + 30-49: alert (auto, không block)
+      + 50-69: alert_with_action (auto=False, chờ analyst quyết định)
+      + 70-84: kill_process_tree (auto, rollback 300s)
+      + 85-100: isolate (auto, rollback 300s)
     - Xác định phạm vi ảnh hưởng (agent đơn lẻ hoặc toàn bộ group)
     - Hỗ trợ Dry-run Mode để kiểm tra trước hành động mà không can thiệp thực tế
     - Tự động kích hoạt phản ứng khi dry_run = False
@@ -53,24 +78,20 @@ class PolicyEngineService:
         agent_groups = await self.group_service.list_groups_for_agent(agent_id)
         group_ids = [g.id for g in agent_groups]
 
-        # 2. Tìm Response Policy khớp với score và group
+        # 2. Tìm Response Policy khớp với score và group từ DB
         matched_policy = await self.policy_service.match_policy(risk_score, group_ids)
 
         if not matched_policy:
-            logger.info(f"No active response policy matched for agent '{agent_id}' (score: {risk_score}).")
-            return PolicyEvaluateResponse(
-                dry_run=dry_run,
-                agent_id=agent_id,
-                risk_score=risk_score,
-                matched_policy=None,
-                scope="none",
-                action_type=None,
-                affected_groups=[],
-                affected_agents=[],
-                simulated_actions=[],
-                executed=False,
-                execution_summary={"reason": "No policy matched score threshold"}
+            level = get_action_for_score(risk_score)
+            logger.info(
+                f"[GRADUATED RESPONSE] Agent '{agent_id}' score {risk_score:.2f} -> "
+                f"Level '{level['action']}' (score {level['min_score']}-{level['max_score']}, auto={level['auto']})"
             )
+            if not level["auto"]:
+                # Chỉ alert, tạo incident với nút "Action" trên UI
+                return await self._create_alert_only(agent, risk_score, level, context=context, incident_id=incident_id, dry_run=dry_run)
+            # Auto action
+            return await self._execute(agent, level["action"], risk_score, level, context=context, incident_id=incident_id, dry_run=dry_run)
 
         policy_dto = ResponsePolicyResponse.model_validate(matched_policy)
         if matched_policy.target_group:
@@ -232,3 +253,213 @@ class PolicyEngineService:
                 "details": executed_actions
             }
         )
+
+    async def _create_alert_only(
+        self,
+        agent: Agent,
+        risk_score: float,
+        level: dict,
+        context: Optional[Dict[str, Any]] = None,
+        incident_id: Optional[str] = None,
+        dry_run: bool = False
+    ) -> PolicyEvaluateResponse:
+        """Chỉ alert, tạo incident với nút Action trên UI (chờ analyst quyết định)."""
+        logger.warning(
+            f"[GRADUATED RESPONSE] Agent '{agent.id}' (score: {risk_score:.2f}) triggered '{level['action']}'. "
+            f"Auto-action is disabled (auto=False). Alert generated with manual action button on UI."
+        )
+        policy_dto = ResponsePolicyResponse(
+            id=f"graduated_{level['action']}",
+            name=f"Graduated Policy ({level['action']})",
+            description=f"Graduated response level for score {level['min_score']}-{level['max_score']}: Alert with analyst action button",
+            min_score=float(level["min_score"]),
+            max_score=float(level["max_score"]),
+            action_type=level["action"],
+            scope="agent",
+            target_group_id=None,
+            target_group_name=None,
+            action_params={"auto": False, "requires_analyst": True},
+            auto_rollback_seconds=None,
+            priority=0,
+            is_active=True
+        )
+        return PolicyEvaluateResponse(
+            dry_run=dry_run,
+            agent_id=agent.id,
+            risk_score=risk_score,
+            matched_policy=policy_dto,
+            scope="agent",
+            action_type=level["action"],
+            affected_groups=[],
+            affected_agents=[{
+                "id": agent.id,
+                "hostname": agent.hostname,
+                "ip": agent.ip_address,
+                "status": agent.status.value if hasattr(agent.status, "value") else str(agent.status),
+                "is_isolated": getattr(agent, "is_isolated", False)
+            }],
+            simulated_actions=[],
+            executed=False,
+            execution_summary={
+                "status": "alert_with_action",
+                "action": level["action"],
+                "auto": False,
+                "message": "Graduated response: alert generated. Action requires analyst confirmation."
+            }
+        )
+
+    async def _execute(
+        self,
+        agent: Agent,
+        action: str,
+        risk_score: float,
+        level: dict,
+        context: Optional[Dict[str, Any]] = None,
+        incident_id: Optional[str] = None,
+        dry_run: bool = False
+    ) -> PolicyEvaluateResponse:
+        """Thực thi hành động tự động theo cấp độ phản ứng graduated."""
+        rollback_window = level.get("rollback_window", 300) if action in ("kill_process_tree", "isolate") else None
+
+        policy_dto = ResponsePolicyResponse(
+            id=f"graduated_{action}",
+            name=f"Graduated Policy ({action})",
+            description=f"Graduated response auto policy for score {level['min_score']}-{level['max_score']}",
+            min_score=float(level["min_score"]),
+            max_score=float(level["max_score"]),
+            action_type=action,
+            scope="agent",
+            target_group_id=None,
+            target_group_name=None,
+            action_params={"auto": True},
+            auto_rollback_seconds=rollback_window,
+            priority=0,
+            is_active=True
+        )
+
+        simulated_actions = [
+            SimulatedActionInfo(
+                agent_id=agent.id,
+                hostname=agent.hostname,
+                ip_address=agent.ip_address,
+                action_type=action,
+                auto_rollback_seconds=rollback_window
+            )
+        ]
+
+        affected_agents_info = [{
+            "id": agent.id,
+            "hostname": agent.hostname,
+            "ip": agent.ip_address,
+            "status": agent.status.value if hasattr(agent.status, "value") else str(agent.status),
+            "is_isolated": getattr(agent, "is_isolated", False)
+        }]
+
+        if dry_run:
+            logger.info(
+                f"[DRY-RUN] Graduated response evaluated '{action}' for agent '{agent.id}' (score: {risk_score:.2f})."
+            )
+            return PolicyEvaluateResponse(
+                dry_run=True,
+                agent_id=agent.id,
+                risk_score=risk_score,
+                matched_policy=policy_dto,
+                scope="agent",
+                action_type=action,
+                affected_groups=[],
+                affected_agents=affected_agents_info,
+                simulated_actions=simulated_actions,
+                executed=False,
+                execution_summary={"status": "dry_run_completed", "action": action}
+            )
+
+        if action == "log_only":
+            logger.info(f"[GRADUATED RESPONSE] Agent '{agent.id}' (score: {risk_score:.2f}) -> log_only (no block).")
+            return PolicyEvaluateResponse(
+                dry_run=False,
+                agent_id=agent.id,
+                risk_score=risk_score,
+                matched_policy=policy_dto,
+                scope="agent",
+                action_type=action,
+                affected_groups=[],
+                affected_agents=affected_agents_info,
+                simulated_actions=simulated_actions,
+                executed=True,
+                execution_summary={"status": "logged", "reason": "Risk score within normal threshold"}
+            )
+
+        if action == "alert":
+            logger.info(f"[GRADUATED RESPONSE] Agent '{agent.id}' (score: {risk_score:.2f}) -> alert only (no block).")
+            return PolicyEvaluateResponse(
+                dry_run=False,
+                agent_id=agent.id,
+                risk_score=risk_score,
+                matched_policy=policy_dto,
+                scope="agent",
+                action_type=action,
+                affected_groups=[],
+                affected_agents=affected_agents_info,
+                simulated_actions=simulated_actions,
+                executed=True,
+                execution_summary={"status": "alert_only", "reason": "Low-to-medium risk alert triggered"}
+            )
+
+        # Auto blocking actions: kill_process_tree, isolate
+        logger.warning(
+            f"[GRADUATED RESPONSE LIVE] Executing graduated auto-action '{action}' for agent '{agent.id}' "
+            f"(score: {risk_score:.2f}, rollback: {rollback_window}s)."
+        )
+
+        effective_incident_id = incident_id
+        if not effective_incident_id and context and isinstance(context, dict):
+            effective_incident_id = context.get("incident_id")
+
+        action_params = {
+            "trigger_agent_id": agent.id,
+            "trigger_score": risk_score,
+            "policy_name": f"Graduated Response ({action})",
+            "reason": f"Graduated auto action '{action}' triggered by score {risk_score:.2f} (rollback: {rollback_window}s)",
+            "auto_rollback_seconds": rollback_window
+        }
+        if context and isinstance(context, dict):
+            if "pid" in context:
+                action_params["pid"] = context["pid"]
+            if "process_name" in context:
+                action_params["process_name"] = context["process_name"]
+
+        executed_actions = []
+        try:
+            act = await self.action_service.create_and_apply_action(
+                agent_id=agent.id,
+                action_type=action,
+                action_params=action_params,
+                incident_id=effective_incident_id,
+                actor="policy_engine",
+                auto_rollback_seconds=rollback_window
+            )
+            executed_actions.append({"action_id": act.id, "agent_id": agent.id, "status": "applied"})
+        except Exception as e:
+            logger.error(f"Policy engine graduated execution failed on agent '{agent.id}': {e}", exc_info=True)
+            executed_actions.append({"agent_id": agent.id, "status": "failed", "error": str(e)})
+
+        return PolicyEvaluateResponse(
+            dry_run=False,
+            agent_id=agent.id,
+            risk_score=risk_score,
+            matched_policy=policy_dto,
+            scope="agent",
+            action_type=action,
+            affected_groups=[],
+            affected_agents=affected_agents_info,
+            simulated_actions=simulated_actions,
+            executed=True,
+            execution_summary={
+                "status": "executed",
+                "action": action,
+                "rollback_window": rollback_window,
+                "total_executed": len(executed_actions),
+                "details": executed_actions
+            }
+        )
+
