@@ -336,7 +336,7 @@ Tạo lưu lượng mạng (ICMP / HTTP traffic) trong 10-15 giây để kiểm 
 #### Cách chạy:
 - **Chạy trực tiếp trên máy host:**
   ```bash
-  ./agent/malware_sim/demo_network_traffic.sh 127.0.0.1 8002
+  ./agent/malware_sim/demo_network_traffic.sh 127.0.0.1 8005
   ```
 - **Hoặc chạy trong container `client1`:**
   ```bash

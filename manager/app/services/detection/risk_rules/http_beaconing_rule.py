@@ -121,8 +121,8 @@ class BeaconingDetectionService:
 
             dst_port = conn.get("dst_port", 80)
 
-            # Ignore Manager traffic in internal Docker subnet (172.16.0.0/12 on port 8000/8002)
-            if dst_port in (8000, 8002):
+            # Ignore Manager traffic in internal Docker subnet (172.16.0.0/12 on port 8000/8005)
+            if dst_port in (8000, 8005):
                 try:
                     if ipaddress.ip_address(dst_ip) in DOCKER_SUBNET:
                         logger.debug(f"[BEACONING] Ignored connection to Docker Manager IP {dst_ip}:{dst_port}")

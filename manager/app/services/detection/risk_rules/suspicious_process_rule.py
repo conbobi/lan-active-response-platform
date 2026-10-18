@@ -119,8 +119,8 @@ def extract_outbound_network_entities(telemetry: Dict[str, Any]) -> Tuple[Set[in
         dst_port = int(c_dict.get("dst_port") or 0)
         status = str(c_dict.get("status") or "").upper()
 
-        # Ignore local, docker DNS (127.0.0.11), manager IP, and manager port 8000/8002
-        if dst_ip.startswith("127.") or dst_ip in ignored_ips or dst_port in (8000, 8002):
+        # Ignore local, docker DNS (127.0.0.11), manager IP, and manager port 8000/8005
+        if dst_ip.startswith("127.") or dst_ip in ignored_ips or dst_port in (8000, 8005):
             continue
 
         if dst_ip and status != "LISTEN":

@@ -22,7 +22,7 @@ export const generateReport = async (payload) => {
 
 export const downloadReport = async (reportId) => {
   try {
-    const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002/api/v1';
+    const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8005/api/v1';
     window.open(`${baseURL}/reports/${reportId}/download`, '_blank');
   } catch (error) {
     console.error(`API Error downloading report ${reportId}:`, error);

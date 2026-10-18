@@ -41,6 +41,8 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str, proces
         if not pid:
             continue
         ppid_val = proc_item.get("parent_pid") if proc_item.get("parent_pid") is not None else proc_item.get("ppid")
+        cmd_raw = proc_item.get("cmdline") or ""
+        cmdline_str = " ".join(str(x) for x in cmd_raw) if isinstance(cmd_raw, list) else str(cmd_raw)
         pinfo = ProcessInfo(
             id=f"proc_{uuid.uuid4().hex[:12]}",
             agent_id=target_agent_id,
@@ -49,7 +51,7 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str, proces
             name=str(proc_item.get("name") or "unknown"),
             exe=str(proc_item.get("exe") or proc_item.get("path") or ""),
             exe_path=str(proc_item.get("exe_path") or proc_item.get("exe") or proc_item.get("path") or ""),
-            cmdline=str(proc_item.get("cmdline") or ""),
+            cmdline=cmdline_str,
             cpu_percent=float(proc_item.get("cpu_percent") or proc_item.get("cpu") or 0.0),
             memory_percent=float(proc_item.get("memory_percent") or proc_item.get("ram") or 0.0),
             is_suspicious=bool(proc_item.get("is_suspicious", False)),
@@ -95,7 +97,8 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
 async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
-    logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}'")
+    platform_name = payload.get("platform", "linux")
+    logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}' (platform: {platform_name})")
 
     risk_service = RiskAssessmentService(session)
     record = await risk_service.process_risk(

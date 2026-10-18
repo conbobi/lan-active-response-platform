@@ -7,6 +7,8 @@ from app.schemas.base import ORMBaseModel
 
 class RiskAssessmentDTO(BaseModel):
     agent_id: str
+    platform: Optional[str] = None
+    timestamp: Optional[Union[float, datetime, str]] = None
     cpu_usage: float = 0.0
     ram_usage: float = 0.0
     disk_usage: float = 0.0
@@ -24,6 +26,8 @@ class RiskAssessmentDTO(BaseModel):
     auth_events: List[Dict[str, Any]] = Field(default_factory=list)
     connection_history: List[Dict[str, Any]] = Field(default_factory=list)
     yara_matches: List[str] = Field(default_factory=list)
+
+    model_config = {"extra": "allow"}
 
 
 class RiskScoreOut(ORMBaseModel):

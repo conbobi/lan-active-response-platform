@@ -11,7 +11,6 @@ import {
   FiCpu,
   FiHash,
   FiFolder,
-  FiCheckCircle,
   FiAlertTriangle,
   FiRefreshCw
 } from 'react-icons/fi';
@@ -21,61 +20,83 @@ export default function ProcessAncestry({
   onAction,
   actionLoading,
 }) {
-  const [treeData, setTreeData] = useState(null);
+  const [incData, setIncData] = useState(incident);
   const [loading, setLoading] = useState(false);
 
-  const culprit = incident?.culpritProcess || {
-    pid: 4128,
-    name: 'key_test.exe',
-    exe_path: 'C:\\Users\\AppData\\Local\\Temp\\key_test.exe',
-    cmdline: 'key_test.exe --hidden',
-    sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-    is_suspicious: true,
-  };
-
-  const parent = incident?.parentProcess || {
-    pid: 3500,
-    name: 'cmd.exe',
-    exe_path: 'C:\\Windows\\System32\\cmd.exe',
-  };
-
   useEffect(() => {
-    if (!incident?.agentId) return;
-    setLoading(true);
-    api.get(`/process/${incident.agentId}/tree`)
-      .then((data) => setTreeData(data))
-      .catch((err) => {
-        console.warn('Failed to load process tree:', err);
-        setTreeData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [incident?.agentId]);
+    if (incident?.id) {
+      if (!incident.culpritProcess && !incident.culprit_process && !incident.parentProcess && !incident.parent_process) {
+        setLoading(true);
+        api.get(`/incidents/${incident.id}`)
+          .then((res) => {
+            if (res) {
+              setIncData(res);
+            }
+          })
+          .catch((err) => {
+            console.warn('Failed to load incident detail for ancestry:', err);
+          })
+          .finally(() => setLoading(false));
+      } else {
+        setIncData(incident);
+      }
+    }
+  }, [incident]);
 
-  // Construct ancestry chain: Grandparent -> Parent -> Culprit -> Children
-  const ancestryChain = [
-    {
-      level: 'Grandparent',
-      name: 'explorer.exe',
-      pid: 1804,
-      path: 'C:\\Windows\\explorer.exe',
-      role: 'normal',
-    },
-    {
+  const culprit = incData?.culpritProcess || incData?.culprit_process || null;
+  const parent = incData?.parentProcess || incData?.parent_process || null;
+
+  if (!culprit && !parent) {
+    return (
+      <div
+        className="empty-state"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '2.5rem',
+          background: 'var(--bg-secondary)',
+          border: '1px dashed var(--border)',
+          borderRadius: 'var(--radius-md)',
+          color: 'var(--text-tertiary)',
+          fontSize: '0.9rem',
+          textAlign: 'center',
+        }}
+      >
+        <FiAlertTriangle size={24} style={{ marginBottom: '0.5rem', color: 'var(--warning)' }} />
+        <span>Chưa có dữ liệu process tree</span>
+      </div>
+    );
+  }
+
+  // Construct dynamic ancestry chain from available culprit and parent data
+  const ancestryChain = [];
+  if (parent) {
+    ancestryChain.push({
       level: 'Parent Process',
-      name: parent.name || 'cmd.exe',
-      pid: parent.pid || 3500,
-      path: parent.exe_path || 'C:\\Windows\\System32\\cmd.exe',
+      name: parent.name || parent.process_name || 'parent',
+      pid: parent.pid || 'N/A',
+      path: parent.exe_path || parent.exe || parent.path || '',
+      cmdline: parent.cmdline || '',
       role: 'parent',
-    },
-    {
+    });
+  }
+
+  if (culprit) {
+    ancestryChain.push({
       level: 'Malicious Culprit',
-      name: culprit.name || 'key_test.exe',
-      pid: culprit.pid || 4128,
-      path: culprit.exe_path || 'C:\\Users\\AppData\\Local\\Temp\\key_test.exe',
-      cmdline: culprit.cmdline,
+      name: culprit.name || culprit.process_name || 'culprit',
+      pid: culprit.pid || 'N/A',
+      path: culprit.exe_path || culprit.exe || culprit.path || '',
+      cmdline: culprit.cmdline || '',
+      sha256: culprit.sha256 || '',
       role: 'culprit',
-    },
-  ];
+    });
+  }
+
+  const culpritPid = culprit?.pid;
+  const culpritName = culprit?.name || culprit?.process_name || 'process';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -83,10 +104,10 @@ export default function ProcessAncestry({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-            Mini Process Ancestry Tree
+            Process Ancestry Tree
           </h4>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-            Trace 3-level execution lineage from parent launcher down to culprit process
+            Trace execution lineage from parent launcher down to culprit process
           </span>
         </div>
 
@@ -94,18 +115,18 @@ export default function ProcessAncestry({
           <Button
             variant="warning"
             size="sm"
-            disabled={actionLoading || !culprit.pid}
+            disabled={actionLoading || !culpritPid}
             iconLeft={<FiSlash size={13} />}
-            onClick={() => onAction && onAction('kill_process_tree', { pid: culprit.pid, process_name: culprit.name })}
+            onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
           >
-            Kill Process (PID {culprit.pid})
+            Kill Process {culpritPid ? `(PID ${culpritPid})` : ''}
           </Button>
           <Button
             variant="danger"
             size="sm"
-            disabled={actionLoading || !culprit.pid}
+            disabled={actionLoading || !culpritPid}
             iconLeft={<FiLayers size={13} />}
-            onClick={() => onAction && onAction('kill_process_tree', { pid: culprit.pid, process_name: culprit.name })}
+            onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
           >
             Kill Full Tree
           </Button>
@@ -128,7 +149,7 @@ export default function ProcessAncestry({
 
             return (
               <div
-                key={node.pid}
+                key={node.pid || index}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -180,9 +201,11 @@ export default function ProcessAncestry({
                       <span style={{ fontWeight: 700, fontSize: '0.9rem', color: isCulprit ? 'var(--error)' : 'var(--text-primary)' }}>
                         {node.name}
                       </span>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginLeft: '0.5rem' }}>
-                        PID: <strong>{node.pid}</strong>
-                      </span>
+                      {node.pid && node.pid !== 'N/A' && (
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginLeft: '0.5rem' }}>
+                          PID: <strong>{node.pid}</strong>
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -201,7 +224,7 @@ export default function ProcessAncestry({
                       >
                         CULPRIT
                       </span>
-                    ) : isParent ? (
+                    ) : (
                       <span
                         style={{
                           background: 'rgba(245, 158, 11, 0.2)',
@@ -215,8 +238,6 @@ export default function ProcessAncestry({
                       >
                         PARENT
                       </span>
-                    ) : (
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>ROOT</span>
                     )}
                   </div>
                 </div>
@@ -227,48 +248,50 @@ export default function ProcessAncestry({
       </div>
 
       {/* Culprit Forensic Details Card */}
-      <div
-        style={{
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          padding: '1rem 1.25rem',
-        }}
-      >
-        <h5 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
-          Culprit Binary Forensics & Indicators
-        </h5>
+      {culprit && (
+        <div
+          style={{
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '1rem 1.25rem',
+          }}
+        >
+          <h5 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+            Culprit Binary Forensics & Indicators
+          </h5>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem', fontSize: '0.85rem' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-            <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>Executable Full Path</span>
-            <code style={{ color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-              {culprit.exe_path || 'C:\\Users\\AppData\\Local\\Temp\\key_test.exe'}
-            </code>
-          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem', fontSize: '0.85rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>Executable Full Path</span>
+              <code style={{ color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                {culprit.exe_path || culprit.exe || culprit.path || 'N/A'}
+              </code>
+            </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-            <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>Commandline Execution</span>
-            <code style={{ color: 'var(--warning)', wordBreak: 'break-all' }}>
-              {culprit.cmdline || `${culprit.name} --hidden`}
-            </code>
-          </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>Commandline Execution</span>
+              <code style={{ color: 'var(--warning)', wordBreak: 'break-all' }}>
+                {culprit.cmdline || 'N/A'}
+              </code>
+            </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-            <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>SHA256 File Hash</span>
-            <code style={{ color: 'var(--primary)', wordBreak: 'break-all', fontSize: '0.78rem' }}>
-              {culprit.sha256 || 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}
-            </code>
-          </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>SHA256 File Hash</span>
+              <code style={{ color: 'var(--primary)', wordBreak: 'break-all', fontSize: '0.78rem' }}>
+                {culprit.sha256 || 'N/A'}
+              </code>
+            </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-            <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>Digital Signature & Status</span>
-            <span style={{ color: 'var(--error)', fontWeight: 600 }}>
-              Unsigned (Untrusted Developer Certificate)
-            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>Digital Signature & Status</span>
+              <span style={{ color: culprit.is_suspicious ? 'var(--error)' : 'var(--text-secondary)', fontWeight: 600 }}>
+                {culprit.is_suspicious ? 'Unsigned / Untrusted' : 'Standard Process'}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
