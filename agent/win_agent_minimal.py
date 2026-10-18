@@ -82,51 +82,55 @@ def collect_network() -> List[Dict[str, Any]]:
 
 
 async def send_telemetry(ws) -> None:
-    """
-    Periodically gather and send telemetry to LARP Manager via WebSocket.
-    """
+    """Gửi heartbeat + telemetry mỗi 15s."""
     while True:
-        procs = collect_processes()
-        conns = collect_network()
-
-        msg = {
-            "type": "TELEMETRY_RISK",
-            "payload": {
-                "agent_id": AGENT_ID,
-                "platform": "windows",
-                "process_list": procs,
-                "network_connections": conns,
-                "timestamp": time.time(),
+        try:
+            # 1. Gửi HEARTBEAT trước
+            heartbeat = {
+                "type": "HEARTBEAT",
+                "payload": {
+                    "agent_id": AGENT_ID,
+                    "hostname": os.environ.get("COMPUTERNAME", "WIN-DEMO-01"),
+                    "platform": "windows",
+                    "ip_address": os.getenv("AGENT_IP", "192.168.30.106"),
+                }
             }
-        }
-        await ws.send(json.dumps(msg))
-        print(f"[+] Sent telemetry: {len(procs)} processes, {len(conns)} active connections")
-        await asyncio.sleep(INTERVAL)
+            await ws.send(json.dumps(heartbeat))
+
+            # 2. Rồi gửi telemetry
+            procs = collect_processes()
+            conns = collect_network()
+            msg = {
+                "type": "TELEMETRY_RISK",
+                "payload": {
+                    "agent_id": AGENT_ID,
+                    "platform": "windows",
+                    "process_list": procs,
+                    "network_connections": conns,
+                    "timestamp": time.time(),
+                }
+            }
+            await ws.send(json.dumps(msg))
+            print(f"[+] Heartbeat + telemetry: {len(procs)} procs, {len(conns)} conns")
+            await asyncio.sleep(INTERVAL)
+        except websockets.exceptions.ConnectionClosed:
+            print("[!] Connection closed by server, reconnect...")
+            raise
+        except Exception as e:
+            print(f"[!] Send error: {type(e).__name__}: {e}")
+            raise
 
 
 async def main() -> None:
-    """
-    Main loop connecting to LARP Manager WebSocket and streaming Windows telemetry.
-    """
+    """Main loop — KHÔNG gửi heartbeat riêng, để send_telemetry xử lý."""
     while True:
         try:
             print(f"[*] Connecting to {MANAGER_URL} ...")
             async with websockets.connect(MANAGER_URL) as ws:
-                heartbeat = {
-                    "type": "HEARTBEAT",
-                    "payload": {
-                        "agent_id": AGENT_ID,
-                        "hostname": os.environ.get("COMPUTERNAME", "WIN-DEMO-01"),
-                        "platform": "windows",
-                        "ip_address": os.getenv("AGENT_IP", "192.168.30.106"),
-                    }
-                }
-                await ws.send(json.dumps(heartbeat))
-                print(f"[+] Connected to {MANAGER_URL}")
-
-                await send_telemetry(ws)
+                print(f"[+] Connected")
+                await send_telemetry(ws)  # Heartbeat + telemetry trong 1 loop
         except Exception as e:
-            print(f"[!] Error: {e}, retry in 5s")
+            print(f"[!] Error: {type(e).__name__}: {e}, retry in 5s")
             await asyncio.sleep(5)
 
 
