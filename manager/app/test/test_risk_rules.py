@@ -253,6 +253,33 @@ async def test_credential_dumping_rule():
     assert "Credential dumping activity detected" in reason
 
 
+async def test_credential_dumping_rule_normal_lsass_no_fp():
+    rule = CredentialDumpingRule()
+    # Normal Windows lsass process with empty cmdline or system path
+    telemetry = {
+        "process_list": [
+            {"name": "lsass.exe", "cmdline": ""},
+            {"name": "lsass.exe", "cmdline": "C:\\Windows\\system32\\lsass.exe"},
+            {"name": "svchost.exe", "cmdline": "C:\\Windows\\system32\\svchost.exe -k DcomLaunch"},
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, {})
+    assert score == 0.0
+    assert reason == ""
+
+
+async def test_credential_dumping_rule_procdump():
+    rule = CredentialDumpingRule()
+    telemetry = {
+        "process_list": [
+            {"name": "procdump.exe", "cmdline": "procdump.exe -ma lsass.exe lsass.dmp"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, {})
+    assert score >= 80.0
+    assert "Credential dumping activity detected" in reason
+
+
 async def test_shadow_copy_rule():
     rule = ShadowCopyRule()
     telemetry = {
