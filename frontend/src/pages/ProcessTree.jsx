@@ -1,15 +1,16 @@
-// src/pages/ProcessTree.jsx
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import toast from 'react-hot-toast';
 import useProcessTree from '../hooks/useProcessTree';
 import { useAgents } from '../hooks/useAgents';
 import Dropdown from '../components/ui/Dropdown';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import ErrorState from '../components/ui/ErrorState';
+import EmptyState from '../components/ui/EmptyState';
 import KillProcessModal from '../components/process/KillProcessModal';
 import { killProcess } from '../api/process';
 import {
-
   FiCpu,
   FiAlertOctagon,
   FiRotateCw,
@@ -152,7 +153,8 @@ export default function ProcessTree() {
 
   const handleKill = async ({ pid, reason, killTree }) => {
     try {
-      await killProcess(selectedAgent, pid, { reason, killTree });
+      const result = await killProcess(selectedAgent, pid, { reason, killTree });
+      toast.success(`Đã gửi lệnh ${result?.action_type || (killTree ? 'kill_tree' : 'kill_process')} cho PID ${pid}`);
       if (clearError) clearError();
       if (killTree) {
         await handleKillProcessTree(pid);
@@ -163,7 +165,14 @@ export default function ProcessTree() {
         refreshProcessData();
       }, 1500);
     } catch (err) {
-      console.error("Kill failed:", err);
+      if (err.response?.status === 429) {
+        const detail = err.response.data?.detail || "";
+        const match = detail.match(/(\d+)s remaining/);
+        const remaining = match ? match[1] : "unknown";
+        toast.error(`⏳ Agent đang cooldown. Còn ${remaining}s`, { duration: 6000 });
+      } else {
+        toast.error(`Kill failed: ${err.response?.data?.detail || err.message}`);
+      }
       throw err;
     }
   };
@@ -315,9 +324,11 @@ export default function ProcessTree() {
   const renderTreeContent = () => {
     if (!processTree) {
       return (
-        <div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-          No process telemetry recorded yet for agent <strong>{selectedAgent}</strong>
-        </div>
+        <EmptyState
+          icon="🌳"
+          title="Chưa có dữ liệu process"
+          description={`Process tree sẽ hiển thị khi agent ${selectedAgent || ''} gửi telemetry.`}
+        />
       );
     }
 
@@ -325,14 +336,26 @@ export default function ProcessTree() {
 
     if (!Array.isArray(treeData) || treeData.length === 0) {
       return (
-        <div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-          Process list is currently empty for agent <strong>{selectedAgent}</strong>
-        </div>
+        <EmptyState
+          icon="🌳"
+          title="Chưa có dữ liệu process"
+          description={`Process tree sẽ hiển thị khi agent ${selectedAgent || ''} gửi telemetry.`}
+        />
       );
     }
 
     return treeData.map((rootNode) => renderTreeNode(rootNode, 0));
   };
+
+  if (error && !processTree) {
+    return (
+      <ErrorState
+        title="Không thể tải Process Tree"
+        message={`${error}. Vui lòng kiểm tra kết nối với agent hoặc backend.`}
+        onRetry={refreshProcessData}
+      />
+    );
+  }
 
   return (
     <div>

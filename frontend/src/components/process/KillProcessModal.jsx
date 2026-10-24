@@ -6,37 +6,39 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
   const [reason, setReason] = useState("");
   const [killTree, setKillTree] = useState(Boolean(process?.defaultKillTree));
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     if (isOpen) {
       setReason("");
       setKillTree(Boolean(process?.defaultKillTree));
       setLoading(false);
+      setError(null);
     }
   }, [isOpen, process]);
-
 
   if (!process) return null;
 
   async function handleConfirm() {
+    if (loading) return; // Guard double-click
     setLoading(true);
+    setError(null);
     try {
       await onConfirm({
         pid: process.pid,
         reason: reason || "Manual analyst action",
         killTree,
       });
-      onClose();
+      onClose(); // Đóng CHỈ khi thành công
     } catch (err) {
-      // Allow parent error toast to catch, keep modal state or close
-      console.error("Kill confirm error:", err);
+      setError(err.response?.data?.detail || err.message || "Kill failed");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="☠️ Kill Process" maxWidth={560}>
+    <Modal isOpen={isOpen} onClose={loading ? () => {} : onClose} title="☠️ Kill Process" maxWidth={560}>
       {/* Warning banner */}
       <div
         style={{
@@ -54,6 +56,14 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
           Process sẽ bị kill ngay lập tức trên agent <strong>{agentId}</strong>. Không thể khôi phục.
         </div>
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 mb-4">
+          <div className="text-red-800 font-semibold">❌ Kill failed</div>
+          <div className="text-red-700 text-sm mt-1">{error}</div>
+        </div>
+      )}
 
       {/* Process info */}
       <div
@@ -181,7 +191,7 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
           onClick={handleConfirm}
           disabled={loading}
         >
-          {loading ? "Đang kill..." : "☠️ Xác nhận Kill"}
+          {loading ? "⏳ Đang kill..." : "☠️ Xác nhận Kill"}
         </Button>
       </div>
     </Modal>

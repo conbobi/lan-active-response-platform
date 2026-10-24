@@ -1,5 +1,5 @@
-// src/pages/Incidents.jsx
 import React, { useState, useMemo, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import useIncidents from '../hooks/useIncidents';
 import { useAgents } from '../hooks/useAgents';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
@@ -8,6 +8,8 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import FilterTabs from '../components/ui/FilterTabs';
 import Dropdown from '../components/ui/Dropdown';
+import ErrorState from '../components/ui/ErrorState';
+import EmptyState from '../components/ui/EmptyState';
 import {
   FiAlertTriangle,
   FiCheckCircle,
@@ -62,6 +64,7 @@ export default function Incidents() {
   const {
     incidents,
     loading,
+    error,
     actionLoading,
     refreshIncidents,
     handleAssign,
@@ -314,19 +317,27 @@ export default function Incidents() {
   const submitAssign = async (e) => {
     e.preventDefault();
     if (!assignModalInc || !assigneeInput.trim()) return;
-    await handleAssign(assignModalInc.id, assigneeInput.trim());
-    setAssignModalInc(null);
+    try {
+      await handleAssign(assignModalInc.id, assigneeInput.trim());
+      toast.success(`Đã phân công incident cho ${assigneeInput.trim()}`);
+      setAssignModalInc(null);
+    } catch (err) {
+      toast.error(`Phân công thất bại: ${err.message}`);
+    }
   };
 
   const onQuickStatusChange = async (incId, newStatus, e) => {
     if (e) e.stopPropagation();
-    await handleUpdateStatus(incId, newStatus);
-    if (selectedIncident && selectedIncident.id === incId) {
-      setSelectedIncident((prev) => (prev ? { ...prev, status: newStatus } : null));
+    try {
+      await handleUpdateStatus(incId, newStatus);
+      toast.success(`Đã cập nhật trạng thái thành ${newStatus}`);
+      if (selectedIncident && selectedIncident.id === incId) {
+        setSelectedIncident((prev) => (prev ? { ...prev, status: newStatus } : null));
+      }
+    } catch (err) {
+      toast.error(`Cập nhật trạng thái thất bại: ${err.message}`);
     }
   };
-
-
 
   const renderStatusBadge = (status) => {
     switch (status) {
@@ -354,6 +365,16 @@ export default function Incidents() {
     if (s === 'medium') return <Badge status="warning" label="MEDIUM" />;
     return <Badge status="info" label="LOW" />;
   };
+
+  if (error && incidents.length === 0) {
+    return (
+      <ErrorState
+        title="Không thể tải danh sách sự cố"
+        message={`${error}. Vui lòng kiểm tra kết nối với Manager backend tại http://localhost:8005`}
+        onRetry={refreshIncidents}
+      />
+    );
+  }
 
   return (
     <div>
@@ -491,8 +512,12 @@ export default function Incidents() {
               </tr>
             ) : paginatedIncidents.length === 0 ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-tertiary)' }}>
-                  No security incidents match the selected filter criteria.
+                <td colSpan="8" style={{ textAlign: 'center', padding: '1rem' }}>
+                  <EmptyState
+                    icon="📭"
+                    title="Chưa có sự cố"
+                    description="Hệ thống đang an toàn. Sự cố sẽ xuất hiện khi có mối đe dọa."
+                  />
                 </td>
               </tr>
             ) : (

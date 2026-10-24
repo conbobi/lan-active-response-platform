@@ -8,10 +8,13 @@ import Button from '../components/ui/Button';
 import LineChart from '../components/charts/LineChart';
 import AgentDetailModal from '../components/ui/AgentDetailModal';
 import DockerMonitorTable from '../components/ui/DockerMonitorTable';
-import { useAgents } from '../hooks/useAgents';
-import { useFlows } from '../hooks/useFlows';
-import { useEvents } from '../hooks/useEvents';
-import { useDockerStatus } from '../hooks/useDockerStatus';
+import HealthScoreGauge from '../components/dashboard/HealthScoreGauge';
+import ErrorState from '../components/ui/ErrorState';
+import { getAgents } from '../api/agents';
+import { getIncidents } from '../api/incidents';
+import { getEvents } from '../api/events';
+import { getDockerStatus } from '../api/docker';
+import { getFlows } from '../api/flows';
 import { useDashboardSocket } from '../hooks/useDashboardSocket';
 import { FiZap, FiActivity, FiRadio, FiFilter } from 'react-icons/fi';
 
@@ -75,31 +78,70 @@ function FalsePositiveBanner() {
 
 export default function Dashboard() {
     const navigate = useNavigate();
-    const { agents, refreshAgents } = useAgents();
+    const [agents, setAgents] = useState([]);
+    const [incidents, setIncidents] = useState([]);
+    const [events, setEvents] = useState([]);
+    const [dockerContainers, setDockerContainers] = useState([]);
+    const [flows, setFlows] = useState([]);
     const [selectedFlowAgent, setSelectedFlowAgent] = useState('all');
-    const { flows, loading: flowsLoading, refresh: refreshFlows } = useFlows(selectedFlowAgent);
-    const { events } = useEvents();
-    const {
-        containers: dockerContainers,
-        loading: dockerLoading,
-        error: dockerError,
-        refresh: refreshDocker
-    } = useDockerStatus();
     const [selectedAgent, setSelectedAgent] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+
+    const loadData = useCallback(async () => {
+        try {
+            const [agentsData, incidentsData, eventsData, dockerData, flowsData] = await Promise.all([
+                getAgents(),
+                getIncidents(),
+                getEvents(),
+                getDockerStatus().catch(() => []),
+                getFlows(selectedFlowAgent !== 'all' ? { agent_id: selectedFlowAgent } : {}).catch(() => []),
+            ]);
+
+            setAgents(Array.isArray(agentsData) ? agentsData : []);
+            setIncidents(Array.isArray(incidentsData) ? incidentsData : []);
+            setEvents(Array.isArray(eventsData) ? eventsData : []);
+            setDockerContainers(Array.isArray(dockerData) ? dockerData : []);
+            setFlows(Array.isArray(flowsData) ? flowsData : []);
+            setError(null);
+        } catch (err) {
+            console.error('[Dashboard] loadData error:', err);
+            // If we don't have data yet, show error state
+            setError(err);
+        } finally {
+            setLoading(false);
+        }
+    }, [selectedFlowAgent]);
+
+    // Initial load + Real-time polling every 2s (P0.1)
+    useEffect(() => {
+        loadData();
+        const interval = setInterval(loadData, 2000);
+        return () => clearInterval(interval);
+    }, [loadData]);
 
     const handleSocketMessage = useCallback((msg) => {
-        console.log('[Dashboard] WS Message received:', msg);
         const evt = msg.event || msg.type;
-        if (evt === 'heartbeat' || evt === 'dead_agent') {
-            if (refreshAgents) refreshAgents();
+        if (evt === 'heartbeat' || evt === 'dead_agent' || evt === 'TELEMETRY_RISK' || evt === 'INCIDENT_CREATED') {
+            loadData();
         }
-    }, [refreshAgents]);
+    }, [loadData]);
 
     const { isConnected } = useDashboardSocket(handleSocketMessage);
 
-    const totalOnline = agents.filter((a) => a.status === 'online' || a.status === 'active').length;
+    if (error) {
+        return (
+            <ErrorState
+                title="Không thể kết nối Manager"
+                message={`${error.message || 'Lỗi mạng'}. Kiểm tra backend tại http://localhost:8005`}
+                onRetry={loadData}
+            />
+        );
+    }
+
+    const totalOnline = agents.filter((a) => a.status === 'online' || a.status === 'active' || a.status === 'ACTIVE').length;
     const alertsToday = events.filter((e) => new Date(e.timestamp).toDateString() === new Date().toDateString()).length;
-    const avgRisk = Math.round(events.reduce((s, e) => s + e.riskScore, 0) / (events.length || 1));
+    const avgRisk = Math.round(events.reduce((s, e) => s + (e.riskScore || 0), 0) / (events.length || 1));
     const blockedIps = events.filter((e) => e.type === 'block_ip').length;
 
     // Calculate current live rates
@@ -203,6 +245,9 @@ export default function Dashboard() {
                 </Button>
             </div>
 
+            {/* Health Score Gauge (P0.2) */}
+            <HealthScoreGauge agents={agents} incidents={incidents} loading={loading} />
+
             <div className="grid-4" style={{ marginBottom: '1.25rem' }}>
                 <KpiCard type="agents" value={totalOnline} trendValue={12} />
                 <KpiCard type="alerts" value={alertsToday} trendValue={-5} />
@@ -294,9 +339,9 @@ export default function Dashboard() {
             <div style={{ marginBottom: '1.25rem' }}>
                 <DockerMonitorTable
                     containers={dockerContainers}
-                    loading={dockerLoading}
-                    error={dockerError}
-                    onRefresh={refreshDocker}
+                    loading={loading}
+                    error={null}
+                    onRefresh={loadData}
                 />
             </div>
 

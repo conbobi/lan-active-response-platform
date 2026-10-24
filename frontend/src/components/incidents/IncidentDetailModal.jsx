@@ -1,5 +1,5 @@
-// src/components/incidents/IncidentDetailModal.jsx
 import React, { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import Modal from '../ui/Modal';
 import FilterTabs from '../ui/FilterTabs';
 import Button from '../ui/Button';
@@ -56,7 +56,9 @@ export default function IncidentDetailModal({
     setActionLoading(true);
     try {
       const res = await executeIncidentAction(detailedIncident.id, actionType, params);
-      showToast(res.message || `Thực thi thành công: ${actionType}`);
+      const msg = res.message || `Thực thi thành công: ${actionType}`;
+      toast.success(msg);
+      showToast(msg);
 
       // Refresh incident & agents
       if (refreshAgents) refreshAgents();
@@ -67,7 +69,9 @@ export default function IncidentDetailModal({
       setDetailedIncident(updated);
     } catch (err) {
       console.error(`Action error ${actionType}:`, err);
-      showToast(err.message || `Lỗi khi thực hiện ${actionType}`, 'error');
+      const errMsg = err.message || `Lỗi khi thực hiện ${actionType}`;
+      toast.error(errMsg);
+      showToast(errMsg, 'error');
     } finally {
       setActionLoading(false);
     }
@@ -78,12 +82,16 @@ export default function IncidentDetailModal({
     setActionLoading(true);
     try {
       await updateIncidentStatus(detailedIncident.id, newStatus);
-      showToast(`Đã chuyển trạng thái sự cố sang: ${newStatus.toUpperCase()}`);
+      const msg = `Đã chuyển trạng thái sự cố sang: ${newStatus.toUpperCase()}`;
+      toast.success(msg);
+      showToast(msg);
       if (onRefresh) onRefresh();
       const updated = await getIncident(detailedIncident.id);
       setDetailedIncident(updated);
     } catch (err) {
-      showToast(`Không thể cập nhật trạng thái: ${err.message}`, 'error');
+      const errMsg = `Không thể cập nhật trạng thái: ${err.message}`;
+      toast.error(errMsg);
+      showToast(errMsg, 'error');
     } finally {
       setActionLoading(false);
     }

@@ -1,5 +1,5 @@
-// src/pages/ActionsHistory.jsx
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import toast from 'react-hot-toast';
 import {
   FiClock,
   FiRefreshCw,
@@ -68,7 +68,7 @@ export default function ActionsHistory() {
   const [auditLogActionId, setAuditLogActionId] = useState(null);
 
   // Toast message state
-  const [toast, setToast] = useState(null);
+  const [toastState, setToastState] = useState(null);
 
   // Load agents and groups for filtering
   useEffect(() => {
@@ -94,9 +94,14 @@ export default function ActionsHistory() {
   }, []);
 
   const showToast = (message, type = 'success') => {
-    setToast({ message, type });
+    if (type === 'error') {
+      toast.error(message);
+    } else {
+      toast.success(message);
+    }
+    setToastState({ message, type });
     setTimeout(() => {
-      setToast((prev) => (prev?.message === message ? null : prev));
+      setToastState((prev) => (prev?.message === message ? null : prev));
     }, 5000);
   };
 
@@ -292,7 +297,7 @@ export default function ActionsHistory() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', paddingBottom: '5rem', position: 'relative' }}>
       {/* Toast Banner */}
-      {toast && (
+      {toastState && (
         <div
           style={{
             position: 'fixed',
@@ -305,9 +310,9 @@ export default function ActionsHistory() {
             padding: '0.85rem 1.25rem',
             borderRadius: 'var(--radius-sm, 6px)',
             background:
-              toast.type === 'error'
+              toastState.type === 'error'
                 ? 'var(--error, #ef4444)'
-                : toast.type === 'warning'
+                : toastState.type === 'warning'
                 ? 'var(--warning, #f59e0b)'
                 : 'var(--success, #10b981)',
             color: '#ffffff',
@@ -317,14 +322,14 @@ export default function ActionsHistory() {
             animation: 'fadeIn 0.2s ease-in-out',
           }}
         >
-          {toast.type === 'error' ? (
+          {toastState.type === 'error' ? (
             <FiAlertCircle size={18} />
           ) : (
             <FiCheckCircle size={18} />
           )}
-          <span>{toast.message}</span>
+          <span>{toastState.message}</span>
           <button
-            onClick={() => setToast(null)}
+            onClick={() => setToastState(null)}
             style={{
               background: 'none',
               border: 'none',

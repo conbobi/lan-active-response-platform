@@ -1,7 +1,7 @@
-// src/components/actions/ActionsTable.jsx
 import React from 'react';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
+import EmptyState from '../ui/EmptyState';
 import AutoRollbackTimer from './AutoRollbackTimer';
 import UndoButton from './UndoButton';
 import {
@@ -74,23 +74,12 @@ export default function ActionsTable({
 
   if (actions.length === 0) {
     return (
-      <div
-        className="card"
-        style={{
-          padding: '3.5rem 1.5rem',
-          textAlign: 'center',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-        }}
-      >
-        <FiActivity size={40} style={{ color: 'var(--text-tertiary)', opacity: 0.4, marginBottom: '0.75rem' }} />
-        <h3 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-          Không tìm thấy response action nào
-        </h3>
-        <p style={{ fontSize: '0.825rem', color: 'var(--text-tertiary)', maxWidth: '420px', margin: '0 auto' }}>
-          Các hành động cô lập mạng, chặn IP, cách ly hoặc diệt tiến trình sẽ được tự động ghi lại tại đây.
-        </p>
+      <div className="card" style={{ padding: '2rem 1rem' }}>
+        <EmptyState
+          icon="📜"
+          title="Chưa có hành động nào"
+          description="Hành động response sẽ xuất hiện khi analyst xử lý sự cố."
+        />
       </div>
     );
   }
