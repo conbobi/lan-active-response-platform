@@ -21,6 +21,13 @@ from app.core.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# ===== ACTION CLASSIFICATION =====
+# Stateful actions — cần cooldown + auto-rollback (có thể toggle qua lại)
+COOLDOWN_ACTIONS = {"isolate", "unisolate", "quarantine"}
+
+# One-shot actions — KHÔNG cooldown, KHÔNG auto-rollback (không thể undo)
+NO_ROLLBACK_ACTIONS = {"kill_process", "kill_process_tree", "block_ip"}
+
 
 class ResponseActionService:
     """
@@ -58,29 +65,48 @@ class ResponseActionService:
             raise NotFoundError(f"Agent with ID '{agent_id}' was not found.")
 
         # 2. Kiểm tra Anti-Flapping Cooldown
-        cooldown_action = await self.action_repo.get_active_cooldown(agent_id, action_type, now)
-        if cooldown_action and cooldown_action.cooldown_until:
-            diff_secs = int((cooldown_action.cooldown_until - now).total_seconds())
-            raise FlappingCooldownError(
-                f"Agent '{agent_id}' is in response cooldown for '{action_type}' "
-                f"until {cooldown_action.cooldown_until.isoformat()} ({diff_secs}s remaining). "
-                "Action rejected to prevent flapping."
-            )
+        # Chỉ check cooldown cho stateful actions
+        # Kill/block_ip là one-shot → không cần flapping protection
+        if action_type in COOLDOWN_ACTIONS:
+            cooldown_action = await self.action_repo.get_active_cooldown(agent_id, action_type, now)
+            if (cooldown_action 
+                and cooldown_action.cooldown_until 
+                and cooldown_action.cooldown_until > now):
+                diff_secs = int((cooldown_action.cooldown_until - now).total_seconds())
+                raise FlappingCooldownError(
+                    f"Agent '{agent_id}' is in response cooldown for '{action_type}' "
+                    f"until {cooldown_action.cooldown_until.isoformat()} ({diff_secs}s remaining). "
+                    "Action rejected to prevent flapping."
+                )
 
         # 3. Chụp Snapshot trạng thái agent trước khi can thiệp
         snapshot = await self.snapshot_service.capture_snapshot(agent_id, action_type, action_params)
 
-        # 4. Tính toán thời điểm Auto-Rollback
+        # 4. Tính toán thời điểm Auto-Rollback & Cooldown
         settings = await self.setting_service.get_auto_rollback_settings()
         auto_rollback_at: Optional[datetime] = None
+        cooldown_until: Optional[datetime] = None
 
-        if auto_rollback_seconds is not None:
-            if auto_rollback_seconds > 0:
-                auto_rollback_at = now + timedelta(seconds=auto_rollback_seconds)
-        elif settings.get("enabled", True):
-            timeout_secs = settings.get("timeout_seconds", 300)
-            if timeout_secs > 0:
-                auto_rollback_at = now + timedelta(seconds=timeout_secs)
+        # Kill/block_ip KHÔNG có auto-rollback — không thể undo process đã chết
+        if action_type in NO_ROLLBACK_ACTIONS:
+            auto_rollback_at = None
+            cooldown_until = None
+            logger.info(
+                f"[AUTO-ROLLBACK] Skipped for {action_type} (one-shot action)"
+            )
+        else:
+            # Chỉ stateful actions mới có auto-rollback & cooldown
+            if auto_rollback_seconds is not None:
+                if auto_rollback_seconds > 0:
+                    auto_rollback_at = now + timedelta(seconds=auto_rollback_seconds)
+            elif settings.get("enabled", True):
+                timeout_secs = settings.get("timeout_seconds", 300)
+                if timeout_secs > 0:
+                    auto_rollback_at = now + timedelta(seconds=timeout_secs)
+
+            cooldown_secs = settings.get("cooldown_seconds", 600)
+            if cooldown_secs > 0:
+                cooldown_until = now + timedelta(seconds=cooldown_secs)
 
         # 5. Tạo bản ghi ResponseAction
         action_id = f"act_{uuid.uuid4().hex[:12]}"
@@ -93,10 +119,12 @@ class ResponseActionService:
             status="pending",
             snapshot=snapshot,
             auto_rollback_at=auto_rollback_at,
+            cooldown_until=cooldown_until,
             created_at=now,
             updated_at=now
         )
         await self.action_repo.add(action)
+
 
         # Ghi audit log tạo action
         await self.audit_service.record_event(

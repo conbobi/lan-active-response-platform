@@ -93,17 +93,19 @@ class ResponseActionRepository(SqlAlchemyRepository[ResponseAction]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_active_cooldown(self, agent_id: str, action_type: str, current_time: datetime) -> Optional[ResponseAction]:
+    async def get_active_cooldown(self, agent_id: str, action_type: Optional[str] = None, current_time: Optional[datetime] = None) -> Optional[ResponseAction]:
         """Kiểm tra xem agent có đang trong thời gian cooldown chống flapping cho loại action này không."""
-        stmt = (
-            select(ResponseAction)
-            .where(
-                ResponseAction.agent_id == agent_id,
-                ResponseAction.action_type == action_type,
-                ResponseAction.cooldown_until.isnot(None),
-                ResponseAction.cooldown_until > current_time
-            )
-            .order_by(ResponseAction.cooldown_until.desc())
+        now = current_time if current_time is not None else datetime.now(timezone.utc)
+        stmt = select(ResponseAction).where(
+            ResponseAction.agent_id == agent_id,
+            ResponseAction.cooldown_until.isnot(None),
+            ResponseAction.cooldown_until > now,
+            ResponseAction.status.in_(["applied", "reverted"])
         )
+        if action_type:
+            stmt = stmt.where(ResponseAction.action_type == action_type)
+
+        stmt = stmt.order_by(ResponseAction.cooldown_until.desc())
         result = await self.session.execute(stmt)
         return result.scalars().first()
+

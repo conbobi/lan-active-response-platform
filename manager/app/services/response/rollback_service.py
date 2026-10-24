@@ -23,6 +23,10 @@ from app.core.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Actions không thể rollback — process đã chết
+UNROLLBACKABLE_ACTIONS = {"kill_process", "kill_process_tree"}
+
+
 
 class RollbackService:
     """
@@ -120,31 +124,47 @@ class RollbackService:
                 if compensation.get("restore_agent_status") == "active":
                     agent.status = AgentStatus.ACTIVE
 
-            # 7. Thiết lập Anti-Flapping Cooldown
-            settings = await self.setting_service.get_auto_rollback_settings()
-            cooldown_secs = settings.get("cooldown_seconds", 600)
-            cooldown_until = now + timedelta(seconds=cooldown_secs)
+            # 7. Anti-Flapping Cooldown — CHỈ cho stateful actions
+            # Kill process là one-shot → không cần cooldown (không thể flapping)
+            if action.action_type in UNROLLBACKABLE_ACTIONS:
+                cooldown_until = None
+                logger.info(
+                    f"[ROLLBACK] Skip cooldown for {action.action_type} "
+                    f"(one-shot action, no flapping risk)"
+                )
+            else:
+                settings = await self.setting_service.get_auto_rollback_settings()
+                cooldown_secs = settings.get("cooldown_seconds", 600)
+                cooldown_until = now + timedelta(seconds=cooldown_secs)
+                logger.info(
+                    f"[ROLLBACK] Cooldown {cooldown_secs}s set for "
+                    f"{action.action_type} until {cooldown_until.isoformat()}"
+                )
 
             # 8. Cập nhật action status = reverted
             action.status = "reverted"
             action.undone_at = now
             action.undone_by = actor
             action.undo_reason = reason
-            action.cooldown_until = cooldown_until
+            action.cooldown_until = cooldown_until  # None nếu kill
             action.updated_at = now
 
             # 9. Ghi audit log hoàn tất undo
             final_event = "auto_undone" if is_auto else "undone"
+            metadata = {
+                "compensation_command": cmd_action,
+                "compensation_cmd_id": cmd_id,
+            }
+            # Chỉ thêm cooldown_until nếu có giá trị (kill không có)
+            if cooldown_until is not None:
+                metadata["cooldown_until"] = cooldown_until.isoformat()
+
             await self.audit_service.record_event(
                 action_id=action_id,
                 event=final_event,
                 actor=actor,
                 reason=reason,
-                metadata={
-                    "compensation_command": cmd_action,
-                    "compensation_cmd_id": cmd_id,
-                    "cooldown_until": cooldown_until.isoformat()
-                }
+                metadata=metadata
             )
 
             await self.session.commit()
