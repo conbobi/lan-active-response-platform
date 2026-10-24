@@ -11,9 +11,10 @@ const mapStatus = (status, isIsolated = false) => {
 };
 
 export const getAgents = async () => {
-  const response = await api.get('/agents');
+  const response = await api.get('/agents/');
   // Backend trả về list các agent, map sang định dạng frontend cần
-  return response.map((agent) => ({
+  const list = Array.isArray(response) ? response : [];
+  return list.map((agent) => ({
     id: agent.id,
     hostname: agent.hostname || agent.id,
     ip: agent.ip_address || agent.ip,

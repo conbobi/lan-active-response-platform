@@ -39,9 +39,9 @@ class SuspiciousProcessRule(RiskRule):
         r"\bcertutil\b.*-urlcache.*-split",
         r"\bcertutil\b.*-decodehex",
 
-        # Suspicious paths
-        r"\\users\\public\\.*\.(?:exe|dll|ps1)",
-        r"\\appdata\\local\\temp\\.*\.(?:exe|dll|ps1)",
+        # Suspicious paths (chỉ match executable nằm trực tiếp trong thư mục temp/public, không match tham số flag thư mục)
+        r"\\users\\public\\[^\\/\s\"']+\.(?:exe|dll|ps1|vbs|js)\b",
+        r"\\appdata\\local\\temp\\[^\\/\s\"']+\.(?:exe|dll|ps1|vbs|js)\b",
 
         # Test simulations & admin abuse
         r"\bkey_test\b",
@@ -123,7 +123,14 @@ class SuspiciousProcessRule(RiskRule):
                     matched = True
 
             if not matched and is_susp_flag:
-                matched = True
+                # If agent flagged it, verify it is not a normal application binary running from legitimate install dirs
+                is_legit_path = any(exe.startswith(prefix) for prefix in (
+                    "c:\\program files", "c:\\program files (x86)", "c:\\windows",
+                    "/usr/bin", "/usr/sbin", "/bin", "/sbin"
+                )) or "\\programs\\microsoft vs code" in exe
+                if not is_legit_path or not exe:
+                    # Test simulations (empty exe) or untrusted paths retain agent flag
+                    matched = True
 
             if matched:
                 suspicious_count += 1

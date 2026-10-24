@@ -6,7 +6,10 @@ import Dropdown from '../components/ui/Dropdown';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import KillProcessModal from '../components/process/KillProcessModal';
+import { killProcess } from '../api/process';
 import {
+
   FiCpu,
   FiAlertOctagon,
   FiRotateCw,
@@ -41,8 +44,7 @@ export default function ProcessTree() {
   } = useProcessTree(selectedAgent);
 
   const [expandedPids, setExpandedPids] = useState(new Set());
-  const [killModalProc, setKillModalProc] = useState(null);
-  const [killTreeMode, setKillTreeMode] = useState(true);
+  const [killTarget, setKillTarget] = useState(null);
   const prevAgentRef = useRef('');
 
   // Auto-dismiss success notification after 4.5 seconds
@@ -145,28 +147,27 @@ export default function ProcessTree() {
   };
 
   const openKillModal = (proc, isTreeMode = true) => {
-    setKillModalProc(proc);
-    setKillTreeMode(isTreeMode);
+    setKillTarget({ ...proc, defaultKillTree: isTreeMode });
   };
 
-  const confirmKill = async () => {
-    if (!killModalProc) return;
-    const target = killModalProc;
-    const isTree = killTreeMode;
-    
-    // Close modal immediately
-    setKillModalProc(null);
-
+  const handleKill = async ({ pid, reason, killTree }) => {
     try {
-      if (isTree) {
-        await handleKillProcessTree(target.pid, target.name);
+      await killProcess(selectedAgent, pid, { reason, killTree });
+      if (clearError) clearError();
+      if (killTree) {
+        await handleKillProcessTree(pid);
       } else {
-        await handleKillProcess(target.pid);
+        await handleKillProcess(pid);
       }
-    } catch (e) {
-      // Error handled by hook
+      setTimeout(() => {
+        refreshProcessData();
+      }, 1500);
+    } catch (err) {
+      console.error("Kill failed:", err);
+      throw err;
     }
   };
+
 
   // Render recursive process tree nodes with expand/collapse
   const renderTreeNode = (node, depth = 0) => {
@@ -263,6 +264,23 @@ export default function ProcessTree() {
               </span>
             )}
 
+            <button
+              className="text-red-600 hover:text-red-800 p-1"
+              onClick={() => openKillModal(node, false)}
+              title="Kill process"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--error, #ef4444)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '4px',
+                borderRadius: '4px',
+              }}
+            >
+              <FiXCircle size={16} />
+            </button>
             <Button
               variant="ghost"
               size="sm"
@@ -516,47 +534,14 @@ export default function ProcessTree() {
         )}
       </div>
 
-      {/* Kill Confirmation Modal */}
-      <Modal
-        isOpen={!!killModalProc}
-        onClose={() => setKillModalProc(null)}
-        title={killTreeMode ? 'Terminate Process Tree Confirmation' : 'Terminate Process Confirmation'}
-      >
-        {killModalProc && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              Are you sure you want to dispatch a <strong>{killTreeMode ? 'KILL_PROCESS_TREE' : 'KILL_PROCESS'}</strong> signal to process <strong>{killModalProc.name}</strong> (PID: {killModalProc.pid}) on agent <strong>{selectedAgent}</strong>?
-            </p>
-            {killTreeMode && (
-              <div
-                style={{
-                  fontSize: '0.82rem',
-                  padding: '0.6rem 0.85rem',
-                  background: 'rgba(239,68,68,0.1)',
-                  border: '1px solid var(--error)',
-                  borderRadius: 'var(--radius-sm)',
-                  color: 'var(--error)',
-                }}
-              >
-                ⚡ This will recursively kill PID {killModalProc.pid} and all child processes spawned by this process tree to prevent zombie execution.
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              <Button variant="ghost" onClick={() => setKillModalProc(null)} disabled={killing}>
-                Cancel
-              </Button>
-              <Button
-                variant="danger"
-                iconLeft={killTreeMode ? <FiLayers size={14} /> : <FiXCircle size={14} />}
-                onClick={confirmKill}
-                disabled={killing}
-              >
-                {killing ? 'Dispatching...' : killTreeMode ? `Confirm Kill Tree (PID ${killModalProc.pid})` : `Confirm Kill PID ${killModalProc.pid}`}
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      {/* Kill Process Modal */}
+      <KillProcessModal
+        isOpen={!!killTarget}
+        process={killTarget}
+        agentId={selectedAgent}
+        onClose={() => setKillTarget(null)}
+        onConfirm={handleKill}
+      />
     </div>
   );
 }

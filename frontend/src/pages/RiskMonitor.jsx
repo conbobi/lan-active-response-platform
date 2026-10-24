@@ -1,11 +1,12 @@
 // src/pages/RiskMonitor.jsx
 import React, { useEffect, useState, useMemo } from 'react';
 import { getAgentRiskScores } from '../api/risk';
+import { getAgents } from '../api/agents';
 import { FactorBreakdown } from '../components/FactorBreakdown';
 import { RiskScoreChart } from '../components/RiskScoreChart';
 import { FiActivity, FiRefreshCw, FiEye, FiCopy, FiCheck, FiShield, FiAlertTriangle } from 'react-icons/fi';
 
-const AGENTS = ['client1', 'client2', 'client3', 'client4', 'attacker'];
+const DEFAULT_AGENTS = ['client1', 'client2', 'client3', 'client4', 'attacker', 'WIN-DEMO-01'];
 
 export function StatusBadge({ score }) {
   const s = Number(score || 0);
@@ -43,6 +44,7 @@ export function StatusBadge({ score }) {
 
 export default function RiskMonitor() {
   const [scores, setScores] = useState([]);
+  const [agentsList, setAgentsList] = useState(DEFAULT_AGENTS);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
@@ -54,8 +56,20 @@ export default function RiskMonitor() {
   async function loadData() {
     try {
       setLoading(true);
+      let targetAgents = agentsList;
+      try {
+        const fetched = await getAgents();
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          const ids = fetched.map((a) => a.id).filter(Boolean);
+          targetAgents = Array.from(new Set([...ids, ...DEFAULT_AGENTS]));
+          setAgentsList(targetAgents);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch dynamic agent list, using defaults', err);
+      }
+
       const results = await Promise.all(
-        AGENTS.map((agentId) => getAgentRiskScores(agentId, 30).catch(() => []))
+        targetAgents.map((agentId) => getAgentRiskScores(agentId, 30).catch(() => []))
       );
       const all = results.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       setScores(all);
@@ -142,7 +156,7 @@ export default function RiskMonitor() {
         >
           Tất cả Agent ({scores.length})
         </button>
-        {AGENTS.map((agent) => {
+        {agentsList.map((agent) => {
           const isSel = selectedAgent === agent;
           return (
             <button

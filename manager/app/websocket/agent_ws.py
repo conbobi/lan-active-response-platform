@@ -29,37 +29,104 @@ from app.core.database import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 
-async def _save_process_list(session: AsyncSession, target_agent_id: str, processes_data: list) -> int:
+async def _save_process_list(session: AsyncSession, target_agent_id: str, 
+                              processes_data: list) -> int:
+    """Save process list with truncation + per-process savepoints."""
     if not processes_data or not isinstance(processes_data, list):
         return 0
+    
     proc_repo = ProcessInfoRepository(session)
     await proc_repo.delete_by_agent(target_agent_id)
+    
     now_dt = datetime.now(timezone.utc)
     count = 0
+    skipped = 0
+    
+    def safe_str(val, max_len: int, default: str = "") -> str:
+        """Truncate string to model max length."""
+        if val is None:
+            return default
+        s = str(val)
+        return s[:max_len] if len(s) > max_len else s
+    
+    def safe_int(val, default=None):
+        try:
+            return int(val) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+    
+    def safe_float(val, default=0.0):
+        try:
+            return float(val) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+    
     for proc_item in processes_data:
-        pid = proc_item.get("pid")
-        if not pid:
+        # Skip invalid pid
+        pid = safe_int(proc_item.get("pid"))
+        if pid is None or pid < 0:
+            skipped += 1
             continue
-        ppid_val = proc_item.get("parent_pid") if proc_item.get("parent_pid") is not None else proc_item.get("ppid")
-        cmd_raw = proc_item.get("cmdline") or ""
-        cmdline_str = " ".join(str(x) for x in cmd_raw) if isinstance(cmd_raw, list) else str(cmd_raw)
-        pinfo = ProcessInfo(
-            id=f"proc_{uuid.uuid4().hex[:12]}",
-            agent_id=target_agent_id,
-            pid=int(pid),
-            parent_pid=int(ppid_val) if ppid_val is not None else None,
-            name=str(proc_item.get("name") or "unknown"),
-            exe=str(proc_item.get("exe") or proc_item.get("path") or ""),
-            exe_path=str(proc_item.get("exe_path") or proc_item.get("exe") or proc_item.get("path") or ""),
-            cmdline=cmdline_str,
-            cpu_percent=float(proc_item.get("cpu_percent") or proc_item.get("cpu") or 0.0),
-            memory_percent=float(proc_item.get("memory_percent") or proc_item.get("ram") or 0.0),
-            is_suspicious=bool(proc_item.get("is_suspicious", False)),
-            created_at=now_dt
+        
+        try:
+            parent_pid = safe_int(
+                proc_item.get("parent_pid") 
+                if proc_item.get("parent_pid") is not None 
+                else proc_item.get("ppid")
+            )
+            
+            cmd_raw = proc_item.get("cmdline") or ""
+            if isinstance(cmd_raw, list):
+                cmdline_str = " ".join(str(x) for x in cmd_raw)
+            else:
+                cmdline_str = str(cmd_raw)
+            
+            # ⚠️ CRITICAL: Truncate mọi string theo model limit
+            pinfo = ProcessInfo(
+                id=f"proc_{uuid.uuid4().hex[:12]}",
+                agent_id=target_agent_id,
+                pid=pid,
+                parent_pid=parent_pid,
+                name=safe_str(proc_item.get("name"), 128, "unknown"),
+                exe=safe_str(
+                    proc_item.get("exe") or proc_item.get("path"), 512
+                ),
+                exe_path=safe_str(
+                    proc_item.get("exe_path") or proc_item.get("exe") 
+                    or proc_item.get("path"), 512
+                ) or None,
+                cmdline=safe_str(cmdline_str, 1024),
+                cpu_percent=safe_float(
+                    proc_item.get("cpu_percent") or proc_item.get("cpu")
+                ),
+                memory_percent=safe_float(
+                    proc_item.get("memory_percent") or proc_item.get("ram")
+                ),
+                is_suspicious=bool(proc_item.get("is_suspicious", False)),
+                hash=safe_str(proc_item.get("hash"), 128) or None,
+                created_at=now_dt,
+            )
+            
+            # ✅ Savepoint per process — nếu fail, chỉ rollback process đó
+            async with session.begin_nested():
+                await proc_repo.add(pinfo)
+            count += 1
+            
+        except Exception as e:
+            logger.warning(
+                f"[PROCESS_LIST] Skip pid={proc_item.get('pid')} "
+                f"name={proc_item.get('name')}: {type(e).__name__}: {e}"
+            )
+            skipped += 1
+            continue
+    
+    if skipped > 0:
+        logger.warning(
+            f"[PROCESS_LIST] {target_agent_id}: saved={count}, skipped={skipped}"
         )
-        await proc_repo.add(pinfo)
-        count += 1
+    
     return count
+
 
 
 async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) -> Tuple[Optional[dict], str]:

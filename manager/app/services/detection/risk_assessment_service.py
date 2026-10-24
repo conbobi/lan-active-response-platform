@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 EMA_ALPHA = 0.35             # Hệ số làm mượt
 DEBOUNCE_MIN_CYCLES = 2      # Số chu kỳ liên tiếp tối thiểu
 DEBOUNCE_PENALTY = 0.3       # Hệ số phạt nếu chưa đủ chu kỳ
+CRITICAL_BYPASS_THRESHOLD = 85.0  # Ngưỡng bypass EMA cho critical attacks
 
 # ===== Anomaly Category Cap =====
 ANOMALY_RULES = {
@@ -48,17 +49,26 @@ IOC_RULES = {
 ANOMALY_CAP = 35.0
 
 
-def compute_ema(current: float, previous: Optional[float], alpha: float = EMA_ALPHA) -> float:
+def compute_ema(
+    current: float,
+    previous: Optional[float],
+    alpha: float = EMA_ALPHA,
+    bypass_threshold: float = CRITICAL_BYPASS_THRESHOLD,
+) -> float:
     """Tính EMA cho risk score.
 
     Args:
         current: Điểm raw vừa tính.
         previous: Điểm smoothed của chu kỳ trước (None nếu lần đầu).
         alpha: Hệ số làm mượt (0.35 = cân bằng giữa phản ứng và mượt).
+        bypass_threshold: Ngưỡng bypass EMA (mặc định 85.0). Nếu raw_score >= bypass_threshold,
+                          bỏ qua EMA để phản ứng tức thời với tấn công nghiêm trọng.
 
     Returns:
-        Điểm đã làm mượt.
+        Điểm đã làm mượt (hoặc raw score nếu >= bypass_threshold).
     """
+    if current >= bypass_threshold:
+        return round(float(current), 2)
     if previous is None or not isinstance(previous, (int, float)):
         return round(float(current), 2)
     return round(alpha * current + (1 - alpha) * previous, 2)
@@ -245,8 +255,14 @@ class RiskAssessmentService:
         if not isinstance(prev_smoothed, (int, float)):
             prev_smoothed = None
 
-        # 3. Áp dụng EMA
-        smoothed = compute_ema(raw_score, prev_smoothed)
+        # 3. Áp dụng EMA (BYPASS SMOOTHING cho critical attacks)
+        if raw_score >= CRITICAL_BYPASS_THRESHOLD:
+            smoothed = round(float(raw_score), 2)
+            logger.info(
+                f"[CRITICAL BYPASS] Agent {agent_id} raw={raw_score} >= {CRITICAL_BYPASS_THRESHOLD}, skip EMA"
+            )
+        else:
+            smoothed = compute_ema(raw_score, prev_smoothed)
 
         # 4. Lưu cả raw + smoothed + factors
         record = RiskScoreRecord(
