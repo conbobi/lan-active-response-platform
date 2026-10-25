@@ -8,6 +8,8 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import ErrorState from '../components/ui/ErrorState';
 import EmptyState from '../components/ui/EmptyState';
+import InfoTooltip from '../components/ui/InfoTooltip';
+import { TOOLTIPS } from '../constants/tooltips';
 import KillProcessModal from '../components/process/KillProcessModal';
 import { killProcess } from '../api/process';
 import {
@@ -234,7 +236,7 @@ export default function ProcessTree() {
                 minWidth: 70,
               }}
             >
-              PID {node.pid}
+              <InfoTooltip {...TOOLTIPS.PID}>PID {node.pid}</InfoTooltip>
             </span>
 
             <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
@@ -252,9 +254,10 @@ export default function ProcessTree() {
                   textOverflow: 'ellipsis',
                   maxWidth: 320,
                 }}
-                title={node.cmdline}
               >
-                ({node.cmdline})
+                <InfoTooltip term="Cmdline" definition={node.cmdline}>
+                  ({node.cmdline})
+                </InfoTooltip>
               </span>
             )}
 
@@ -276,7 +279,7 @@ export default function ProcessTree() {
             <button
               className="text-red-600 hover:text-red-800 p-1"
               onClick={() => openKillModal(node, false)}
-              title="Kill process"
+              title="Dừng tiến trình này"
               style={{
                 background: 'none',
                 border: 'none',
@@ -296,6 +299,7 @@ export default function ProcessTree() {
               iconLeft={<FiXCircle size={13} />}
               onClick={() => openKillModal(node, false)}
               disabled={killing}
+              title="Dừng tiến trình này"
             >
               Kill PID
             </Button>
@@ -305,6 +309,7 @@ export default function ProcessTree() {
               iconLeft={<FiLayers size={13} />}
               onClick={() => openKillModal(node, true)}
               disabled={killing}
+              title="Dừng tiến trình độc hại (kèm process con)"
             >
               Kill Tree
             </Button>
@@ -476,7 +481,9 @@ export default function ProcessTree() {
               >
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <span style={{ fontWeight: 700, fontFamily: 'monospace', color: 'var(--error)' }}>PID {proc.pid}</span>
+                    <span style={{ fontWeight: 700, fontFamily: 'monospace', color: 'var(--error)' }}>
+                      <InfoTooltip {...TOOLTIPS.PID}>PID {proc.pid}</InfoTooltip>
+                    </span>
                     <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{proc.name}</span>
                     <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
                       {proc.exe || proc.path || proc.cmdline || ''}
@@ -489,11 +496,11 @@ export default function ProcessTree() {
 
                   {Array.isArray(proc.parent_chain) && proc.parent_chain.length > 0 && (
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <FiTerminal size={12} /> Parent Execution Lineage:{' '}
+                      <FiTerminal size={12} /> <InfoTooltip {...TOOLTIPS.PPID}>Parent Execution Lineage:</InfoTooltip>{' '}
                       {proc.parent_chain.map((p, idx) => (
                         <span key={p.pid || idx} style={{ fontFamily: 'monospace' }}>
                           {idx > 0 && ' → '}
-                          {p.name} (PID {p.pid})
+                          {p.name} (<InfoTooltip {...TOOLTIPS.PID}>PID {p.pid}</InfoTooltip>)
                         </span>
                       ))}
                     </div>
@@ -507,6 +514,7 @@ export default function ProcessTree() {
                     iconLeft={<FiXCircle size={14} />}
                     onClick={() => openKillModal(proc, false)}
                     disabled={killing}
+                    title="Dừng tiến trình này"
                   >
                     Kill PID {proc.pid}
                   </Button>
@@ -516,6 +524,7 @@ export default function ProcessTree() {
                     iconLeft={<FiLayers size={14} />}
                     onClick={() => openKillModal(proc, true)}
                     disabled={killing}
+                    title="Dừng tiến trình độc hại (kèm process con)"
                   >
                     Kill Tree {proc.pid}
                   </Button>

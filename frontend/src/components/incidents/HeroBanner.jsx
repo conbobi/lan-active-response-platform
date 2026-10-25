@@ -1,7 +1,8 @@
-// src/components/incidents/HeroBanner.jsx
-import React from 'react';
+import React, { useMemo } from 'react';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
+import InfoTooltip from '../ui/InfoTooltip';
+import { TOOLTIPS } from '../../constants/tooltips';
 import {
   FiAlertTriangle,
   FiShield,
@@ -54,6 +55,28 @@ export default function HeroBanner({
       ? 'var(--warning)'
       : 'var(--primary)';
 
+  const mitreTags = useMemo(() => {
+    if (Array.isArray(incident.mitreTags) && incident.mitreTags.length > 0) {
+      return incident.mitreTags;
+    }
+    if (Array.isArray(incident.mitre_techniques) && incident.mitre_techniques.length > 0) {
+      return incident.mitre_techniques.map(t => typeof t === 'string' ? { id: t, name: t } : t);
+    }
+    const text = `${incident.title || ''} ${incident.description || ''} ${JSON.stringify(incident.details || {})}`;
+    const matches = text.match(/T\d{4}(?:\.\d{3})?/g) || [];
+    const unique = Array.from(new Set(matches));
+    if (unique.length > 0) {
+      return unique.map(id => ({ id, name: TOOLTIPS[id]?.term || id }));
+    }
+    if (text.toLowerCase().includes('msbuild')) {
+      return [{ id: 'T1127.001', name: 'MSBuild Execution' }];
+    }
+    if (text.toLowerCase().includes('c2') || text.toLowerCase().includes('beacon')) {
+      return [{ id: 'T1071', name: 'Application Layer Protocol' }];
+    }
+    return [{ id: 'T1059', name: 'Command Execution' }];
+  }, [incident]);
+
   return (
     <div
       style={{
@@ -96,6 +119,18 @@ export default function HeroBanner({
           <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
             {incident.title}
           </h2>
+          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+            {mitreTags.map(tag => (
+              <span key={tag.id} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.78rem' }}>
+                🎯 <InfoTooltip 
+                  term={TOOLTIPS[tag.id]?.term || tag.id}
+                  definition={TOOLTIPS[tag.id]?.definition || tag.name}
+                >
+                  {tag.id}
+                </InfoTooltip>
+              </span>
+            ))}
+          </div>
         </div>
 
         {/* Action Quick Buttons */}

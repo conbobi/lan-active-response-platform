@@ -17,7 +17,7 @@ router = APIRouter(tags=["Docker Monitor"])
 
 @router.get("/status", response_model=List[ContainerStatusOut], status_code=status.HTTP_200_OK)
 async def get_docker_status(
-    stats_timeout: float = Query(5.0, ge=1.0, le=20.0, description="Timeout in seconds for querying container stats")
+    stats_timeout: float = Query(1.0, ge=0.5, le=20.0, description="Timeout in seconds for querying container stats")
 ):
     """Retrieve real-time status, uptime, CPU, Memory, and Network I/O metrics of all Docker containers."""
     service = DockerMonitorService()

@@ -8,7 +8,9 @@ const api = axios.create({
     headers: { 'Content-Type': 'application/json' },
 });
 
-// Interceptor xử lý lỗi
+export const subscribeLoading = () => () => {};
+
+// Interceptor xử lý response và lỗi
 api.interceptors.response.use(
     (res) => res.data,
     (err) => {

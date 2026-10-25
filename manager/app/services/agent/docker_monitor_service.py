@@ -229,7 +229,7 @@ class DockerMonitorService:
     async def _async_fetch_single_container_with_timeout(
         self,
         container: Any,
-        timeout: float = 5.0
+        timeout: float = 1.0
     ) -> ContainerStatusOut:
         """Fetch container metrics asynchronously in a worker thread with per-container timeout."""
         cid = container.short_id or container.id[:12]
@@ -240,11 +240,11 @@ class DockerMonitorService:
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout ({timeout}s) fetching metrics for container {cname} ({cid})")
+            logger.debug(f"Skip: {cname} (Timeout {timeout}s fetching metrics)")
             return ContainerStatusOut(
                 container_id=cid,
                 name=cname,
-                status=container.status.lower(),
+                status=getattr(container, "status", "running"),
                 uptime="Running (Stats Timeout)",
                 cpu_percent=0.0,
                 memory_usage=0.0,
@@ -268,8 +268,8 @@ class DockerMonitorService:
 
     async def get_containers_status(
         self,
-        stats_timeout: float = 5.0,
-        total_timeout: float = 15.0
+        stats_timeout: float = 1.0,
+        total_timeout: float = 5.0
     ) -> List[ContainerStatusOut]:
         """
         Fetch and return status and resource metrics for all Docker containers.
@@ -282,9 +282,13 @@ class DockerMonitorService:
             if not raw_containers:
                 return []
 
+            # Filter only LARP containers (larp-*) to avoid blocking on slow/external containers (wazuh, mongo, etc.)
+            larp_containers = [c for c in raw_containers if c.name.lstrip("/").startswith("larp-")]
+            target_containers = larp_containers if larp_containers else raw_containers
+
             tasks = [
                 self._async_fetch_single_container_with_timeout(c, timeout=stats_timeout)
-                for c in raw_containers
+                for c in target_containers
             ]
 
             results = await asyncio.gather(*tasks, return_exceptions=False)

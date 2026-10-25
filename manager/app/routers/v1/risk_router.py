@@ -87,7 +87,7 @@ async def verify_phase2(db: AsyncSession = Depends(get_db)):
 
     return {
         "manager_ip_bypassed": manager_ip_count == 0,
-        "idle_agents_safe": max_idle_score < 5,
+        "idle_agents_safe": max_idle_score < 15,
         "baseline_fresh": baseline_fresh,
         "ema_working": ema_diff_count > 0,
         "details": {

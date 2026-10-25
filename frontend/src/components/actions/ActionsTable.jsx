@@ -2,6 +2,8 @@ import React from 'react';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import EmptyState from '../ui/EmptyState';
+import InfoTooltip from '../ui/InfoTooltip';
+import { TOOLTIPS } from '../../constants/tooltips';
 import AutoRollbackTimer from './AutoRollbackTimer';
 import UndoButton from './UndoButton';
 import {
@@ -45,9 +47,17 @@ export default function ActionsTable({
   const getStatusBadge = (status) => {
     switch (status) {
       case 'applied':
-        return <Badge status="danger" label="Applied" showDot={true} />;
+        return (
+          <InfoTooltip {...TOOLTIPS.Applied}>
+            <Badge status="danger" label="Applied" showDot={true} />
+          </InfoTooltip>
+        );
       case 'reverted':
-        return <Badge status="active" label="Reverted" showDot={true} />;
+        return (
+          <InfoTooltip {...TOOLTIPS.Reverted}>
+            <Badge status="active" label="Reverted" showDot={true} />
+          </InfoTooltip>
+        );
       case 'failed':
         return <Badge status="danger" label="Failed" showDot={false} />;
       case 'reverting':
@@ -123,8 +133,14 @@ export default function ActionsTable({
               <th style={{ padding: '0.75rem 0.85rem', minWidth: '150px' }}>Mục tiêu (Target)</th>
               <th style={{ padding: '0.75rem 0.85rem', width: '120px' }}>Loại Action</th>
               <th style={{ padding: '0.75rem 0.85rem', width: '100px' }}>Scope</th>
-              <th style={{ padding: '0.75rem 0.85rem', width: '110px' }}>Trạng thái</th>
-              <th style={{ padding: '0.75rem 0.85rem', minWidth: '150px' }}>Auto-Rollback</th>
+              <th style={{ padding: '0.75rem 0.85rem', width: '110px' }}>
+                <InfoTooltip term="Trạng thái" definition="Trạng thái thực thi của hành động: Applied (Đã áp dụng), Reverted (Đã hoàn nguyên), hoặc Failed (Thất bại)">
+                  Trạng thái
+                </InfoTooltip>
+              </th>
+              <th style={{ padding: '0.75rem 0.85rem', minWidth: '150px' }}>
+                <InfoTooltip {...TOOLTIPS.Cooldown}>Auto-Rollback</InfoTooltip>
+              </th>
               <th style={{ padding: '0.75rem 0.85rem', width: '140px', textAlign: 'right' }}>Thao tác</th>
             </tr>
           </thead>

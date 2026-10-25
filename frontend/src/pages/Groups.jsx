@@ -11,6 +11,7 @@ import FilterTabs from '../components/ui/FilterTabs';
 import KpiCard from '../components/ui/KpiCard';
 import ErrorState from '../components/ui/ErrorState';
 import EmptyState from '../components/ui/EmptyState';
+import { SkeletonCard } from '../components/ui/Skeleton';
 import {
   FiUsers,
   FiPlus,
@@ -234,7 +235,7 @@ export default function Groups() {
       {loading && groups.length === 0 ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="card skeleton" style={{ height: '220px', borderRadius: 'var(--radius-md)' }} />
+            <SkeletonCard key={i} />
           ))}
         </div>
       ) : filteredGroups.length === 0 ? (

@@ -1,6 +1,7 @@
-// src/components/actions/AutoRollbackTimer.jsx
 import React, { useState, useEffect } from 'react';
 import { FiClock } from 'react-icons/fi';
+import InfoTooltip from '../ui/InfoTooltip';
+import { TOOLTIPS } from '../../constants/tooltips';
 
 export default function AutoRollbackTimer({ autoRollbackAt, status }) {
   const [timeLeft, setTimeLeft] = useState(null);
@@ -53,23 +54,25 @@ export default function AutoRollbackTimer({ autoRollbackAt, status }) {
   const formatted = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
   return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.35rem',
-        padding: '0.2rem 0.5rem',
-        background: 'rgba(234, 179, 8, 0.12)',
-        border: '1px solid rgba(234, 179, 8, 0.3)',
-        borderRadius: '9999px',
-        color: '#eab308',
-        fontSize: '0.75rem',
-        fontWeight: 600,
-        fontVariantNumeric: 'tabular-nums',
-      }}
-      title={`Auto rollback scheduled at ${new Date(autoRollbackAt).toLocaleTimeString()}`}
-    >
-      <FiClock size={12} /> Auto rollback in {formatted}
-    </span>
+    <InfoTooltip {...TOOLTIPS.Cooldown}>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.35rem',
+          padding: '0.2rem 0.5rem',
+          background: 'rgba(234, 179, 8, 0.12)',
+          border: '1px solid rgba(234, 179, 8, 0.3)',
+          borderRadius: '9999px',
+          color: '#eab308',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+        title={`Auto rollback scheduled at ${new Date(autoRollbackAt).toLocaleTimeString()}`}
+      >
+        <FiClock size={12} /> Auto rollback in {formatted}
+      </span>
+    </InfoTooltip>
   );
 }

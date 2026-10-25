@@ -6,6 +6,9 @@ import SearchBar from '../components/ui/SearchBar';
 import Dropdown from '../components/ui/Dropdown';
 import Pagination from '../components/ui/Pagination';
 import Button from '../components/ui/Button';
+import InfoTooltip from '../components/ui/InfoTooltip';
+import { SkeletonTable } from '../components/ui/Skeleton';
+import { TOOLTIPS } from '../constants/tooltips';
 import { FiEye, FiLock, FiUnlock, FiCpu, FiRefreshCw } from 'react-icons/fi';
 
 const ITEMS_PER_PAGE = 8;
@@ -66,7 +69,9 @@ export default function Agents() {
         <div className="page-header">
           <h1 className="page-title">Agents</h1>
         </div>
-        <div className="card skeleton" style={{ height: '300px' }} />
+        <div className="card" style={{ padding: 0 }}>
+          <SkeletonTable rows={6} />
+        </div>
       </div>
     );
   }
@@ -204,12 +209,22 @@ export default function Agents() {
                         </button>
 
                         {agent.status !== 'isolated' ? (
-                          <button className="action-btn" onClick={() => handleIsolate(agent.id)} title="Isolate Agent">
-                            <FiLock size={13} />
+                          <button
+                            className="action-btn"
+                            onClick={() => handleIsolate(agent.id)}
+                            title="Cô lập máy khỏi mạng"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem' }}
+                          >
+                            <FiLock size={13} /> Cô lập
                           </button>
                         ) : (
-                          <button className="action-btn" onClick={() => handleUnisolate(agent.id)} title="Release Agent">
-                            <FiUnlock size={13} />
+                          <button
+                            className="action-btn"
+                            onClick={() => handleUnisolate(agent.id)}
+                            title="Hủy cô lập máy"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem' }}
+                          >
+                            <FiUnlock size={13} /> Bỏ cô lập
                           </button>
                         )}
 

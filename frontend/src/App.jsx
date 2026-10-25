@@ -1,4 +1,3 @@
-// src/App.jsx
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
@@ -26,7 +25,6 @@ import Policies from './pages/Policies';
 import ActionsHistory from './pages/ActionsHistory';
 
 export default function App() {
-
   return (
     <BrowserRouter>
       <Toaster position="top-right" />
@@ -37,6 +35,7 @@ export default function App() {
           <Route path="/groups" element={<Groups />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/incidents" element={<Incidents />} />
+          <Route path="/incidents/:id" element={<Incidents />} />
           <Route path="/actions" element={<ActionsHistory />} />
           <Route path="/policies" element={<Policies />} />
           <Route path="/commands" element={<Commands />} />

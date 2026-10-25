@@ -1,5 +1,5 @@
 // src/pages/RiskMonitor.jsx
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { getAgentRiskScores } from '../api/risk';
 import { getAgents } from '../api/agents';
 import { FactorBreakdown } from '../components/FactorBreakdown';
@@ -53,16 +53,20 @@ export default function RiskMonitor() {
   const [detailRecord, setDetailRecord] = useState(null);
   const [copied, setCopied] = useState(false);
 
-  async function loadData() {
+  const agentsListRef = useRef(agentsList);
+  agentsListRef.current = agentsList;
+
+  const loadData = useCallback(async (isInitial = false) => {
     try {
-      setLoading(true);
-      let targetAgents = agentsList;
+      if (isInitial) setLoading(true);
+      let targetAgents = agentsListRef.current;
       try {
         const fetched = await getAgents();
         if (Array.isArray(fetched) && fetched.length > 0) {
           const ids = fetched.map((a) => a.id).filter(Boolean);
           targetAgents = Array.from(new Set([...ids, ...DEFAULT_AGENTS]));
           setAgentsList(targetAgents);
+          agentsListRef.current = targetAgents;
         }
       } catch (err) {
         console.warn('Failed to fetch dynamic agent list, using defaults', err);
@@ -75,15 +79,15 @@ export default function RiskMonitor() {
       setScores(all);
       setLastRefreshed(new Date());
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 12000);
+    loadData(true);
+    const interval = setInterval(() => loadData(false), 12000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadData]);
 
   const filtered = useMemo(() => {
     return selectedAgent ? scores.filter((s) => s.agent_id === selectedAgent) : scores;
@@ -118,7 +122,7 @@ export default function RiskMonitor() {
             Cập nhật: {lastRefreshed.toLocaleTimeString('vi-VN')}
           </span>
           <button
-            onClick={loadData}
+            onClick={() => loadData(true)}
             disabled={loading}
             style={{
               display: 'flex',

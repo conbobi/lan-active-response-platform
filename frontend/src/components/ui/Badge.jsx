@@ -1,4 +1,6 @@
 import React from 'react';
+import InfoTooltip from './InfoTooltip';
+import { TOOLTIPS } from '../../constants/tooltips';
 
 const variantMap = {
   online: 'badge-online',
@@ -36,10 +38,29 @@ export default function Badge({ status, label, showDot = true }) {
   const key = (status || '').toLowerCase();
   const cls = variantMap[key] || 'badge-info';
   const text = label || labelMap[key] || status;
-  return (
+
+  const badgeContent = (
     <span className={`badge ${cls}`}>
       {showDot && <span className="badge-dot" />}
       {text}
     </span>
   );
+
+  if (key === 'isolated' || String(text).toLowerCase().includes('isolated')) {
+    return (
+      <InfoTooltip {...TOOLTIPS.Isolation}>
+        {badgeContent}
+      </InfoTooltip>
+    );
+  }
+
+  if (key === 'quarantine' || String(text).toLowerCase().includes('quarantine')) {
+    return (
+      <InfoTooltip {...TOOLTIPS.Quarantine}>
+        {badgeContent}
+      </InfoTooltip>
+    );
+  }
+
+  return badgeContent;
 }

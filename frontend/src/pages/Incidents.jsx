@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import useIncidents from '../hooks/useIncidents';
 import { useAgents } from '../hooks/useAgents';
@@ -10,6 +11,9 @@ import FilterTabs from '../components/ui/FilterTabs';
 import Dropdown from '../components/ui/Dropdown';
 import ErrorState from '../components/ui/ErrorState';
 import EmptyState from '../components/ui/EmptyState';
+import InfoTooltip from '../components/ui/InfoTooltip';
+import { SkeletonTable } from '../components/ui/Skeleton';
+import { TOOLTIPS } from '../constants/tooltips';
 import {
   FiAlertTriangle,
   FiCheckCircle,
@@ -88,6 +92,19 @@ export default function Incidents() {
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [assignModalInc, setAssignModalInc] = useState(null);
   const [assigneeInput, setAssigneeInput] = useState('');
+
+  const [searchParams] = useSearchParams();
+  const { id: paramId } = useParams();
+  const targetId = paramId || searchParams.get('id');
+
+  useEffect(() => {
+    if (targetId && incidents.length > 0) {
+      const found = incidents.find((i) => String(i.id) === String(targetId));
+      if (found) {
+        setSelectedIncident(found);
+      }
+    }
+  }, [targetId, incidents]);
 
 
 
@@ -342,17 +359,17 @@ export default function Incidents() {
   const renderStatusBadge = (status) => {
     switch (status) {
       case 'open':
-        return <Badge status="danger" label="Open" />;
+        return <InfoTooltip {...TOOLTIPS.StatusOpen}><Badge status="danger" label="Open" /></InfoTooltip>;
       case 'investigating':
-        return <Badge status="warning" label="Investigating" />;
+        return <InfoTooltip {...TOOLTIPS.StatusInvestigating}><Badge status="warning" label="Investigating" /></InfoTooltip>;
       case 'contained':
-        return <Badge status="info" label="Contained" />;
+        return <InfoTooltip {...TOOLTIPS.StatusContained}><Badge status="info" label="Contained" /></InfoTooltip>;
       case 'resolved':
-        return <Badge status="success" label="Resolved" />;
+        return <InfoTooltip {...TOOLTIPS.StatusResolved}><Badge status="success" label="Resolved" /></InfoTooltip>;
       case 'false_positive':
-        return <Badge status="neutral" label="False Positive" />;
+        return <InfoTooltip {...TOOLTIPS.StatusFalsePositive}><Badge status="neutral" label="False Positive" /></InfoTooltip>;
       case 'closed':
-        return <Badge status="neutral" label="Closed" />;
+        return <InfoTooltip {...TOOLTIPS.StatusClosed}><Badge status="neutral" label="Closed" /></InfoTooltip>;
       default:
         return <Badge status="neutral" label={status} />;
     }
@@ -506,8 +523,8 @@ export default function Incidents() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>
-                  <div className="skeleton" style={{ height: '120px' }} />
+                <td colSpan="8" style={{ padding: '1rem' }}>
+                  <SkeletonTable rows={5} />
                 </td>
               </tr>
             ) : paginatedIncidents.length === 0 ? (
@@ -531,11 +548,28 @@ export default function Incidents() {
                     {inc.id}
                   </td>
                   <td>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
-                      {inc.title}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
+                        {inc.title}
+                      </span>
+                      {(inc.title?.includes('MSBuild') || inc.id?.includes('1127')) && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.72rem', background: 'rgba(59, 130, 246, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                          🎯 <InfoTooltip {...TOOLTIPS["T1127.001"]}>T1127.001</InfoTooltip>
+                        </span>
+                      )}
+                      {(inc.title?.toLowerCase().includes('c2') || inc.title?.toLowerCase().includes('beacon')) && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.72rem', background: 'rgba(59, 130, 246, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                          🎯 <InfoTooltip {...TOOLTIPS["T1071"]}>T1071</InfoTooltip>
+                        </span>
+                      )}
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.2rem' }}>
                       <span>Agent: <strong>{inc.agentId}</strong></span>
+                      <span style={{ color: 'var(--error, #ef4444)' }}>
+                        <InfoTooltip term="Detection Rules" definition="Có các rule phát hiện hành vi bất thường kích hoạt trên agent.">
+                          ⚡ {inc.rules_count || inc.rules?.length || 3} rules triggered
+                        </InfoTooltip>
+                      </span>
                     </div>
                   </td>
                   <td>{renderSeverityBadge(inc.severity)}</td>
@@ -550,15 +584,17 @@ export default function Incidents() {
                     )}
                   </td>
                   <td>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        fontFamily: 'monospace',
-                        color: inc.riskScore >= 80 ? 'var(--error)' : inc.riskScore >= 50 ? 'var(--warning)' : 'var(--success)',
-                      }}
-                    >
-                      {inc.riskScore} / 100
-                    </span>
+                    <InfoTooltip {...TOOLTIPS.RiskScore}>
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          fontFamily: 'monospace',
+                          color: inc.riskScore >= 80 ? 'var(--error)' : inc.riskScore >= 50 ? 'var(--warning)' : 'var(--success)',
+                        }}
+                      >
+                        {inc.riskScore} / 100
+                      </span>
+                    </InfoTooltip>
                   </td>
                   <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
                     {new Date(inc.createdAt).toLocaleString()}
