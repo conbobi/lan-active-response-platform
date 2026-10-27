@@ -6,7 +6,6 @@ import {
   FiCpu,
   FiUsers,
   FiAlertCircle,
-  FiGlobe,
   FiZap,
   FiSettings,
   FiShield,
@@ -20,10 +19,12 @@ import {
   FiBell,
   FiGitBranch,
   FiClock,
+  FiGlobe,
 } from 'react-icons/fi';
 
 const socMonitoringNav = [
   { to: '/', icon: <FiGrid size={16} />, label: 'Dashboard', end: true },
+  { to: '/network', icon: <FiGlobe size={16} />, label: 'Network Monitor' },
   { to: '/risk', icon: <FiActivity size={16} />, label: 'Risk Monitor' },
   { to: '/alerts', icon: <FiAlertCircle size={16} />, label: 'Alerts' },
 ];
@@ -45,10 +46,6 @@ const responseNav = [
   { to: '/actions', icon: <FiClock size={16} />, label: 'Actions History' },
   { to: '/policies', icon: <FiShield size={16} />, label: 'Response Policies' },
   { to: '/commands', icon: <FiTerminal size={16} />, label: 'Commands Audit' },
-];
-
-const networkNav = [
-  { to: '/network', icon: <FiGlobe size={16} />, label: 'Network 3D' },
 ];
 
 const adminNav = [
@@ -99,16 +96,7 @@ export default function Sidebar() {
         </NavLink>
       ))}
 
-      {/* 5. Network */}
-      <div className="sidebar-section-label" style={{ marginTop: '0.85rem' }}>Network</div>
-      {networkNav.map(({ to, icon, label }) => (
-        <NavLink key={to} to={to}>
-          {icon}
-          {label}
-        </NavLink>
-      ))}
-
-      {/* 6. System & Admin */}
+      {/* 5. System & Admin */}
       <div className="sidebar-section-label" style={{ marginTop: '0.85rem' }}>System & Admin</div>
       {adminNav.map(({ to, icon, label }) => (
         <NavLink key={to} to={to}>

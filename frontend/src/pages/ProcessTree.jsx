@@ -1,11 +1,17 @@
-// src/pages/ProcessTree.jsx
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import toast from 'react-hot-toast';
 import useProcessTree from '../hooks/useProcessTree';
 import { useAgents } from '../hooks/useAgents';
 import Dropdown from '../components/ui/Dropdown';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import ErrorState from '../components/ui/ErrorState';
+import EmptyState from '../components/ui/EmptyState';
+import InfoTooltip from '../components/ui/InfoTooltip';
+import { TOOLTIPS } from '../constants/tooltips';
+import KillProcessModal from '../components/process/KillProcessModal';
+import { killProcess } from '../api/process';
 import {
   FiCpu,
   FiAlertOctagon,
@@ -41,8 +47,7 @@ export default function ProcessTree() {
   } = useProcessTree(selectedAgent);
 
   const [expandedPids, setExpandedPids] = useState(new Set());
-  const [killModalProc, setKillModalProc] = useState(null);
-  const [killTreeMode, setKillTreeMode] = useState(true);
+  const [killTarget, setKillTarget] = useState(null);
   const prevAgentRef = useRef('');
 
   // Auto-dismiss success notification after 4.5 seconds
@@ -145,28 +150,35 @@ export default function ProcessTree() {
   };
 
   const openKillModal = (proc, isTreeMode = true) => {
-    setKillModalProc(proc);
-    setKillTreeMode(isTreeMode);
+    setKillTarget({ ...proc, defaultKillTree: isTreeMode });
   };
 
-  const confirmKill = async () => {
-    if (!killModalProc) return;
-    const target = killModalProc;
-    const isTree = killTreeMode;
-    
-    // Close modal immediately
-    setKillModalProc(null);
-
+  const handleKill = async ({ pid, reason, killTree }) => {
     try {
-      if (isTree) {
-        await handleKillProcessTree(target.pid, target.name);
+      const result = await killProcess(selectedAgent, pid, { reason, killTree });
+      toast.success(`Đã gửi lệnh ${result?.action_type || (killTree ? 'kill_tree' : 'kill_process')} cho PID ${pid}`);
+      if (clearError) clearError();
+      if (killTree) {
+        await handleKillProcessTree(pid);
       } else {
-        await handleKillProcess(target.pid);
+        await handleKillProcess(pid);
       }
-    } catch (e) {
-      // Error handled by hook
+      setTimeout(() => {
+        refreshProcessData();
+      }, 1500);
+    } catch (err) {
+      if (err.response?.status === 429) {
+        const detail = err.response.data?.detail || "";
+        const match = detail.match(/(\d+)s remaining/);
+        const remaining = match ? match[1] : "unknown";
+        toast.error(`⏳ Agent đang cooldown. Còn ${remaining}s`, { duration: 6000 });
+      } else {
+        toast.error(`Kill failed: ${err.response?.data?.detail || err.message}`);
+      }
+      throw err;
     }
   };
+
 
   // Render recursive process tree nodes with expand/collapse
   const renderTreeNode = (node, depth = 0) => {
@@ -224,7 +236,7 @@ export default function ProcessTree() {
                 minWidth: 70,
               }}
             >
-              PID {node.pid}
+              <InfoTooltip {...TOOLTIPS.PID}>PID {node.pid}</InfoTooltip>
             </span>
 
             <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
@@ -242,9 +254,10 @@ export default function ProcessTree() {
                   textOverflow: 'ellipsis',
                   maxWidth: 320,
                 }}
-                title={node.cmdline}
               >
-                ({node.cmdline})
+                <InfoTooltip term="Cmdline" definition={node.cmdline}>
+                  ({node.cmdline})
+                </InfoTooltip>
               </span>
             )}
 
@@ -263,12 +276,30 @@ export default function ProcessTree() {
               </span>
             )}
 
+            <button
+              className="text-red-600 hover:text-red-800 p-1"
+              onClick={() => openKillModal(node, false)}
+              title="Dừng tiến trình này"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--error, #ef4444)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '4px',
+                borderRadius: '4px',
+              }}
+            >
+              <FiXCircle size={16} />
+            </button>
             <Button
               variant="ghost"
               size="sm"
               iconLeft={<FiXCircle size={13} />}
               onClick={() => openKillModal(node, false)}
               disabled={killing}
+              title="Dừng tiến trình này"
             >
               Kill PID
             </Button>
@@ -278,6 +309,7 @@ export default function ProcessTree() {
               iconLeft={<FiLayers size={13} />}
               onClick={() => openKillModal(node, true)}
               disabled={killing}
+              title="Dừng tiến trình độc hại (kèm process con)"
             >
               Kill Tree
             </Button>
@@ -297,9 +329,11 @@ export default function ProcessTree() {
   const renderTreeContent = () => {
     if (!processTree) {
       return (
-        <div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-          No process telemetry recorded yet for agent <strong>{selectedAgent}</strong>
-        </div>
+        <EmptyState
+          icon="🌳"
+          title="Chưa có dữ liệu process"
+          description={`Process tree sẽ hiển thị khi agent ${selectedAgent || ''} gửi telemetry.`}
+        />
       );
     }
 
@@ -307,14 +341,26 @@ export default function ProcessTree() {
 
     if (!Array.isArray(treeData) || treeData.length === 0) {
       return (
-        <div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>
-          Process list is currently empty for agent <strong>{selectedAgent}</strong>
-        </div>
+        <EmptyState
+          icon="🌳"
+          title="Chưa có dữ liệu process"
+          description={`Process tree sẽ hiển thị khi agent ${selectedAgent || ''} gửi telemetry.`}
+        />
       );
     }
 
     return treeData.map((rootNode) => renderTreeNode(rootNode, 0));
   };
+
+  if (error && !processTree) {
+    return (
+      <ErrorState
+        title="Không thể tải Process Tree"
+        message={`${error}. Vui lòng kiểm tra kết nối với agent hoặc backend.`}
+        onRetry={refreshProcessData}
+      />
+    );
+  }
 
   return (
     <div>
@@ -435,7 +481,9 @@ export default function ProcessTree() {
               >
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <span style={{ fontWeight: 700, fontFamily: 'monospace', color: 'var(--error)' }}>PID {proc.pid}</span>
+                    <span style={{ fontWeight: 700, fontFamily: 'monospace', color: 'var(--error)' }}>
+                      <InfoTooltip {...TOOLTIPS.PID}>PID {proc.pid}</InfoTooltip>
+                    </span>
                     <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{proc.name}</span>
                     <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
                       {proc.exe || proc.path || proc.cmdline || ''}
@@ -448,11 +496,11 @@ export default function ProcessTree() {
 
                   {Array.isArray(proc.parent_chain) && proc.parent_chain.length > 0 && (
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <FiTerminal size={12} /> Parent Execution Lineage:{' '}
+                      <FiTerminal size={12} /> <InfoTooltip {...TOOLTIPS.PPID}>Parent Execution Lineage:</InfoTooltip>{' '}
                       {proc.parent_chain.map((p, idx) => (
                         <span key={p.pid || idx} style={{ fontFamily: 'monospace' }}>
                           {idx > 0 && ' → '}
-                          {p.name} (PID {p.pid})
+                          {p.name} (<InfoTooltip {...TOOLTIPS.PID}>PID {p.pid}</InfoTooltip>)
                         </span>
                       ))}
                     </div>
@@ -466,6 +514,7 @@ export default function ProcessTree() {
                     iconLeft={<FiXCircle size={14} />}
                     onClick={() => openKillModal(proc, false)}
                     disabled={killing}
+                    title="Dừng tiến trình này"
                   >
                     Kill PID {proc.pid}
                   </Button>
@@ -475,6 +524,7 @@ export default function ProcessTree() {
                     iconLeft={<FiLayers size={14} />}
                     onClick={() => openKillModal(proc, true)}
                     disabled={killing}
+                    title="Dừng tiến trình độc hại (kèm process con)"
                   >
                     Kill Tree {proc.pid}
                   </Button>
@@ -516,47 +566,14 @@ export default function ProcessTree() {
         )}
       </div>
 
-      {/* Kill Confirmation Modal */}
-      <Modal
-        isOpen={!!killModalProc}
-        onClose={() => setKillModalProc(null)}
-        title={killTreeMode ? 'Terminate Process Tree Confirmation' : 'Terminate Process Confirmation'}
-      >
-        {killModalProc && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              Are you sure you want to dispatch a <strong>{killTreeMode ? 'KILL_PROCESS_TREE' : 'KILL_PROCESS'}</strong> signal to process <strong>{killModalProc.name}</strong> (PID: {killModalProc.pid}) on agent <strong>{selectedAgent}</strong>?
-            </p>
-            {killTreeMode && (
-              <div
-                style={{
-                  fontSize: '0.82rem',
-                  padding: '0.6rem 0.85rem',
-                  background: 'rgba(239,68,68,0.1)',
-                  border: '1px solid var(--error)',
-                  borderRadius: 'var(--radius-sm)',
-                  color: 'var(--error)',
-                }}
-              >
-                ⚡ This will recursively kill PID {killModalProc.pid} and all child processes spawned by this process tree to prevent zombie execution.
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              <Button variant="ghost" onClick={() => setKillModalProc(null)} disabled={killing}>
-                Cancel
-              </Button>
-              <Button
-                variant="danger"
-                iconLeft={killTreeMode ? <FiLayers size={14} /> : <FiXCircle size={14} />}
-                onClick={confirmKill}
-                disabled={killing}
-              >
-                {killing ? 'Dispatching...' : killTreeMode ? `Confirm Kill Tree (PID ${killModalProc.pid})` : `Confirm Kill PID ${killModalProc.pid}`}
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      {/* Kill Process Modal */}
+      <KillProcessModal
+        isOpen={!!killTarget}
+        process={killTarget}
+        agentId={selectedAgent}
+        onClose={() => setKillTarget(null)}
+        onConfirm={handleKill}
+      />
     </div>
   );
 }

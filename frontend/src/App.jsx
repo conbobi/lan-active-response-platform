@@ -1,11 +1,10 @@
-// src/App.jsx
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
 import Alerts from './pages/Alerts';
-import Network from './pages/Network';
 import Incidents from './pages/Incidents';
 import Commands from './pages/Commands';
 import RiskAssessment from './pages/RiskAssessment';
@@ -24,19 +23,23 @@ import YaraRules from './pages/YaraRules';
 import Groups from './pages/Groups';
 import Policies from './pages/Policies';
 import ActionsHistory from './pages/ActionsHistory';
+import NetworkOverview from './pages/NetworkOverview';
+import NetworkInvestigation from './pages/NetworkInvestigation';
 
 export default function App() {
-
   return (
     <BrowserRouter>
+      <Toaster position="top-right" />
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/network" element={<NetworkOverview />} />
+          <Route path="/network/:id/investigate" element={<NetworkInvestigation />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/alerts" element={<Alerts />} />
-          <Route path="/network" element={<Network />} />
           <Route path="/incidents" element={<Incidents />} />
+          <Route path="/incidents/:id" element={<Incidents />} />
           <Route path="/actions" element={<ActionsHistory />} />
           <Route path="/policies" element={<Policies />} />
           <Route path="/commands" element={<Commands />} />

@@ -26,6 +26,8 @@ class Flow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
+    process_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     def calculate_duration(self) -> float:
         """Calculate flow duration in seconds."""

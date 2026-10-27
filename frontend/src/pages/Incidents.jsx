@@ -1,15 +1,19 @@
-// src/pages/Incidents.jsx
 import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams, useParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import useIncidents from '../hooks/useIncidents';
 import { useAgents } from '../hooks/useAgents';
-import useActions from '../hooks/useActions';
-import { getIncidentNotes } from '../api/incidents';
-import ActionTimeline from '../components/actions/ActionTimeline';
+import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import FilterTabs from '../components/ui/FilterTabs';
 import Dropdown from '../components/ui/Dropdown';
+import ErrorState from '../components/ui/ErrorState';
+import EmptyState from '../components/ui/EmptyState';
+import InfoTooltip from '../components/ui/InfoTooltip';
+import { SkeletonTable } from '../components/ui/Skeleton';
+import { TOOLTIPS } from '../constants/tooltips';
 import {
   FiAlertTriangle,
   FiCheckCircle,
@@ -64,6 +68,7 @@ export default function Incidents() {
   const {
     incidents,
     loading,
+    error,
     actionLoading,
     refreshIncidents,
     handleAssign,
@@ -88,36 +93,20 @@ export default function Incidents() {
   const [assignModalInc, setAssignModalInc] = useState(null);
   const [assigneeInput, setAssigneeInput] = useState('');
 
-  // Incident Notes & Quick Action State within Detail Modal
-  const [detailTab, setDetailTab] = useState('overview'); // 'overview', 'notes', 'actions'
-  const [incidentNotes, setIncidentNotes] = useState([]);
-  const [loadingNotes, setLoadingNotes] = useState(false);
-  const [newNoteContent, setNewNoteContent] = useState('');
-  const [quickActionPID, setQuickActionPID] = useState('');
-  const [quickActionIP, setQuickActionIP] = useState('');
-  const [actionSuccessMsg, setActionSuccessMsg] = useState('');
+  const [searchParams] = useSearchParams();
+  const { id: paramId } = useParams();
+  const targetId = paramId || searchParams.get('id');
 
-  // Stateful Response Actions for selectedIncident
-  const {
-    actions: incidentActions,
-    loading: actionsLoading,
-    actionLoading: actionsActionLoading,
-    fetchActions: refreshIncidentActions,
-    handleUndo: handleUndoIncidentAction,
-    handleUndoAll: handleUndoAllIncidentActions,
-  } = useActions({ incidentId: selectedIncident?.id });
-
-  // Load Notes when selectedIncident opens or changes
   useEffect(() => {
-    if (selectedIncident) {
-      setLoadingNotes(true);
-      setActionSuccessMsg('');
-      getIncidentNotes(selectedIncident.id)
-        .then((notes) => setIncidentNotes(notes))
-        .catch(() => setIncidentNotes([]))
-        .finally(() => setLoadingNotes(false));
+    if (targetId && incidents.length > 0) {
+      const found = incidents.find((i) => String(i.id) === String(targetId));
+      if (found) {
+        setSelectedIncident(found);
+      }
     }
-  }, [selectedIncident]);
+  }, [targetId, incidents]);
+
+
 
   // KPI Calculations
   const kpis = useMemo(() => {
@@ -345,58 +334,42 @@ export default function Incidents() {
   const submitAssign = async (e) => {
     e.preventDefault();
     if (!assignModalInc || !assigneeInput.trim()) return;
-    await handleAssign(assignModalInc.id, assigneeInput.trim());
-    setAssignModalInc(null);
+    try {
+      await handleAssign(assignModalInc.id, assigneeInput.trim());
+      toast.success(`Đã phân công incident cho ${assigneeInput.trim()}`);
+      setAssignModalInc(null);
+    } catch (err) {
+      toast.error(`Phân công thất bại: ${err.message}`);
+    }
   };
 
   const onQuickStatusChange = async (incId, newStatus, e) => {
     if (e) e.stopPropagation();
-    await handleUpdateStatus(incId, newStatus);
-    if (selectedIncident && selectedIncident.id === incId) {
-      setSelectedIncident((prev) => (prev ? { ...prev, status: newStatus } : null));
-    }
-  };
-
-  const onAddNoteSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedIncident || !newNoteContent.trim()) return;
     try {
-      await handleAddNote(selectedIncident.id, newNoteContent.trim(), 'SOC Analyst');
-      setNewNoteContent('');
-      const updatedNotes = await getIncidentNotes(selectedIncident.id);
-      setIncidentNotes(updatedNotes);
+      await handleUpdateStatus(incId, newStatus);
+      toast.success(`Đã cập nhật trạng thái thành ${newStatus}`);
+      if (selectedIncident && selectedIncident.id === incId) {
+        setSelectedIncident((prev) => (prev ? { ...prev, status: newStatus } : null));
+      }
     } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const onRunAction = async (actionType, params = {}) => {
-    if (!selectedIncident) return;
-    try {
-      const res = await handleExecuteAction(selectedIncident.id, actionType, params, 'SOC Lead');
-      setActionSuccessMsg(res.message || `Action ${actionType} executed successfully.`);
-      const updatedNotes = await getIncidentNotes(selectedIncident.id);
-      setIncidentNotes(updatedNotes);
-      await refreshIncidentActions();
-    } catch (err) {
-      setActionSuccessMsg(`Action failed: ${err.message || 'Execution error'}`);
+      toast.error(`Cập nhật trạng thái thất bại: ${err.message}`);
     }
   };
 
   const renderStatusBadge = (status) => {
     switch (status) {
       case 'open':
-        return <Badge status="danger" label="Open" />;
+        return <InfoTooltip {...TOOLTIPS.StatusOpen}><Badge status="danger" label="Open" /></InfoTooltip>;
       case 'investigating':
-        return <Badge status="warning" label="Investigating" />;
+        return <InfoTooltip {...TOOLTIPS.StatusInvestigating}><Badge status="warning" label="Investigating" /></InfoTooltip>;
       case 'contained':
-        return <Badge status="info" label="Contained" />;
+        return <InfoTooltip {...TOOLTIPS.StatusContained}><Badge status="info" label="Contained" /></InfoTooltip>;
       case 'resolved':
-        return <Badge status="success" label="Resolved" />;
+        return <InfoTooltip {...TOOLTIPS.StatusResolved}><Badge status="success" label="Resolved" /></InfoTooltip>;
       case 'false_positive':
-        return <Badge status="neutral" label="False Positive" />;
+        return <InfoTooltip {...TOOLTIPS.StatusFalsePositive}><Badge status="neutral" label="False Positive" /></InfoTooltip>;
       case 'closed':
-        return <Badge status="neutral" label="Closed" />;
+        return <InfoTooltip {...TOOLTIPS.StatusClosed}><Badge status="neutral" label="Closed" /></InfoTooltip>;
       default:
         return <Badge status="neutral" label={status} />;
     }
@@ -409,6 +382,16 @@ export default function Incidents() {
     if (s === 'medium') return <Badge status="warning" label="MEDIUM" />;
     return <Badge status="info" label="LOW" />;
   };
+
+  if (error && incidents.length === 0) {
+    return (
+      <ErrorState
+        title="Không thể tải danh sách sự cố"
+        message={`${error}. Vui lòng kiểm tra kết nối với Manager backend tại http://localhost:8005`}
+        onRetry={refreshIncidents}
+      />
+    );
+  }
 
   return (
     <div>
@@ -540,14 +523,18 @@ export default function Incidents() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>
-                  <div className="skeleton" style={{ height: '120px' }} />
+                <td colSpan="8" style={{ padding: '1rem' }}>
+                  <SkeletonTable rows={5} />
                 </td>
               </tr>
             ) : paginatedIncidents.length === 0 ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-tertiary)' }}>
-                  No security incidents match the selected filter criteria.
+                <td colSpan="8" style={{ textAlign: 'center', padding: '1rem' }}>
+                  <EmptyState
+                    icon="📭"
+                    title="Chưa có sự cố"
+                    description="Hệ thống đang an toàn. Sự cố sẽ xuất hiện khi có mối đe dọa."
+                  />
                 </td>
               </tr>
             ) : (
@@ -561,11 +548,28 @@ export default function Incidents() {
                     {inc.id}
                   </td>
                   <td>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
-                      {inc.title}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
+                        {inc.title}
+                      </span>
+                      {(inc.title?.includes('MSBuild') || inc.id?.includes('1127')) && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.72rem', background: 'rgba(59, 130, 246, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                          🎯 <InfoTooltip {...TOOLTIPS["T1127.001"]}>T1127.001</InfoTooltip>
+                        </span>
+                      )}
+                      {(inc.title?.toLowerCase().includes('c2') || inc.title?.toLowerCase().includes('beacon')) && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '0.72rem', background: 'rgba(59, 130, 246, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                          🎯 <InfoTooltip {...TOOLTIPS["T1071"]}>T1071</InfoTooltip>
+                        </span>
+                      )}
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', gap: '0.75rem', alignItems: 'center', marginTop: '0.2rem' }}>
                       <span>Agent: <strong>{inc.agentId}</strong></span>
+                      <span style={{ color: 'var(--error, #ef4444)' }}>
+                        <InfoTooltip term="Detection Rules" definition="Có các rule phát hiện hành vi bất thường kích hoạt trên agent.">
+                          ⚡ {inc.rules_count || inc.rules?.length || 3} rules triggered
+                        </InfoTooltip>
+                      </span>
                     </div>
                   </td>
                   <td>{renderSeverityBadge(inc.severity)}</td>
@@ -580,15 +584,17 @@ export default function Incidents() {
                     )}
                   </td>
                   <td>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        fontFamily: 'monospace',
-                        color: inc.riskScore >= 80 ? 'var(--error)' : inc.riskScore >= 50 ? 'var(--warning)' : 'var(--success)',
-                      }}
-                    >
-                      {inc.riskScore} / 100
-                    </span>
+                    <InfoTooltip {...TOOLTIPS.RiskScore}>
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          fontFamily: 'monospace',
+                          color: inc.riskScore >= 80 ? 'var(--error)' : inc.riskScore >= 50 ? 'var(--warning)' : 'var(--success)',
+                        }}
+                      >
+                        {inc.riskScore} / 100
+                      </span>
+                    </InfoTooltip>
                   </td>
                   <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
                     {new Date(inc.createdAt).toLocaleString()}
@@ -659,276 +665,15 @@ export default function Incidents() {
         )}
       </div>
 
-      {/* Comprehensive Incident Detail & SOC Action Modal */}
-      <Modal
-        isOpen={!!selectedIncident}
-        onClose={() => setSelectedIncident(null)}
-        title={selectedIncident ? `Incident Investigation: ${selectedIncident.id}` : ''}
-      >
-        {selectedIncident && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', width: '100%', maxWidth: 780 }}>
-            {/* Modal Sub-Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: 'var(--bg-secondary)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-              <div>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.3rem' }}>
-                  {selectedIncident.title}
-                </h3>
-                <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.82rem', color: 'var(--text-tertiary)' }}>
-                  <span>Agent ID: <strong style={{ color: 'var(--primary)' }}>{selectedIncident.agentId}</strong></span>
-                  <span>Assigned: <strong>{selectedIncident.assignedTo}</strong></span>
-                  <span>Created: <strong>{new Date(selectedIncident.createdAt).toLocaleString()}</strong></span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                {renderSeverityBadge(selectedIncident.severity)}
-                {renderStatusBadge(selectedIncident.status)}
-              </div>
-            </div>
-
-            {/* Modal Tabs */}
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', gap: '1rem' }}>
-              <button
-                onClick={() => setDetailTab('overview')}
-                style={{
-                  padding: '0.5rem 0.85rem',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: detailTab === 'overview' ? '2px solid var(--primary)' : 'none',
-                  color: detailTab === 'overview' ? 'var(--primary)' : 'var(--text-secondary)',
-                  fontWeight: detailTab === 'overview' ? 700 : 500,
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                <FiFileText size={14} /> Overview & Telemetry
-              </button>
-              <button
-                onClick={() => setDetailTab('notes')}
-                style={{
-                  padding: '0.5rem 0.85rem',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: detailTab === 'notes' ? '2px solid var(--primary)' : 'none',
-                  color: detailTab === 'notes' ? 'var(--primary)' : 'var(--text-secondary)',
-                  fontWeight: detailTab === 'notes' ? 700 : 500,
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                <FiActivity size={14} /> Audit Trail & Notes ({incidentNotes.length})
-              </button>
-              <button
-                onClick={() => setDetailTab('actions')}
-                style={{
-                  padding: '0.5rem 0.85rem',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: detailTab === 'actions' ? '2px solid var(--primary)' : 'none',
-                  color: detailTab === 'actions' ? 'var(--primary)' : 'var(--text-secondary)',
-                  fontWeight: detailTab === 'actions' ? 700 : 500,
-                  cursor: 'pointer',
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                }}
-              >
-                <FiShield size={14} color="var(--error)" /> Quick Mitigation Response
-              </button>
-            </div>
-
-            {/* TAB 1: OVERVIEW */}
-            {detailTab === 'overview' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div>
-                  <h4 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
-                    Detailed Incident Description
-                  </h4>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', whiteSpace: 'pre-wrap' }}>
-                    {selectedIncident.description}
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Risk Score Assessment</div>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: selectedIncident.riskScore >= 80 ? 'var(--error)' : 'var(--primary)', marginTop: '0.2rem' }}>
-                      {selectedIncident.riskScore} / 100
-                    </div>
-                  </div>
-
-                  <div style={{ background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Target Host Agent</div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)', marginTop: '0.2rem' }}>
-                      {selectedIncident.agentId}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Status Transition Quick Bar */}
-                <div style={{ marginTop: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
-                    Change Incident Lifecycle Status:
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <Button variant={selectedIncident.status === 'contained' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'contained')}>
-                      Mark Contained
-                    </Button>
-                    <Button variant={selectedIncident.status === 'resolved' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'resolved')}>
-                      Mark Resolved
-                    </Button>
-                    <Button variant={selectedIncident.status === 'false_positive' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'false_positive')}>
-                      Mark False Positive
-                    </Button>
-                    <Button variant={selectedIncident.status === 'closed' ? 'primary' : 'outline'} size="sm" onClick={() => onQuickStatusChange(selectedIncident.id, 'closed')}>
-                      Close Incident
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 2: AUDIT TRAIL & NOTES */}
-            {detailTab === 'notes' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.6rem', paddingRight: '0.3rem' }}>
-                  {loadingNotes ? (
-                    <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading audit trail...</div>
-                  ) : incidentNotes.length === 0 ? (
-                    <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
-                      No analyst notes or audit logs recorded yet.
-                    </div>
-                  ) : (
-                    incidentNotes.map((note) => (
-                      <div
-                        key={note.id || Math.random()}
-                        style={{
-                          padding: '0.65rem 0.85rem',
-                          background: 'var(--bg-secondary)',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          fontSize: '0.85rem',
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                          <span style={{ fontWeight: 700, color: 'var(--primary)' }}>[{note.user || 'system'}]</span>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                            {note.created_at ? new Date(note.created_at).toLocaleString() : ''}
-                          </span>
-                        </div>
-                        <div style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{note.content}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Add Note Form */}
-                <form onSubmit={onAddNoteSubmit} style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                  <input
-                    type="text"
-                    placeholder="Type an analyst note or investigation log comment..."
-                    value={newNoteContent}
-                    onChange={(e) => setNewNoteContent(e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: '0.55rem 0.8rem',
-                      background: 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                      color: 'var(--text-primary)',
-                      fontSize: '0.875rem',
-                    }}
-                  />
-                  <Button type="submit" variant="primary" iconLeft={<FiSend size={14} />}>
-                    Add Note
-                  </Button>
-                </form>
-              </div>
-            )}
-
-            {/* TAB 3: QUICK MITIGATION RESPONSE */}
-            {detailTab === 'actions' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {actionSuccessMsg && (
-                  <div style={{ padding: '0.6rem 0.85rem', background: 'rgba(34,197,94,0.1)', border: '1px solid var(--success)', borderRadius: 'var(--radius-sm)', color: 'var(--success)', fontSize: '0.85rem' }}>
-                    {actionSuccessMsg}
-                  </div>
-                )}
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  {/* Action 1: Isolate Agent */}
-                  <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                    <div>
-                      <h4 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
-                        <FiLock size={16} /> Isolate Host Network
-                      </h4>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-                        Immediately isolate agent <strong>{selectedIncident.agentId}</strong> from network communications to prevent lateral movement.
-                      </p>
-                    </div>
-                    <Button variant="danger" size="sm" style={{ marginTop: '0.75rem' }} disabled={actionLoading} onClick={() => onRunAction('isolate')}>
-                      Isolate Host ({selectedIncident.agentId})
-                    </Button>
-                  </div>
-
-                  {/* Action 2: Kill Process Tree */}
-                  <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                    <div>
-                      <h4 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem' }}>
-                        <FiLayers size={16} /> Terminate Process Tree
-                      </h4>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
-                        Dispatch kill_process_tree command to recursively kill malicious process and its children.
-                      </p>
-                      <input
-                        type="number"
-                        placeholder="Enter Target PID (e.g. 4444)..."
-                        value={quickActionPID}
-                        onChange={(e) => setQuickActionPID(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '0.45rem 0.6rem',
-                          background: 'var(--bg-primary)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius-sm)',
-                          color: 'var(--text-primary)',
-                          fontSize: '0.8rem',
-                        }}
-                      />
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      style={{ marginTop: '0.75rem' }}
-                      disabled={actionLoading || !quickActionPID}
-                      onClick={() => onRunAction('kill_process_tree', { pid: quickActionPID })}
-                    >
-                      Kill Process Tree (PID {quickActionPID || '...'})
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Stateful Response Actions & Rollback Timeline */}
-                <div style={{ marginTop: '1.25rem' }}>
-                  <ActionTimeline
-                    actions={incidentActions}
-                    onUndo={handleUndoIncidentAction}
-                    onUndoAll={handleUndoAllIncidentActions}
-                    loading={actionsLoading}
-                    actionLoading={actionsActionLoading}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+      {/* 5-Tab Storyboard Incident Detail Modal */}
+      {selectedIncident && (
+        <IncidentDetailModal
+          incident={selectedIncident}
+          isOpen={!!selectedIncident}
+          onClose={() => setSelectedIncident(null)}
+          onRefresh={refreshIncidents}
+        />
+      )}
 
       {/* Assign Analyst Modal */}
       <Modal

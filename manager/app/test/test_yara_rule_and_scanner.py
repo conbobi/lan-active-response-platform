@@ -1,7 +1,7 @@
 import os
 import tempfile
 import pytest
-from app.services.risk_rules.yara_match_rule import YaraMatchRule
+from app.services.detection.risk_rules.yara_match_rule import YaraMatchRule
 
 
 @pytest.mark.asyncio

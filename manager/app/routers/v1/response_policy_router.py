@@ -10,8 +10,8 @@ from app.schemas.response_policy import (
     PolicyEvaluateRequest,
     PolicyEvaluateResponse
 )
-from app.services.response_policy_service import ResponsePolicyService
-from app.services.policy_engine_service import PolicyEngineService
+from app.services.response.response_policy_service import ResponsePolicyService
+from app.services.response.policy_engine_service import PolicyEngineService
 from app.core.exceptions import NotFoundError
 
 router = APIRouter(tags=["Response Policies & Policy Engine"])

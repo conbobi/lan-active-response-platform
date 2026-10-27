@@ -1,7 +1,7 @@
-// src/components/policies/PolicyTable.jsx
 import React from 'react';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
+import EmptyState from '../ui/EmptyState';
 import {
   FiShield,
   FiEdit2,
@@ -59,23 +59,12 @@ export default function PolicyTable({
 
   if (policies.length === 0) {
     return (
-      <div
-        className="card"
-        style={{
-          padding: '3.5rem 1.5rem',
-          textAlign: 'center',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-        }}
-      >
-        <FiShield size={42} style={{ color: 'var(--text-tertiary)', opacity: 0.4, marginBottom: '0.75rem' }} />
-        <h3 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-          Chưa có Response Policy nào
-        </h3>
-        <p style={{ fontSize: '0.825rem', color: 'var(--text-tertiary)', maxWidth: '420px', margin: '0 auto 1.25rem auto' }}>
-          Tạo chính sách đầu tiên để tự động kích hoạt phản ứng (Alert, Block IP, Isolate) khi Risk Score tăng cao.
-        </p>
+      <div className="card" style={{ padding: '2rem 1rem' }}>
+        <EmptyState
+          icon="📋"
+          title="Chưa có chính sách"
+          description="Tạo policy để tự động phản ứng theo mức rủi ro."
+        />
       </div>
     );
   }

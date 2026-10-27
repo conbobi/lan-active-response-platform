@@ -1,5 +1,5 @@
 import pytest
-from app.services.risk_rules.brute_force_rule import BruteForceRule
+from app.services.detection.risk_rules.brute_force_rule import BruteForceRule
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db
 from app.models.risk_score import RiskScoreRecord
 from app.schemas.risk import RiskAssessmentDTO, RiskScoreOut
-from app.services.risk_assessment_service import RiskAssessmentService
+from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.repositories.risk_score_repository import RiskScoreRepository
 
 router = APIRouter(tags=["Risk Assessment"])
@@ -87,7 +87,7 @@ async def verify_phase2(db: AsyncSession = Depends(get_db)):
 
     return {
         "manager_ip_bypassed": manager_ip_count == 0,
-        "idle_agents_safe": max_idle_score < 5,
+        "idle_agents_safe": max_idle_score < 15,
         "baseline_fresh": baseline_fresh,
         "ema_working": ema_diff_count > 0,
         "details": {

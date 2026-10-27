@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db
 from app.schemas.threat_intel import ThreatCheckDTO
 from app.schemas.threat_feed import ThreatFeedCreate, ThreatFeedUpdate, ThreatFeedOut, ThreatFeedSyncResult
-from app.services.threat_intelligence_service import ThreatIntelligenceService
+from app.services.detection.threat_intelligence_service import ThreatIntelligenceService
 
 router = APIRouter(tags=["Threat Intelligence"])
 

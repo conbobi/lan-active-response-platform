@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.schemas.yara import YaraRuleCreate, YaraRuleUpdate, YaraRuleOut, YaraScanRequest
-from app.services.yara_service import YaraService
+from app.services.detection.yara_service import YaraService
 
 router = APIRouter(tags=["YARA Rules"])
 

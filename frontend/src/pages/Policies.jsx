@@ -1,5 +1,5 @@
-// src/pages/Policies.jsx
 import React, { useState, useEffect, useMemo } from 'react';
+import toast from 'react-hot-toast';
 import usePolicies from '../hooks/usePolicies';
 import { listGroups } from '../api/groups';
 import PolicyTable from '../components/policies/PolicyTable';
@@ -9,6 +9,7 @@ import Button from '../components/ui/Button';
 import SearchBar from '../components/ui/SearchBar';
 import FilterTabs from '../components/ui/FilterTabs';
 import KpiCard from '../components/ui/KpiCard';
+import ErrorState from '../components/ui/ErrorState';
 import {
   FiShield,
   FiPlus,
@@ -127,10 +128,17 @@ export default function Policies() {
   };
 
   const handleSavePolicy = async (payload, editId) => {
-    if (editId) {
-      await updatePolicy(editId, payload);
-    } else {
-      await createPolicy(payload);
+    try {
+      if (editId) {
+        await updatePolicy(editId, payload);
+        toast.success(`Đã cập nhật chính sách ${payload.name || ''}`);
+      } else {
+        await createPolicy(payload);
+        toast.success(`Đã tạo chính sách ${payload.name || ''}`);
+      }
+    } catch (err) {
+      toast.error(`Lỗi lưu chính sách: ${err.response?.data?.detail || err.message}`);
+      throw err;
     }
   };
 
@@ -140,18 +148,30 @@ export default function Policies() {
     }
     try {
       await deletePolicy(p.id);
+      toast.success(`Đã xóa chính sách ${p.name}`);
     } catch (err) {
-      alert(err.response?.data?.detail || err.message || 'Không thể xóa chính sách');
+      toast.error(err.response?.data?.detail || err.message || 'Không thể xóa chính sách');
     }
   };
 
   const handleToggle = async (id, isCurrentActive) => {
     try {
-      await toggleActive(id, isCurrentActive);
+      const updated = await toggleActive(id, isCurrentActive);
+      toast.success(`${updated?.is_active ? 'Kích hoạt' : 'Tắt'} chính sách thành công`);
     } catch (err) {
-      alert(err.response?.data?.detail || err.message || 'Không thể đổi trạng thái chính sách');
+      toast.error(err.response?.data?.detail || err.message || 'Không thể đổi trạng thái chính sách');
     }
   };
+
+  if (error && policies.length === 0) {
+    return (
+      <ErrorState
+        title="Không thể tải chính sách"
+        message={`${error}. Vui lòng kiểm tra backend tại http://localhost:8005`}
+        onRetry={fetchPolicies}
+      />
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', paddingBottom: '2.5rem' }}>

@@ -9,12 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.websocket.connection_manager import connection_manager
 from app.schemas.heartbeat import HeartbeatDTO
-from app.schemas.topology import TopologyUpdateDTO
-from app.schemas.path_release import PathReleaseDTO
 from app.schemas.command_ack import CommandAckDTO
-from app.services.topology_service import topology_facade
-from app.services.command_dispatcher import command_dispatcher
-from app.services.risk_assessment_service import RiskAssessmentService
+from app.services.agent.agent_service import AgentService
+from app.services.core.command_dispatcher import command_dispatcher
+from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.models.process_info import ProcessInfo
 from app.repositories.process_info_repository import ProcessInfoRepository
 from app.models.flow import Flow
@@ -23,7 +21,7 @@ from app.models.event import Event
 from app.repositories.event_repository import EventRepository
 from app.schemas.enums import IncidentSeverity
 from app.schemas.incident import IncidentCreate
-from app.services.incident_service import IncidentService
+from app.services.incident.incident_service import IncidentService
 from app.models.auth_event import AuthEvent
 from app.repositories.auth_event_repository import AuthEventRepository
 from app.core.database import AsyncSessionLocal
@@ -31,41 +29,111 @@ from app.core.database import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 
-async def _save_process_list(session: AsyncSession, target_agent_id: str, processes_data: list) -> int:
+async def _save_process_list(session: AsyncSession, target_agent_id: str, 
+                              processes_data: list) -> int:
+    """Save process list with truncation + per-process savepoints."""
     if not processes_data or not isinstance(processes_data, list):
         return 0
+    
     proc_repo = ProcessInfoRepository(session)
     await proc_repo.delete_by_agent(target_agent_id)
+    
     now_dt = datetime.now(timezone.utc)
     count = 0
+    skipped = 0
+    
+    def safe_str(val, max_len: int, default: str = "") -> str:
+        """Truncate string to model max length."""
+        if val is None:
+            return default
+        s = str(val)
+        return s[:max_len] if len(s) > max_len else s
+    
+    def safe_int(val, default=None):
+        try:
+            return int(val) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+    
+    def safe_float(val, default=0.0):
+        try:
+            return float(val) if val is not None else default
+        except (ValueError, TypeError):
+            return default
+    
     for proc_item in processes_data:
-        pid = proc_item.get("pid")
-        if not pid:
+        # Skip invalid pid
+        pid = safe_int(proc_item.get("pid"))
+        if pid is None or pid < 0:
+            skipped += 1
             continue
-        ppid_val = proc_item.get("parent_pid") if proc_item.get("parent_pid") is not None else proc_item.get("ppid")
-        pinfo = ProcessInfo(
-            id=f"proc_{uuid.uuid4().hex[:12]}",
-            agent_id=target_agent_id,
-            pid=int(pid),
-            parent_pid=int(ppid_val) if ppid_val is not None else None,
-            name=str(proc_item.get("name") or "unknown"),
-            exe=str(proc_item.get("exe") or proc_item.get("path") or ""),
-            exe_path=str(proc_item.get("exe_path") or proc_item.get("exe") or proc_item.get("path") or ""),
-            cmdline=str(proc_item.get("cmdline") or ""),
-            cpu_percent=float(proc_item.get("cpu_percent") or proc_item.get("cpu") or 0.0),
-            memory_percent=float(proc_item.get("memory_percent") or proc_item.get("ram") or 0.0),
-            is_suspicious=bool(proc_item.get("is_suspicious", False)),
-            created_at=now_dt
+        
+        try:
+            parent_pid = safe_int(
+                proc_item.get("parent_pid") 
+                if proc_item.get("parent_pid") is not None 
+                else proc_item.get("ppid")
+            )
+            
+            cmd_raw = proc_item.get("cmdline") or ""
+            if isinstance(cmd_raw, list):
+                cmdline_str = " ".join(str(x) for x in cmd_raw)
+            else:
+                cmdline_str = str(cmd_raw)
+            
+            # ⚠️ CRITICAL: Truncate mọi string theo model limit
+            pinfo = ProcessInfo(
+                id=f"proc_{uuid.uuid4().hex[:12]}",
+                agent_id=target_agent_id,
+                pid=pid,
+                parent_pid=parent_pid,
+                name=safe_str(proc_item.get("name"), 128, "unknown"),
+                exe=safe_str(
+                    proc_item.get("exe") or proc_item.get("path"), 512
+                ),
+                exe_path=safe_str(
+                    proc_item.get("exe_path") or proc_item.get("exe") 
+                    or proc_item.get("path"), 512
+                ) or None,
+                cmdline=safe_str(cmdline_str, 1024),
+                cpu_percent=safe_float(
+                    proc_item.get("cpu_percent") or proc_item.get("cpu")
+                ),
+                memory_percent=safe_float(
+                    proc_item.get("memory_percent") or proc_item.get("ram")
+                ),
+                is_suspicious=bool(proc_item.get("is_suspicious", False)),
+                hash=safe_str(proc_item.get("hash"), 128) or None,
+                created_at=now_dt,
+            )
+            
+            # ✅ Savepoint per process — nếu fail, chỉ rollback process đó
+            async with session.begin_nested():
+                await proc_repo.add(pinfo)
+            count += 1
+            
+        except Exception as e:
+            logger.warning(
+                f"[PROCESS_LIST] Skip pid={proc_item.get('pid')} "
+                f"name={proc_item.get('name')}: {type(e).__name__}: {e}"
+            )
+            skipped += 1
+            continue
+    
+    if skipped > 0:
+        logger.warning(
+            f"[PROCESS_LIST] {target_agent_id}: saved={count}, skipped={skipped}"
         )
-        await proc_repo.add(pinfo)
-        count += 1
+    
     return count
+
 
 
 async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) -> Tuple[Optional[dict], str]:
     dto = HeartbeatDTO(**data.get("payload", {}))
     active_agent_id = dto.agent_id or agent_id
-    await topology_facade.process_heartbeat(dto, session)
+    agent_svc = AgentService(session)
+    await agent_svc.process_heartbeat(dto)
     pending_cmds = await command_dispatcher.pull_pending_commands(active_agent_id, session)
     response_payload = {
         "status": "ack",
@@ -96,7 +164,38 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
 async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
-    logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}'")
+    platform_name = payload.get("platform", "linux")
+    logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}' (platform: {platform_name})")
+
+    # Record network connections into flows table with process info
+    conns = payload.get("network_connections", [])
+    if isinstance(conns, list) and conns:
+        try:
+            flow_repo = FlowRepository(session)
+            now_dt = datetime.now(timezone.utc)
+            for c in conns:
+                dst_ip = c.get("dst_ip")
+                dst_port = c.get("dst_port")
+                if dst_ip and dst_port:
+                    conn_flow = Flow(
+                        id=f"flow_{uuid.uuid4().hex[:12]}",
+                        src_ip=c.get("src_ip") or "0.0.0.0",
+                        dst_ip=str(dst_ip),
+                        src_port=int(c.get("src_port") or 0),
+                        dst_port=int(dst_port),
+                        protocol=c.get("protocol") or "TCP",
+                        bytes_sent=int(c.get("bytes_sent") or 0),
+                        packets_sent=int(c.get("packets_sent") or 1),
+                        start_time=now_dt,
+                        end_time=now_dt,
+                        agent_id=target_agent_id,
+                        created_at=now_dt,
+                        process_name=c.get("process_name") or c.get("process"),
+                        pid=c.get("pid")
+                    )
+                    await flow_repo.add(conn_flow)
+        except Exception as e:
+            logger.warning(f"Failed to record network connections from telemetry: {e}")
 
     risk_service = RiskAssessmentService(session)
     record = await risk_service.process_risk(
@@ -121,6 +220,8 @@ async def _handle_flow_stats(agent_id: str, data: dict, session: AsyncSession) -
     tcp_pkts = int(payload.get("tcp_packets_delta", 0))
     udp_pkts = int(payload.get("udp_packets_delta", 0))
     agent_ip = str(payload.get("ip_address") or "192.168.10.10")
+    process_name = payload.get("process_name") or payload.get("process")
+    pid = payload.get("pid")
     now_dt = datetime.now(timezone.utc)
 
     flow_repo = FlowRepository(session)
@@ -138,7 +239,9 @@ async def _handle_flow_stats(agent_id: str, data: dict, session: AsyncSession) -
             start_time=now_dt,
             end_time=now_dt,
             agent_id=target_agent_id,
-            created_at=now_dt
+            created_at=now_dt,
+            process_name=process_name,
+            pid=pid
         )
         await flow_repo.add(flow_tcp)
 
@@ -156,9 +259,32 @@ async def _handle_flow_stats(agent_id: str, data: dict, session: AsyncSession) -
             start_time=now_dt,
             end_time=now_dt,
             agent_id=target_agent_id,
-            created_at=now_dt
+            created_at=now_dt,
+            process_name=process_name,
+            pid=pid
         )
         await flow_repo.add(flow_udp)
+
+    flow_items = payload.get("flows") or payload.get("connections") or []
+    if isinstance(flow_items, list) and flow_items:
+        for flow_data in flow_items:
+            f = Flow(
+                id=f"flow_{uuid.uuid4().hex[:12]}",
+                src_ip=flow_data.get("src_ip") or agent_ip,
+                dst_ip=flow_data.get("dst_ip") or "192.168.10.1",
+                src_port=int(flow_data.get("src_port") or 0),
+                dst_port=int(flow_data.get("dst_port") or 80),
+                protocol=flow_data.get("protocol") or "TCP",
+                bytes_sent=int(flow_data.get("bytes_sent") or 0),
+                packets_sent=int(flow_data.get("packets_sent") or 1),
+                start_time=now_dt,
+                end_time=now_dt,
+                agent_id=target_agent_id,
+                created_at=now_dt,
+                process_name=flow_data.get("process_name") or flow_data.get("process"),
+                pid=flow_data.get("pid")
+            )
+            await flow_repo.add(f)
 
     logger.info(f"Recorded FLOW_STATS for agent '{target_agent_id}': {packets_sent} pkts, {bytes_sent} bytes")
     if data.get("wait_ack", True):
@@ -212,16 +338,6 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
     return None
 
 
-async def _handle_topology_update(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
-    dto = TopologyUpdateDTO(**data.get("payload", {}))
-    await topology_facade.handle_topology_update(dto, session)
-    return {"status": "ack", "message": "Topology update processed"}
-
-
-async def _handle_path_release(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
-    dto = PathReleaseDTO(**data.get("payload", {}))
-    released = await topology_facade.release_path(dto, session)
-    return {"status": "ack", "released": released}
 
 
 async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
@@ -311,8 +427,6 @@ MESSAGE_HANDLERS = {
     "TELEMETRY_RISK": _handle_telemetry_risk,
     "FLOW_STATS": _handle_flow_stats,
     "FIM_ALERT": _handle_fim_alert,
-    "TOPOLOGY_UPDATE": _handle_topology_update,
-    "PATH_RELEASE": _handle_path_release,
     "COMMAND_ACK": _handle_command_ack,
     "AUTH_EVENT": _handle_auth_event,
     "YARA_SCAN_ALERT": _handle_yara_scan_alert,

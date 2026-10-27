@@ -23,7 +23,7 @@ services:
   manager:
     build: ./manager #Bảo Docker đi vào thư mục ./manager tìm file Dockerfile để tự động xây dựng nên "tòa nhà" Manager của bạn.
     ports:
-      - "8002:8000" #Mở cổng 8000 ra máy thật để bạn có thể mở trình duyệt web lên xem Dashboard
+      - "8005:8000" #Mở cổng 8000 ra máy thật để bạn có thể mở trình duyệt web lên xem Dashboard
     environment:
       - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb #Đây là "đường ống" kết nối từ tòa nhà Manager đến két sắt bảo vệ dữ liệu (PostgreSQL). Lưu ý: db chính là tên dịch vụ PostgreSQL ở trên, không phải localhost hay 127.0.0.1
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU
@@ -37,6 +37,7 @@ services:
       retries: 5
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./manager:/app
     networks:
       - larp-net
 
@@ -59,72 +60,6 @@ services:
     mem_limit: 2g # Giới hạn tối đa 2GB RAM
     mem_reservation: 512m # Đảm bảo ít nhất 512MB
     #cpus: 4.0 # Giới hạn CPU (tùy chọn)
-  client2:
-    build: ./agent
-    hostname: client2
-    restart: unless-stopped
-    environment:
-      - MANAGER_URL=ws://manager:8000/ws/agent
-      - AGENT_ID=client2
-    networks:
-      - larp-net
-    depends_on:
-      manager:
-        condition: service_healthy
-    cap_add:
-      - NET_ADMIN
-    mem_limit: 2g # Giới hạn tối đa 2GB RAM
-    mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 2.0 # Giới hạn CPU (tùy chọn) 
-  client3:
-    build: ./agent
-    hostname: client3
-    restart: unless-stopped
-    environment:
-      - MANAGER_URL=ws://manager:8000/ws/agent
-      - AGENT_ID=client3
-    networks:
-      - larp-net
-    depends_on:
-      manager:
-        condition: service_healthy
-    cap_add:
-      - NET_ADMIN
-    mem_limit: 2g # Giới hạn tối đa 2GB RAM
-    mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 2.0 # Giớ i hạn CPU (tùy chọn) 
-  client4:
-    build: ./agent
-    hostname: client4
-    restart: unless-stopped
-    environment:
-      - MANAGER_URL=ws://manager:8000/ws/agent
-      - AGENT_ID=client4
-    networks:
-      - larp-net
-    depends_on:
-      manager:
-        condition: service_healthy
-    cap_add:
-      - NET_ADMIN
-    mem_limit: 2g # Giới hạn tối đa 2GB RAM
-    mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    cpus: 2.0 # Giới hạn CPU (tùy chọn) 
-  attacker:
-    build: ./agent
-    hostname: attacker
-    restart: unless-stopped
-    environment:
-      - MANAGER_URL=ws://manager:8000/ws/agent
-      - AGENT_ID=attacker
-    networks:
-      - larp-net
-    depends_on:
-      manager:
-        condition: service_healthy
-    privileged: true
-    cap_add:
-      - NET_ADMIN
 networks:
   larp-net:
     driver: bridge #Đây chính là "hệ thống giao thông nội bộ" của thành phố ảo

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from app.services.report_service import ReportService
+from app.services.incident.report_service import ReportService
 from unittest.mock import MagicMock
 
 pytestmark = pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_generate_monthly_report(mock_db):
     service.report_repo = AsyncMock()
     service.report_repo.add.return_value = MagicMock()
 
-    with patch("app.services.report_service.ReportService.generate_monthly_report") as mock_generate:
+    with patch("app.services.incident.report_service.ReportService.generate_monthly_report") as mock_generate:
         mock_generate.return_value = MagicMock()
         result = await service.generate_monthly_report(month=6, year=2024)
     

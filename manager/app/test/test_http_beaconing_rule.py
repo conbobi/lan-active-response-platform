@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 import pytest
-from app.services.risk_rules.http_beaconing_rule import (
+from app.services.detection.risk_rules.http_beaconing_rule import (
     BeaconingDetectionService,
     HttpBeaconingRule,
 )

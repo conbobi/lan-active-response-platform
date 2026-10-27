@@ -11,7 +11,8 @@ from app.schemas.incident import (
     IncidentNoteAddDTO,
     IncidentNoteOut
 )
-from app.services.incident_service import IncidentService
+from app.services.incident.incident_service import IncidentService
+from app.services.incident.incident_timeline_service import IncidentTimelineService
 
 router = APIRouter(tags=["Incidents"])
 
@@ -28,6 +29,13 @@ async def list_incidents(skip: int = 0, limit: int = 200, db: AsyncSession = Dep
     """List security incidents."""
     service = IncidentService(db)
     return await service.list_incidents(skip=skip, limit=limit)
+
+
+@router.get("/{incident_id}/timeline", response_model=Dict[str, Any])
+async def get_incident_timeline(incident_id: str, db: AsyncSession = Depends(get_db)):
+    """Retrieve chronological investigation timeline aggregated from process, network, risk rules, and actions."""
+    service = IncidentTimelineService(db)
+    return await service.build_timeline(incident_id)
 
 
 @router.get("/{incident_id}", response_model=IncidentOut)

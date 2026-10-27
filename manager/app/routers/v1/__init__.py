@@ -5,8 +5,6 @@ from app.routers.v1.flow_router import router as flow_router
 from app.routers.v1.command_router import router as command_router
 from app.routers.v1.incident_router import router as incident_router
 from app.routers.v1.rule_router import router as rule_router
-from app.routers.v1.topology_router import router as topology_router
-from app.routers.v1.path_router import router as path_router
 from app.routers.v1.event_router import router as event_router
 from app.routers.v1.attack_router import router as attack_router
 from app.routers.v1.notification_router import router as notification_router
@@ -23,6 +21,7 @@ from app.routers.v1.yara_router import router as yara_router
 from app.routers.v1.response_action_router import router as response_action_router
 from app.routers.v1.agent_group_router import router as agent_group_router
 from app.routers.v1.response_policy_router import router as response_policy_router
+from app.routers.v1.network_router import router as network_router
 
 api_router = APIRouter()
 
@@ -31,8 +30,6 @@ api_router.include_router(flow_router, prefix="/flows", tags=["Flows"])
 api_router.include_router(command_router, prefix="/commands", tags=["Commands"])
 api_router.include_router(incident_router, prefix="/incidents", tags=["Incidents"])
 api_router.include_router(rule_router, prefix="/rules", tags=["Rules"])
-api_router.include_router(topology_router, prefix="/topology", tags=["Topology"])
-api_router.include_router(path_router, prefix="/path", tags=["Pathfinding"])
 api_router.include_router(event_router, prefix="/events", tags=["Event"])
 api_router.include_router(attack_router, prefix="/attack", tags=["Attack"])
 api_router.include_router(notification_router, prefix="/notifications", tags=["Notifications"])
@@ -49,6 +46,8 @@ api_router.include_router(docker_router, prefix="/docker", tags=["Docker Monitor
 api_router.include_router(process_group_router, prefix="/process-groups", tags=["Process Groups"])
 api_router.include_router(process_chain_rule_router, prefix="/process-chain-rules", tags=["Process Chain Rules"])
 api_router.include_router(yara_router, prefix="/yara", tags=["YARA Rules"])
+api_router.include_router(network_router)
 
 __all__ = ["api_router"]
+
 

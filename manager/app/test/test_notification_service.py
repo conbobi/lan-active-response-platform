@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.notification_service import NotificationService
+from app.services.common.notification_service import NotificationService
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_send_alert_discord(mock_db, mock_notification_repo):
-    with patch("app.services.notification_service.NotificationRepository", return_value=mock_notification_repo):
+    with patch("app.services.common.notification_service.NotificationRepository", return_value=mock_notification_repo):
         service = NotificationService(mock_db)
 
     webhook_url = "https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU"

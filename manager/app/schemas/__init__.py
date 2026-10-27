@@ -11,11 +11,7 @@ from app.schemas.incident import (
 )
 from app.schemas.rule import RuleCreate, RuleOut
 from app.schemas.event import EventCreate, EventOut
-from app.schemas.topology import TopologyUpdateDTO, TopologyLinkCreate, TopologyLinkUpdate, TopologyLinkOut
-from app.schemas.path import PathRequestDTO, PathResult
-from app.schemas.path_release import PathReleaseDTO
 from app.schemas.process_info import ProcessInfoCreate, ProcessInfoOut
-from app.schemas.topology_change_log import TopologyChangeLogOut
 from app.schemas.whitelist import WhitelistEntryCreate, WhitelistEntryOut
 from app.schemas.risk import RiskAssessmentDTO, RiskScoreOut
 from app.schemas.report import ReportGenerateRequest, ReportOut
@@ -42,10 +38,7 @@ __all__ = [
     "IncidentNoteCreate", "IncidentNoteOut", "IncidentAssignDTO", "IncidentNoteAddDTO",
     "RuleCreate", "RuleOut",
     "EventCreate", "EventOut",
-    "TopologyUpdateDTO", "TopologyLinkCreate", "TopologyLinkUpdate", "TopologyLinkOut",
-    "PathRequestDTO", "PathResult", "PathReleaseDTO",
     "ProcessInfoCreate", "ProcessInfoOut",
-    "TopologyChangeLogOut",
     "WhitelistEntryCreate", "WhitelistEntryOut",
     "RiskAssessmentDTO", "RiskScoreOut",
     "ReportGenerateRequest", "ReportOut",

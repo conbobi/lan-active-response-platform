@@ -61,3 +61,12 @@ class IncidentOut(ORMBaseModel):
     resolved_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    culprit_process: Optional[dict] = None
+    parent_process: Optional[dict] = None
+    network_indicators: Optional[list] = None
+    factors_breakdown: Optional[list] = None
+
+
+# Alias for backward compatibility
+IncidentResponse = IncidentOut
+

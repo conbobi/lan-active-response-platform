@@ -1,4 +1,4 @@
-from app.services.ml_anomaly_service import MLAnomalyService
+from app.services.detection.ml_anomaly_service import MLAnomalyService
 
 
 def test_feature_extraction():

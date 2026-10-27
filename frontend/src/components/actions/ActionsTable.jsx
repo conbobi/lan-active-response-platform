@@ -1,7 +1,9 @@
-// src/components/actions/ActionsTable.jsx
 import React from 'react';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
+import EmptyState from '../ui/EmptyState';
+import InfoTooltip from '../ui/InfoTooltip';
+import { TOOLTIPS } from '../../constants/tooltips';
 import AutoRollbackTimer from './AutoRollbackTimer';
 import UndoButton from './UndoButton';
 import {
@@ -45,9 +47,17 @@ export default function ActionsTable({
   const getStatusBadge = (status) => {
     switch (status) {
       case 'applied':
-        return <Badge status="danger" label="Applied" showDot={true} />;
+        return (
+          <InfoTooltip {...TOOLTIPS.Applied}>
+            <Badge status="danger" label="Applied" showDot={true} />
+          </InfoTooltip>
+        );
       case 'reverted':
-        return <Badge status="active" label="Reverted" showDot={true} />;
+        return (
+          <InfoTooltip {...TOOLTIPS.Reverted}>
+            <Badge status="active" label="Reverted" showDot={true} />
+          </InfoTooltip>
+        );
       case 'failed':
         return <Badge status="danger" label="Failed" showDot={false} />;
       case 'reverting':
@@ -74,23 +84,12 @@ export default function ActionsTable({
 
   if (actions.length === 0) {
     return (
-      <div
-        className="card"
-        style={{
-          padding: '3.5rem 1.5rem',
-          textAlign: 'center',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-        }}
-      >
-        <FiActivity size={40} style={{ color: 'var(--text-tertiary)', opacity: 0.4, marginBottom: '0.75rem' }} />
-        <h3 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-          Không tìm thấy response action nào
-        </h3>
-        <p style={{ fontSize: '0.825rem', color: 'var(--text-tertiary)', maxWidth: '420px', margin: '0 auto' }}>
-          Các hành động cô lập mạng, chặn IP, cách ly hoặc diệt tiến trình sẽ được tự động ghi lại tại đây.
-        </p>
+      <div className="card" style={{ padding: '2rem 1rem' }}>
+        <EmptyState
+          icon="📜"
+          title="Chưa có hành động nào"
+          description="Hành động response sẽ xuất hiện khi analyst xử lý sự cố."
+        />
       </div>
     );
   }
@@ -134,8 +133,14 @@ export default function ActionsTable({
               <th style={{ padding: '0.75rem 0.85rem', minWidth: '150px' }}>Mục tiêu (Target)</th>
               <th style={{ padding: '0.75rem 0.85rem', width: '120px' }}>Loại Action</th>
               <th style={{ padding: '0.75rem 0.85rem', width: '100px' }}>Scope</th>
-              <th style={{ padding: '0.75rem 0.85rem', width: '110px' }}>Trạng thái</th>
-              <th style={{ padding: '0.75rem 0.85rem', minWidth: '150px' }}>Auto-Rollback</th>
+              <th style={{ padding: '0.75rem 0.85rem', width: '110px' }}>
+                <InfoTooltip term="Trạng thái" definition="Trạng thái thực thi của hành động: Applied (Đã áp dụng), Reverted (Đã hoàn nguyên), hoặc Failed (Thất bại)">
+                  Trạng thái
+                </InfoTooltip>
+              </th>
+              <th style={{ padding: '0.75rem 0.85rem', minWidth: '150px' }}>
+                <InfoTooltip {...TOOLTIPS.Cooldown}>Auto-Rollback</InfoTooltip>
+              </th>
               <th style={{ padding: '0.75rem 0.85rem', width: '140px', textAlign: 'right' }}>Thao tác</th>
             </tr>
           </thead>

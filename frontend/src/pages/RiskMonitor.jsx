@@ -1,11 +1,12 @@
 // src/pages/RiskMonitor.jsx
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { getAgentRiskScores } from '../api/risk';
+import { getAgents } from '../api/agents';
 import { FactorBreakdown } from '../components/FactorBreakdown';
 import { RiskScoreChart } from '../components/RiskScoreChart';
 import { FiActivity, FiRefreshCw, FiEye, FiCopy, FiCheck, FiShield, FiAlertTriangle } from 'react-icons/fi';
 
-const AGENTS = ['client1', 'client2', 'client3', 'client4', 'attacker'];
+const DEFAULT_AGENTS = ['client1', 'client2', 'client3', 'client4', 'attacker', 'WIN-DEMO-01'];
 
 export function StatusBadge({ score }) {
   const s = Number(score || 0);
@@ -43,6 +44,7 @@ export function StatusBadge({ score }) {
 
 export default function RiskMonitor() {
   const [scores, setScores] = useState([]);
+  const [agentsList, setAgentsList] = useState(DEFAULT_AGENTS);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
@@ -51,25 +53,41 @@ export default function RiskMonitor() {
   const [detailRecord, setDetailRecord] = useState(null);
   const [copied, setCopied] = useState(false);
 
-  async function loadData() {
+  const agentsListRef = useRef(agentsList);
+  agentsListRef.current = agentsList;
+
+  const loadData = useCallback(async (isInitial = false) => {
     try {
-      setLoading(true);
+      if (isInitial) setLoading(true);
+      let targetAgents = agentsListRef.current;
+      try {
+        const fetched = await getAgents();
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          const ids = fetched.map((a) => a.id).filter(Boolean);
+          targetAgents = Array.from(new Set([...ids, ...DEFAULT_AGENTS]));
+          setAgentsList(targetAgents);
+          agentsListRef.current = targetAgents;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch dynamic agent list, using defaults', err);
+      }
+
       const results = await Promise.all(
-        AGENTS.map((agentId) => getAgentRiskScores(agentId, 30).catch(() => []))
+        targetAgents.map((agentId) => getAgentRiskScores(agentId, 30).catch(() => []))
       );
       const all = results.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       setScores(all);
       setLastRefreshed(new Date());
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 12000);
+    loadData(true);
+    const interval = setInterval(() => loadData(false), 12000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadData]);
 
   const filtered = useMemo(() => {
     return selectedAgent ? scores.filter((s) => s.agent_id === selectedAgent) : scores;
@@ -104,7 +122,7 @@ export default function RiskMonitor() {
             Cập nhật: {lastRefreshed.toLocaleTimeString('vi-VN')}
           </span>
           <button
-            onClick={loadData}
+            onClick={() => loadData(true)}
             disabled={loading}
             style={{
               display: 'flex',
@@ -142,7 +160,7 @@ export default function RiskMonitor() {
         >
           Tất cả Agent ({scores.length})
         </button>
-        {AGENTS.map((agent) => {
+        {agentsList.map((agent) => {
           const isSel = selectedAgent === agent;
           return (
             <button

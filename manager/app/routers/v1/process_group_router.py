@@ -8,7 +8,7 @@ from app.schemas.process_group import (
     ProcessGroupUpdate,
     ProcessGroupOut
 )
-from app.services.process_group_service import ProcessGroupService
+from app.services.detection.process_group_service import ProcessGroupService
 
 router = APIRouter(tags=["Process Groups"])
 

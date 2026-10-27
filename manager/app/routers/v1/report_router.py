@@ -8,7 +8,7 @@ from app.core.deps import get_db
 from app.core.exceptions import NotFoundError
 from app.schemas.report import ReportGenerateRequest, ReportOut
 from app.repositories.report_repository import ReportRepository
-from app.services.report_service import ReportService
+from app.services.incident.report_service import ReportService
 
 router = APIRouter(tags=["Reports"])
 

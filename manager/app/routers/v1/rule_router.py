@@ -4,9 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.schemas.rule import RuleCreate, RuleOut
-from app.services.rule_service import RuleService
+from app.services.detection.rule_service import RuleService
 from app.schemas.detection_rule import DetectionRuleCreate, DetectionRuleUpdate, DetectionRuleOut
-from app.services.detection_rule_service import DetectionRuleService
+from app.services.detection.detection_rule_service import DetectionRuleService
 
 router = APIRouter(tags=["Rules"])
 

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db
 from app.schemas.attack import AttackRequestDTO
-from app.services.attack_service import AttackService
+from app.services.incident.attack_service import AttackService
 from app.schemas.command import CommandOut
 
 router = APIRouter(tags=["Attack"])

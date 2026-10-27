@@ -21,10 +21,18 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE risk_score_records ADD COLUMN IF NOT EXISTS smoothed_score FLOAT DEFAULT 0.0;"))
         except Exception as e:
             logger.debug(f"DB alter table risk_score_records smoothed_score: {e}")
+        try:
+            await conn.execute(text("ALTER TABLE incidents ADD COLUMN notes TEXT;"))
+        except Exception as e:
+            logger.debug(f"DB alter table incidents notes: {e}")
+        try:
+            await conn.execute(text("ALTER TABLE incidents ADD COLUMN resolved_at DATETIME;"))
+        except Exception as e:
+            logger.debug(f"DB alter table incidents resolved_at: {e}")
 
     try:
         from app.core.database import AsyncSessionLocal
-        from app.services.process_chain_rule_service import ProcessChainRuleService
+        from app.services.detection.process_chain_rule_service import ProcessChainRuleService
         async with AsyncSessionLocal() as session:
             service = ProcessChainRuleService(session)
             await service.seed_default_data()

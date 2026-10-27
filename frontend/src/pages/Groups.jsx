@@ -1,6 +1,6 @@
-// src/pages/Groups.jsx
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import useGroups from '../hooks/useGroups';
 import GroupCard from '../components/groups/GroupCard';
 import CreateGroupModal from '../components/groups/CreateGroupModal';
@@ -9,6 +9,9 @@ import Button from '../components/ui/Button';
 import SearchBar from '../components/ui/SearchBar';
 import FilterTabs from '../components/ui/FilterTabs';
 import KpiCard from '../components/ui/KpiCard';
+import ErrorState from '../components/ui/ErrorState';
+import EmptyState from '../components/ui/EmptyState';
+import { SkeletonCard } from '../components/ui/Skeleton';
 import {
   FiUsers,
   FiPlus,
@@ -90,10 +93,17 @@ export default function Groups() {
   };
 
   const handleSaveGroup = async (payload, editId) => {
-    if (editId) {
-      await updateGroup(editId, payload);
-    } else {
-      await createGroup(payload);
+    try {
+      if (editId) {
+        await updateGroup(editId, payload);
+        toast.success(`Đã cập nhật nhóm ${payload.name || ''}`);
+      } else {
+        await createGroup(payload);
+        toast.success(`Đã tạo nhóm ${payload.name || ''}`);
+      }
+    } catch (err) {
+      toast.error(`Lỗi khi lưu nhóm: ${err.message}`);
+      throw err;
     }
   };
 
@@ -103,10 +113,21 @@ export default function Groups() {
     }
     try {
       await deleteGroup(grp.id);
+      toast.success(`Đã xóa nhóm ${grp.name}`);
     } catch (err) {
-      alert(err.message || 'Failed to delete group');
+      toast.error(`Xóa nhóm thất bại: ${err.message}`);
     }
   };
+
+  if (error && groups.length === 0) {
+    return (
+      <ErrorState
+        title="Không thể tải nhóm"
+        message={`${error}. Vui lòng kiểm tra backend tại http://localhost:8005`}
+        onRetry={fetchGroups}
+      />
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', paddingBottom: '2rem' }}>
@@ -214,31 +235,18 @@ export default function Groups() {
       {loading && groups.length === 0 ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="card skeleton" style={{ height: '220px', borderRadius: 'var(--radius-md)' }} />
+            <SkeletonCard key={i} />
           ))}
         </div>
       ) : filteredGroups.length === 0 ? (
-        <div
-          className="card"
-          style={{
-            padding: '3.5rem 1rem',
-            textAlign: 'center',
-            color: 'var(--text-secondary)',
-            borderRadius: 'var(--radius-md)',
-          }}
-        >
-          <FiUsers size={44} style={{ marginBottom: '0.75rem', opacity: 0.4 }} />
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-            No agent groups found
-          </h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)', maxWidth: '400px', margin: '0 auto 1.25rem auto' }}>
-            {searchTerm
-              ? `No groups matched your query "${searchTerm}". Try resetting search or tab filters.`
-              : 'Create groups like HR, IT, Finance or Server to manage batch response actions.'}
-          </p>
-          <Button variant="primary" size="sm" onClick={handleOpenCreate}>
-            <FiPlus size={14} style={{ marginRight: '0.3rem' }} /> Create First Group
-          </Button>
+        <div className="card" style={{ padding: '2rem 1rem' }}>
+          <EmptyState
+            icon="👥"
+            title="Chưa có nhóm nào"
+            description="Tạo nhóm để quản lý agents theo phòng ban."
+            actionLabel="Tạo nhóm"
+            onAction={handleOpenCreate}
+          />
         </div>
       ) : (
         <div

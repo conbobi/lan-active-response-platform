@@ -13,7 +13,7 @@ if str(agent_dir) not in sys.path:
 
 import agent
 
-from app.services.process_tree_service import ProcessTreeService
+from app.services.process.process_tree_service import ProcessTreeService
 from app.models.process_info import ProcessInfo
 from app.websocket.agent_ws import agent_websocket_endpoint
 

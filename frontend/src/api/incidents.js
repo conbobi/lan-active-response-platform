@@ -16,6 +16,10 @@ export const mapIncident = (inc) => {
     resolvedAt: inc.resolved_at || inc.resolvedAt || null,
     createdAt: inc.created_at || inc.createdAt || new Date().toISOString(),
     updatedAt: inc.updated_at || inc.updatedAt || new Date().toISOString(),
+    culpritProcess: inc.culprit_process || null,
+    parentProcess: inc.parent_process || null,
+    networkIndicators: Array.isArray(inc.network_indicators) ? inc.network_indicators : [],
+    factorsBreakdown: Array.isArray(inc.factors_breakdown) ? inc.factors_breakdown : [],
   };
 };
 
@@ -79,6 +83,26 @@ export const getIncidents = async () => {
         updatedAt: new Date(Date.now() - 43200000).toISOString(),
       },
     ];
+  }
+};
+
+export const getIncident = async (incidentId) => {
+  try {
+    const data = await api.get(`/incidents/${incidentId}`);
+    return mapIncident(data);
+  } catch (err) {
+    console.warn(`API getIncident error for ${incidentId}:`, err);
+    throw err;
+  }
+};
+
+export const getIncidentTimeline = async (incidentId) => {
+  try {
+    const data = await api.get(`/incidents/${incidentId}/timeline`);
+    return data && data.timeline ? data.timeline : [];
+  } catch (err) {
+    console.warn(`API getIncidentTimeline error for ${incidentId}:`, err);
+    return [];
   }
 };
 
@@ -148,6 +172,8 @@ export const executeIncidentAction = async (incidentId, actionType, params = {},
 export default {
   mapIncident,
   getIncidents,
+  getIncident,
+  getIncidentTimeline,
   getIncidentNotes,
   addIncidentNote,
   updateIncidentStatus,

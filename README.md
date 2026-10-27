@@ -276,7 +276,7 @@ This will start:
 
 PostgreSQL database (port 5432)
 
-Manager backend (port 8002)
+Manager backend (port 8005)
 
 Four simulated agents (client1–client4)
 
@@ -288,7 +288,7 @@ Open http://localhost:5173 (or the port mapped in vite.config.js).
 
 Access the API documentation
 
-Open http://localhost:8002/docs for Swagger UI.
+Open http://localhost:8005/docs for Swagger UI.
 
 Run malware simulation scripts (for testing)
 

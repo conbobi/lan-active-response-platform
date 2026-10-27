@@ -4,7 +4,7 @@ import api from './api';
 export const getProcessTree = async (agentId) => {
   try {
     const data = await api.get(`/process/${agentId}/tree`);
-    return data;
+    return data?.data ?? data;
   } catch (error) {
     console.error(`API Error in getProcessTree (${agentId}):`, error);
     throw error;
@@ -14,35 +14,48 @@ export const getProcessTree = async (agentId) => {
 export const getSuspiciousProcesses = async (agentId) => {
   try {
     const data = await api.get(`/process/${agentId}/suspicious`);
-    return Array.isArray(data) ? data : [];
+    const list = data?.data ?? data;
+    return Array.isArray(list) ? list : [];
   } catch (error) {
     console.error(`API Error in getSuspiciousProcesses (${agentId}):`, error);
     return [];
   }
 };
 
-export const killProcess = async (agentId, pid, killTree = false, processName = null) => {
-  try {
-    if (killTree) {
-      return await api.post(`/process/${agentId}/kill_tree`, {
-        pid: Number(pid),
-        process_name: processName,
-      });
-    }
-    return await api.post(`/process/${agentId}/kill`, { pid: Number(pid) });
-  } catch (error) {
-    console.error(`API Error killing process (PID: ${pid}, killTree: ${killTree}) on ${agentId}:`, error);
-    throw error;
-  }
-};
+export async function getProcessDetail(agentId, pid) {
+  const res = await api.get(`/process/${agentId}/process/${pid}`);
+  return res?.data ?? res;
+}
 
-export const killProcessTree = async (agentId, pid, processName = null) => {
-  return await killProcess(agentId, pid, true, processName);
-};
+export async function killProcess(agentId, pid, options = {}) {
+  let reason = "Manual analyst action";
+  let killTree = false;
+
+  if (typeof options === 'boolean') {
+    killTree = options;
+  } else if (options && typeof options === 'object') {
+    killTree = Boolean(options.killTree ?? options.kill_tree ?? false);
+    reason = options.reason || "Manual analyst action";
+  }
+
+  const res = await api.post(`/process/${agentId}/process/${pid}/kill`, {
+    reason,
+    kill_tree: killTree,
+  });
+  return res?.data ?? res;
+}
+
+export async function killProcessTree(agentId, pid, processName = null) {
+  return await killProcess(agentId, pid, {
+    reason: processName ? `Kill tree: ${processName}` : "Manual analyst action",
+    killTree: true,
+  });
+}
 
 export default {
   getProcessTree,
   getSuspiciousProcesses,
+  getProcessDetail,
   killProcess,
   killProcessTree,
 };

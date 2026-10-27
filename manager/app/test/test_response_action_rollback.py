@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.schemas.enums import AgentStatus
 from app.models.agent import Agent
 from app.models.response_action import ResponseAction
-from app.services.snapshot_service import SnapshotService
-from app.services.response_action_service import ResponseActionService
-from app.services.rollback_service import RollbackService
+from app.services.response.snapshot_service import SnapshotService
+from app.services.response.response_action_service import ResponseActionService
+from app.services.response.rollback_service import RollbackService
 from app.core.exceptions import ConflictError, FlappingCooldownError, NotFoundError
 
 
@@ -48,7 +48,7 @@ async def test_response_action_lifecycle(mock_db):
         return_value={"timeout_seconds": 300, "enabled": True, "cooldown_seconds": 600}
     )
 
-    with patch("app.services.response_action_service.command_dispatcher.push_command", AsyncMock()):
+    with patch("app.services.response.response_action_service.command_dispatcher.push_command", AsyncMock()):
         action = await service.create_and_apply_action(
             agent_id="agent_1",
             action_type="isolate",
@@ -92,7 +92,7 @@ async def test_rollback_action_success(mock_db):
         return_value={"timeout_seconds": 300, "enabled": True, "cooldown_seconds": 600}
     )
 
-    with patch("app.services.rollback_service.command_dispatcher.push_command", AsyncMock()) as mock_push:
+    with patch("app.services.response.rollback_service.command_dispatcher.push_command", AsyncMock()) as mock_push:
         reverted = await service.rollback_action("act_123", reason="False alarm", actor="analyst")
 
         assert reverted.status == "reverted"

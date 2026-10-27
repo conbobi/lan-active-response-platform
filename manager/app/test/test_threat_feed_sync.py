@@ -1,4 +1,4 @@
-from app.services.threat_intelligence_service import ThreatIntelligenceService
+from app.services.detection.threat_intelligence_service import ThreatIntelligenceService
 
 
 def test_extract_indicators_from_text():

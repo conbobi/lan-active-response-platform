@@ -12,7 +12,7 @@ if str(agent_dir) not in sys.path:
 
 import agent
 from app.websocket.agent_ws import agent_websocket_endpoint
-from app.services.flow_service import FlowService
+from app.services.network.flow_service import FlowService
 from app.models.flow import Flow
 
 pytestmark = pytest.mark.asyncio

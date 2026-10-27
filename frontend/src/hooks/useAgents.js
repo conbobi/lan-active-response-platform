@@ -1,5 +1,6 @@
 // src/hooks/useAgents.js
 import { useState, useEffect, useCallback } from 'react';
+import toast from 'react-hot-toast';
 import { getAgents, isolateAgent, unisolateAgent } from '../api/agents';
 
 export const useAgents = () => {
@@ -26,18 +27,22 @@ export const useAgents = () => {
   const handleIsolate = async (agentId) => {
     try {
       await isolateAgent(agentId);
+      toast.success(`Đã cô lập mạng cho agent ${agentId}`);
       await fetchAgents();
     } catch (e) {
       console.error('Failed to isolate agent', e);
+      toast.error(`Cô lập agent thất bại: ${e.response?.data?.detail || e.message}`);
     }
   };
 
   const handleUnisolate = async (agentId) => {
     try {
       await unisolateAgent(agentId);
+      toast.success(`Đã hủy cô lập cho agent ${agentId}`);
       await fetchAgents();
     } catch (e) {
       console.error('Failed to release agent', e);
+      toast.error(`Hủy cô lập thất bại: ${e.response?.data?.detail || e.message}`);
     }
   };
 

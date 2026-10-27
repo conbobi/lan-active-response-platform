@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from app.services.docker_monitor_service import DockerMonitorService
+from app.services.agent.docker_monitor_service import DockerMonitorService
 
 
 @pytest.mark.asyncio

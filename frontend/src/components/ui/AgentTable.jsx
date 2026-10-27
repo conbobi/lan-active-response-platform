@@ -47,40 +47,57 @@ export default function AgentTable({ agents, onViewAgent }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((a) => (
-              <tr key={a.id}>
-                <td style={{ fontWeight: 500 }}>{a.hostname}</td>
-                <td><Badge status={a.status} /></td>
-                <td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${a.cpu}%`, background: a.cpu > 80 ? 'var(--error)' : a.cpu > 60 ? 'var(--warning)' : 'var(--success)', borderRadius: 99 }} />
+            {rows.map((a) => {
+              const isDead = ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase());
+              return (
+                <tr key={a.id}>
+                  <td style={{ fontWeight: 500 }}>{a.hostname}</td>
+                  <td><Badge status={a.status} /></td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${a.cpu}%`, background: a.cpu > 80 ? 'var(--error)' : a.cpu > 60 ? 'var(--warning)' : 'var(--success)', borderRadius: 99 }} />
+                      </div>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', minWidth: 28 }}>{a.cpu}%</span>
                     </div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', minWidth: 28 }}>{a.cpu}%</span>
-                  </div>
-                </td>
-                <td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${a.ram}%`, background: a.ram > 80 ? 'var(--error)' : a.ram > 60 ? 'var(--warning)' : 'var(--primary)', borderRadius: 99 }} />
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${a.ram}%`, background: a.ram > 80 ? 'var(--error)' : a.ram > 60 ? 'var(--warning)' : 'var(--primary)', borderRadius: 99 }} />
+                      </div>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', minWidth: 28 }}>{a.ram}%</span>
                     </div>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', minWidth: 28 }}>{a.ram}%</span>
-                  </div>
-                </td>
-                <td>
-                  {a.firewall
-                    ? <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 600 }}>Active</span>
-                    : <span style={{ color: 'var(--error)', fontSize: '0.8rem' }}>Off</span>}
-                </td>
-                <td>
-                  <div className="table-actions">
-                    <button className="action-btn" title="View" onClick={() => onViewAgent && onViewAgent(a)}><FiEye size={13} /></button>
-                    <button className="action-btn danger" title="Block"><FiSlash size={13} /></button>
-                    <button className="action-btn" title="Isolate"><FiLock size={13} /></button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td>
+                    {a.firewall
+                      ? <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 600 }}>Active</span>
+                      : <span style={{ color: 'var(--error)', fontSize: '0.8rem' }}>Off</span>}
+                  </td>
+                  <td>
+                    <div className="table-actions">
+                      <button className="action-btn" title="View" onClick={() => onViewAgent && onViewAgent(a)}><FiEye size={13} /></button>
+                      <button
+                        className="action-btn danger"
+                        title={isDead ? "Agent offline" : "Block"}
+                        disabled={isDead}
+                        style={isDead ? { opacity: 0.35, cursor: 'not-allowed' } : {}}
+                      >
+                        <FiSlash size={13} />
+                      </button>
+                      <button
+                        className="action-btn"
+                        title={isDead ? "Agent offline" : "Isolate"}
+                        disabled={isDead}
+                        style={isDead ? { opacity: 0.35, cursor: 'not-allowed' } : {}}
+                      >
+                        <FiLock size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
