@@ -46,11 +46,39 @@ function extractAttackType(incident) {
   return incident.title || incident.description || 'Unknown Attack';
 }
 
-export default function RecentThreats({ incidents = [] }) {
+export default function RecentThreats({ incidents = [], agents = [] }) {
   const navigate = useNavigate();
   
   const now = Date.now();
   const MAX_THREAT_AGE_MS = 24 * 60 * 60 * 1000;
+
+  const ALIVE_STATUSES = [
+    'active', 'online', 'ACTIVE',
+    'isolated', 'ISOLATED',
+    'quarantine', 'QUARANTINE',
+  ];
+
+  const isAgentAlive = (agent) => {
+    if (!agent) return false;
+    const status = String(agent.status || '').toLowerCase();
+    if (['dead', 'offline', 'inactive'].includes(status)) {
+      return false;
+    }
+    if (ALIVE_STATUSES.map(s => s.toLowerCase()).includes(status)) {
+      return true;
+    }
+    if (agent.last_seen) {
+      const age = Date.now() - new Date(agent.last_seen).getTime();
+      return age < 5 * 60 * 1000;
+    }
+    return false;
+  };
+
+  const aliveAgentIds = new Set(
+    (Array.isArray(agents) ? agents : [])
+      .filter(isAgentAlive)
+      .map(a => a.id)
+  );
 
   const threats = (Array.isArray(incidents) ? incidents : [])
     .filter(i => {
@@ -58,6 +86,7 @@ export default function RecentThreats({ incidents = [] }) {
       const st = String(i.status || '').toLowerCase();
       const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
       if (score < 30 || isResolved) return false;
+      if (!aliveAgentIds.has(i.agent_id)) return false;
       const createdAt = new Date(i.created_at || i.createdAt || i.timestamp).getTime();
       if (!isNaN(createdAt) && (now - createdAt) > MAX_THREAT_AGE_MS) return false;
       return true;

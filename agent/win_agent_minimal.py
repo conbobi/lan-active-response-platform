@@ -289,41 +289,38 @@ def collect_processes() -> List[Dict[str, Any]]:
 
 def collect_network() -> List[Dict[str, Any]]:
     """
-    Collect established network connections with associated PID and process name.
+    Collect established network connections with associated PID, process name, and cmdline.
     """
     connections = []
     try:
-        net_conns = psutil.net_connections(kind='inet')
-    except Exception as e:
-        return connections
-
-    for conn in net_conns:
-        try:
+        for conn in psutil.net_connections(kind='inet'):
             if conn.status != 'ESTABLISHED' or not conn.pid:
                 continue
-
-            proc_name = "unknown"
             try:
-                p = psutil.Process(conn.pid)
-                proc_name = p.name()
-            except Exception:
-                pass
+                proc = psutil.Process(conn.pid)
+                proc_name = proc.name()
+                cmdline = ' '.join(proc.cmdline() or [])[:200]
+            except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+                proc_name = 'unknown'
+                cmdline = ''
 
-            src_ip = conn.laddr.ip if conn.laddr else ""
-            src_port = conn.laddr.port if conn.laddr else 0
-            dst_ip = conn.raddr.ip if conn.raddr else ""
-            dst_port = conn.raddr.port if conn.raddr else 0
+            laddr = conn.laddr
+            raddr = conn.raddr
+            if not raddr:
+                continue
 
             connections.append({
                 "pid": conn.pid,
                 "process_name": proc_name,
-                "src_ip": src_ip,
-                "src_port": src_port,
-                "dst_ip": dst_ip,
-                "dst_port": dst_port,
+                "cmdline": cmdline,
+                "src_ip": laddr.ip if laddr else "",
+                "src_port": laddr.port if laddr else 0,
+                "dst_ip": raddr.ip if raddr else "",
+                "dst_port": raddr.port if raddr else 0,
+                "protocol": "TCP",
             })
-        except Exception:
-            continue
+    except Exception as e:
+        print(f"[!] collect_network error: {e}")
     return connections
 
 

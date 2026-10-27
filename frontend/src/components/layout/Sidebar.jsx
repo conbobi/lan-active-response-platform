@@ -19,10 +19,12 @@ import {
   FiBell,
   FiGitBranch,
   FiClock,
+  FiGlobe,
 } from 'react-icons/fi';
 
 const socMonitoringNav = [
   { to: '/', icon: <FiGrid size={16} />, label: 'Dashboard', end: true },
+  { to: '/network', icon: <FiGlobe size={16} />, label: 'Network Monitor' },
   { to: '/risk', icon: <FiActivity size={16} />, label: 'Risk Monitor' },
   { to: '/alerts', icon: <FiAlertCircle size={16} />, label: 'Alerts' },
 ];

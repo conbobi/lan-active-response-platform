@@ -50,51 +50,96 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
   // 1. Guard null
   const safeAgents = Array.isArray(agents) ? agents : [];
   const safeIncidents = Array.isArray(incidents) ? incidents : [];
-  
+
+  // ===== HELPER: Agent còn sống không? =====
+  const ALIVE_STATUSES = [
+    'active', 'online', 'ACTIVE',
+    'isolated', 'ISOLATED',           // Isolated vẫn là alive
+    'quarantine', 'QUARANTINE',       // Quarantine vẫn là alive
+  ];
+
+  const isAgentAlive = (agent) => {
+    if (!agent) return false;
+
+    // Check status
+    const status = String(agent.status || '').toLowerCase();
+    if (['dead', 'offline', 'inactive'].includes(status)) {
+      return false;
+    }
+    if (ALIVE_STATUSES.map(s => s.toLowerCase()).includes(status)) {
+      return true;
+    }
+
+    // Fallback: check last_seen trong 5 phút
+    if (agent.last_seen) {
+      const age = Date.now() - new Date(agent.last_seen).getTime();
+      return age < 5 * 60 * 1000;  // 5 phút
+    }
+
+    return false;
+  };
+
+  // ===== BUILD MAP: agent_id → alive? =====
+  const agentAliveMap = new Map(
+    safeAgents.map(a => [a.id, isAgentAlive(a)])
+  );
+
+  const isIncidentOnLiveAgent = (incident) => {
+    const agentId = incident?.agent_id;
+    if (!agentId) return false;
+    // Nếu không tìm thấy agent trong danh sách → coi như dead (stale data)
+    if (!agentAliveMap.has(agentId)) return false;
+    return agentAliveMap.get(agentId);
+  };
+
   // 2. Helper getScore (xử lý risk_score ?? score)
   const getScore = (i) => {
     const v = i?.risk_score ?? i?.riskScore ?? i?.score;
     return typeof v === 'number' ? v : 0;
   };
-  
+
   // 3. Time filter: chỉ tính incident trong 24h
   const now = Date.now();
   const MAX_INCIDENT_AGE_MS = 24 * 60 * 60 * 1000;
 
+  const isRecentIncident = (i) => {
+    const createdAt = new Date(i.created_at || i.createdAt || i.timestamp).getTime();
+    if (isNaN(createdAt)) return false;
+    return (now - createdAt) < MAX_INCIDENT_AGE_MS;
+  };
+
+  // ===== FILTER: Critical incidents trên agent alive, trong 24h =====
   const unresolvedCritical = safeIncidents.filter(i => {
     const score = getScore(i);
     const st = String(i.status || '').toLowerCase();
     const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
     if (isResolved) return false;
     if (score < 85) return false;
-    
-    const createdAt = new Date(i.created_at || i.createdAt || i.timestamp).getTime();
-    if (isNaN(createdAt)) return false;
-    return (now - createdAt) < MAX_INCIDENT_AGE_MS;
+    if (!isRecentIncident(i)) return false;
+    if (!isIncidentOnLiveAgent(i)) return false;   // ← KEY FILTER
+    return true;
   });
-  
-  // 4. Tìm medium incidents trong 24h
+
+  // ===== FILTER: Medium incidents tương tự =====
   const unresolvedMedium = safeIncidents.filter(i => {
     const score = getScore(i);
     const st = String(i.status || '').toLowerCase();
     const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
     if (isResolved) return false;
     if (score < 30 || score >= 85) return false;
-    
-    const createdAt = new Date(i.created_at || i.createdAt || i.timestamp).getTime();
-    if (isNaN(createdAt)) return false;
-    return (now - createdAt) < MAX_INCIDENT_AGE_MS;
+    if (!isRecentIncident(i)) return false;
+    if (!isIncidentOnLiveAgent(i)) return false;   // ← KEY FILTER
+    return true;
   });
-  
-  // 5. Agent offline
-  const offlineAgents = safeAgents.filter(a => 
-    !['active', 'online', 'ACTIVE'].includes(a.status)
-  ).length;
-  
+
+  // ===== Count agents alive =====
+  const aliveAgents = safeAgents.filter(isAgentAlive);
+  const offlineAgents = safeAgents.length - aliveAgents.length;
+
   // 6. Health Score LOGIC: MIN(penalties), KHÔNG phải sum
   let healthScore = 100;
   let level = 'safe';
-  
+
   // PRIORITY 1: Critical attack = NGUY HIỂM (force đỏ)
   if (unresolvedCritical.length > 0) {
     healthScore = Math.max(0, 40 - unresolvedCritical.length * 15);
@@ -111,7 +156,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
     healthScore = Math.min(healthScore, 70);
     level = 'warning';
   }
-  
+
   // 7. Loading skeleton
   if (loading) {
     return (
@@ -121,18 +166,17 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
       </div>
     );
   }
-  
+
   // 8. Config theo level
   const config = {
-    safe:     { icon: '🟢', color: 'text-green-600', bg: 'bg-green-50',  text: 'HỆ THỐNG AN TOÀN' },
-    warning:  { icon: '🟡', color: 'text-yellow-600', bg: 'bg-yellow-50', text: 'CẦN CHÚ Ý' },
+    safe: { icon: '🟢', color: 'text-green-600', bg: 'bg-green-50', text: 'HỆ THỐNG AN TOÀN' },
+    warning: { icon: '🟡', color: 'text-yellow-600', bg: 'bg-yellow-50', text: 'CẦN CHÚ Ý' },
     critical: { icon: '🔴', color: 'text-red-600', bg: 'bg-red-50', text: 'NGUY HIỂM' },
   }[level];
-  
+
   return (
-    <div className={`rounded-xl shadow-sm border-2 p-8 mb-6 transition-all duration-500 ${config.bg} ${
-      level === 'critical' ? 'border-red-500 animate-pulse' : 'border-gray-200'
-    }`}>
+    <div className={`rounded-xl shadow-sm border-2 p-8 mb-6 transition-all duration-500 ${config.bg} ${level === 'critical' ? 'border-red-500 animate-pulse' : 'border-gray-200'
+      }`}>
       <div className="text-center">
         <div className={`text-6xl mb-4 ${level === 'critical' ? 'animate-bounce' : ''}`}>
           {config.icon}
@@ -140,13 +184,24 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
         <div className={`text-3xl font-bold mb-2 ${config.color}`}>
           {config.text}
         </div>
-        <div className="text-gray-500 mb-6">
+        <div className="text-gray-500 mb-4">
           <InfoTooltip {...TOOLTIPS.HealthScore}>Health Score</InfoTooltip>: <span className="font-semibold text-gray-900 text-xl">{healthScore}</span>/100
-          <div className="text-xs text-gray-500 text-center mt-2">
-            (Chỉ tính sự cố trong 24h gần nhất)
-          </div>
         </div>
-        
+
+        {/* Agents summary */}
+        <div className="flex justify-center gap-6 text-sm mb-4">
+          <div>
+            <span className="font-bold text-green-600">{aliveAgents.length}</span>
+            <span className="text-gray-500 ml-1">agents alive</span>
+          </div>
+          {offlineAgents > 0 && (
+            <div>
+              <span className="font-bold text-gray-400">{offlineAgents}</span>
+              <span className="text-gray-500 ml-1">offline</span>
+            </div>
+          )}
+        </div>
+
         {unresolvedCritical.length > 0 && (
           <div className="bg-red-100 border border-red-300 rounded-lg p-3 mb-4">
             <div className="text-red-800 font-semibold">
@@ -155,7 +210,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
           </div>
         )}
 
-        {/* Critical Incidents Context List (Fix #1) */}
+        {/* Critical Incidents Context List */}
         {unresolvedCritical.length > 0 && (
           <div className="mt-4 space-y-2 text-left">
             <div className="text-red-800 font-semibold mb-2 text-sm">
@@ -163,29 +218,31 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
             </div>
             {unresolvedCritical.slice(0, 3).map(incident => {
               const score = getScore(incident);
+              const agentId = incident.agent_id;
               const attackType = extractAttackType(incident);
-              const isIsolated = incident.status === 'contained' || 
-                                incident.status === 'isolated' ||
-                                incident.action_taken === 'isolate' ||
-                                incident.actions_taken?.some?.(a => a.action_type === 'isolate');
-              
+              const timeAgo = getTimeAgo(incident.created_at || incident.createdAt || incident.timestamp);
+              const isIsolated = incident.status === 'contained' ||
+                incident.status === 'isolated' ||
+                incident.action_taken === 'isolate' ||
+                incident.actions_taken?.some?.(a => a.action_type === 'isolate');
+
               return (
                 <div key={incident.id}
-                     className="bg-white border border-red-300 rounded-lg p-3 
+                  className="bg-white border border-red-300 rounded-lg p-3 
                                 hover:bg-red-50 hover:border-red-500 cursor-pointer transition-all shadow-sm"
-                     onClick={() => navigate(`/incidents/${incident.id}`)}>
+                  onClick={() => navigate(`/incidents/${incident.id}`)}>
                   <div className="flex justify-between items-start gap-3">
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-xl">🚨</span>
                         <span className="font-bold text-red-900">
-                          {incident.agent_id}
+                          {agentId}
                         </span>
                         <span className="text-xs text-gray-500">
-                          · {getTimeAgo(incident.created_at || incident.createdAt)}
+                          · {timeAgo}
                         </span>
                       </div>
-                      <div className="text-sm text-red-800 font-medium ml-7">
+                      <div className="text-sm text-red-800 font-medium ml-7 truncate">
                         Attack: {attackType}
                       </div>
                       <div className="text-xs text-gray-600 ml-7 mt-1">
@@ -212,6 +269,11 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
             )}
           </div>
         )}
+
+        {/* Helper text */}
+        <div className="text-xs text-gray-400 mt-4">
+          (Chỉ tính agents đang hoạt động + incidents trong 24h)
+        </div>
       </div>
     </div>
   );

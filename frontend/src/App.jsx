@@ -23,6 +23,8 @@ import YaraRules from './pages/YaraRules';
 import Groups from './pages/Groups';
 import Policies from './pages/Policies';
 import ActionsHistory from './pages/ActionsHistory';
+import NetworkOverview from './pages/NetworkOverview';
+import NetworkInvestigation from './pages/NetworkInvestigation';
 
 export default function App() {
   return (
@@ -31,6 +33,8 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/network" element={<NetworkOverview />} />
+          <Route path="/network/:id/investigate" element={<NetworkInvestigation />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/alerts" element={<Alerts />} />

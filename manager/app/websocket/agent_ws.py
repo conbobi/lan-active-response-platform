@@ -167,6 +167,36 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
     platform_name = payload.get("platform", "linux")
     logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}' (platform: {platform_name})")
 
+    # Record network connections into flows table with process info
+    conns = payload.get("network_connections", [])
+    if isinstance(conns, list) and conns:
+        try:
+            flow_repo = FlowRepository(session)
+            now_dt = datetime.now(timezone.utc)
+            for c in conns:
+                dst_ip = c.get("dst_ip")
+                dst_port = c.get("dst_port")
+                if dst_ip and dst_port:
+                    conn_flow = Flow(
+                        id=f"flow_{uuid.uuid4().hex[:12]}",
+                        src_ip=c.get("src_ip") or "0.0.0.0",
+                        dst_ip=str(dst_ip),
+                        src_port=int(c.get("src_port") or 0),
+                        dst_port=int(dst_port),
+                        protocol=c.get("protocol") or "TCP",
+                        bytes_sent=int(c.get("bytes_sent") or 0),
+                        packets_sent=int(c.get("packets_sent") or 1),
+                        start_time=now_dt,
+                        end_time=now_dt,
+                        agent_id=target_agent_id,
+                        created_at=now_dt,
+                        process_name=c.get("process_name") or c.get("process"),
+                        pid=c.get("pid")
+                    )
+                    await flow_repo.add(conn_flow)
+        except Exception as e:
+            logger.warning(f"Failed to record network connections from telemetry: {e}")
+
     risk_service = RiskAssessmentService(session)
     record = await risk_service.process_risk(
         agent_id=target_agent_id,
@@ -190,6 +220,8 @@ async def _handle_flow_stats(agent_id: str, data: dict, session: AsyncSession) -
     tcp_pkts = int(payload.get("tcp_packets_delta", 0))
     udp_pkts = int(payload.get("udp_packets_delta", 0))
     agent_ip = str(payload.get("ip_address") or "192.168.10.10")
+    process_name = payload.get("process_name") or payload.get("process")
+    pid = payload.get("pid")
     now_dt = datetime.now(timezone.utc)
 
     flow_repo = FlowRepository(session)
@@ -207,7 +239,9 @@ async def _handle_flow_stats(agent_id: str, data: dict, session: AsyncSession) -
             start_time=now_dt,
             end_time=now_dt,
             agent_id=target_agent_id,
-            created_at=now_dt
+            created_at=now_dt,
+            process_name=process_name,
+            pid=pid
         )
         await flow_repo.add(flow_tcp)
 
@@ -225,9 +259,32 @@ async def _handle_flow_stats(agent_id: str, data: dict, session: AsyncSession) -
             start_time=now_dt,
             end_time=now_dt,
             agent_id=target_agent_id,
-            created_at=now_dt
+            created_at=now_dt,
+            process_name=process_name,
+            pid=pid
         )
         await flow_repo.add(flow_udp)
+
+    flow_items = payload.get("flows") or payload.get("connections") or []
+    if isinstance(flow_items, list) and flow_items:
+        for flow_data in flow_items:
+            f = Flow(
+                id=f"flow_{uuid.uuid4().hex[:12]}",
+                src_ip=flow_data.get("src_ip") or agent_ip,
+                dst_ip=flow_data.get("dst_ip") or "192.168.10.1",
+                src_port=int(flow_data.get("src_port") or 0),
+                dst_port=int(flow_data.get("dst_port") or 80),
+                protocol=flow_data.get("protocol") or "TCP",
+                bytes_sent=int(flow_data.get("bytes_sent") or 0),
+                packets_sent=int(flow_data.get("packets_sent") or 1),
+                start_time=now_dt,
+                end_time=now_dt,
+                agent_id=target_agent_id,
+                created_at=now_dt,
+                process_name=flow_data.get("process_name") or flow_data.get("process"),
+                pid=flow_data.get("pid")
+            )
+            await flow_repo.add(f)
 
     logger.info(f"Recorded FLOW_STATS for agent '{target_agent_id}': {packets_sent} pkts, {bytes_sent} bytes")
     if data.get("wait_ack", True):

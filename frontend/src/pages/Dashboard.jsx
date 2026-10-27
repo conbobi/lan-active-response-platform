@@ -172,7 +172,7 @@ export default function Dashboard() {
             {/* Middle Grid: Agents Table + Recent Threats (Fix #2) */}
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
                 <AgentTable agents={agents} onViewAgent={setSelectedAgent} />
-                <RecentThreats incidents={incidents} />
+                <RecentThreats incidents={incidents} agents={agents} />
             </div>
 
             {/* Docker Infrastructure Status */}
