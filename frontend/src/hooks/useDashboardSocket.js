@@ -8,10 +8,8 @@ export const useDashboardSocket = (onMessage) => {
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    // Vite proxy handles /ws or connect directly to 8005
-    const wsUrl = window.location.port === '5173' || window.location.port === '3000'
-      ? `${protocol}//localhost:8005/ws/dashboard`
-      : `${protocol}//${host}/ws/dashboard`;
+    // Proxied via Vite in dev and Nginx in production
+    const wsUrl = `${protocol}//${host}/ws/dashboard`;
 
     let ws;
     let reconnectTimeout = null;

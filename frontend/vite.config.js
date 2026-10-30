@@ -5,6 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // 👇 THÊM DÒNG NÀY VÀO ĐÂY 👇
+    allowedHosts: ['edr.alwayready.id.vn', 'localhost'],
+
     proxy: {
       '/api': {
         target: 'http://localhost:8005',
@@ -18,4 +21,3 @@ export default defineConfig({
     },
   },
 })
-

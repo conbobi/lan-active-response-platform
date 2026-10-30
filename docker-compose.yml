@@ -2,15 +2,16 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:16-alpine #Tải bản cài đặt PostgreSQL phiên bản 16 (dùng bản alpine cho siêu nhẹ, tiết kiệm dung lượng).
+    image: postgres:16-alpine # Bản cài đặt PostgreSQL 16 alpine nhẹ và tiết kiệm tài nguyên
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: larp # tên tài khoản quản trị postgre
+      POSTGRES_USER: larp
       POSTGRES_PASSWORD: larp_password
       POSTGRES_DB: larpdb
     ports:
-      - "5432:5432" # Tùy chọn, để truy cập DB từ máy host nếu cần debug
+      - "5432:5432" # Truy cập DB trực tiếp từ máy host nếu cần debug
     volumes:
-      - pgdata:/var/lib/postgresql/data #Đây là "két sắt bảo vệ dữ liệu". Khi container bị tắt đi hay xóa đi làm lại, dữ liệu bên trong vẫn được giữ lại an toàn ở ổ cứng máy thật, không bị mất.
+      - pgdata:/var/lib/postgresql/data
     networks:
       - larp-net
     privileged: true
@@ -21,11 +22,12 @@ services:
       retries: 5
 
   manager:
-    build: ./manager #Bảo Docker đi vào thư mục ./manager tìm file Dockerfile để tự động xây dựng nên "tòa nhà" Manager của bạn.
+    build: ./manager # Build FastAPI backend từ ./manager
+    restart: unless-stopped
     ports:
-      - "8005:8000" #Mở cổng 8000 ra máy thật để bạn có thể mở trình duyệt web lên xem Dashboard
+      - "8005:8000" # Mở port 8000 ra máy host port 8005
     environment:
-      - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb #Đây là "đường ống" kết nối từ tòa nhà Manager đến két sắt bảo vệ dữ liệu (PostgreSQL). Lưu ý: db chính là tên dịch vụ PostgreSQL ở trên, không phải localhost hay 127.0.0.1
+      - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU
     depends_on:
       db:
@@ -41,13 +43,37 @@ services:
     networks:
       - larp-net
 
-  # Định nghĩa các agent (client1, client2...) như trước
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80" # HTTP tiêu chuẩn cho máy host
+      - "5173:80" # Giữ port 5173 quen thuộc để truy cập từ localhost
+    depends_on:
+      manager:
+        condition: service_healthy
+    networks:
+      - larp-net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://frontend:80 run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - frontend
+    networks:
+      - larp-net
+
   client1:
-    build: ./agent #Dùng chung một bản thiết kế (Dockerfile) trong thư mục ./agent để tạo ra các máy con.
-    hostname: client1 #Đặt tên định danh cho máy trạm này trong mạng nội bộ.
+    build: ./agent
+    hostname: client1
     restart: unless-stopped
     environment:
-      - MANAGER_URL=ws://manager:8000/ws/agent #Đây là "đường dây liên lạc" giữa máy trạm và tòa nhà Manager. Lưu ý: manager chính là tên dịch vụ Manager ở trên, không phải localhost hay 127.0.0.1
+      - MANAGER_URL=ws://manager:8000/ws/agent
       - AGENT_ID=client1
       - BASH_ENV=/etc/bash_env
     networks:
@@ -57,12 +83,12 @@ services:
         condition: service_healthy
     cap_add:
       - NET_ADMIN
-    mem_limit: 2g # Giới hạn tối đa 2GB RAM
-    mem_reservation: 512m # Đảm bảo ít nhất 512MB
-    #cpus: 4.0 # Giới hạn CPU (tùy chọn)
+    mem_limit: 2g
+    mem_reservation: 512m
+
 networks:
   larp-net:
-    driver: bridge #Đây chính là "hệ thống giao thông nội bộ" của thành phố ảo
+    driver: bridge
 
 volumes:
   pgdata:
