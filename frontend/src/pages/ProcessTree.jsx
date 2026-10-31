@@ -4,8 +4,6 @@ import useProcessTree from '../hooks/useProcessTree';
 import { useAgents } from '../hooks/useAgents';
 import Dropdown from '../components/ui/Dropdown';
 import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
-import Modal from '../components/ui/Modal';
 import ErrorState from '../components/ui/ErrorState';
 import EmptyState from '../components/ui/EmptyState';
 import InfoTooltip from '../components/ui/InfoTooltip';
@@ -18,20 +16,71 @@ import {
   FiAlertOctagon,
   FiRotateCw,
   FiXCircle,
-  FiCornerDownRight,
-  FiChevronDown,
-  FiChevronRight,
   FiMaximize2,
   FiMinimize2,
   FiLayers,
   FiTerminal,
   FiCheckCircle,
-  FiX
+  FiX,
+  FiShield,
+  FiList,
 } from 'react-icons/fi';
+
+/** Tab button with optional count pill */
+function TabButton({ active, onClick, icon, label, count, countTone = 'default' }) {
+  const tones = {
+    default:  { bg: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: 'var(--border-primary)' },
+    critical: { bg: 'var(--critical-dim)', color: 'var(--critical)',      border: 'var(--critical)' },
+    success:  { bg: 'var(--success-dim)',  color: 'var(--success)',       border: 'var(--success)' },
+  };
+  const t = tones[countTone] || tones.default;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.5rem',
+        padding: '0.65rem 1rem',
+        background: active ? 'var(--bg-elevated)' : 'transparent',
+        color: active ? 'var(--primary)' : 'var(--text-secondary)',
+        border: 'none',
+        borderBottom: `2px solid ${active ? 'var(--primary)' : 'transparent'}`,
+        cursor: 'pointer',
+        fontWeight: active ? 700 : 500,
+        fontSize: '0.875rem',
+        transition: 'all 0.15s ease',
+        marginBottom: '-1px',
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+      {count !== undefined && count !== null && (
+        <span
+          style={{
+            padding: '0.1rem 0.5rem',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            borderRadius: 'var(--radius-full)',
+            background: t.bg,
+            color: t.color,
+            border: `1px solid ${t.border}`,
+            minWidth: 22,
+            textAlign: 'center',
+          }}
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
 
 export default function ProcessTree() {
   const { agents } = useAgents();
   const [selectedAgent, setSelectedAgent] = useState('');
+  const [activeTab, setActiveTab] = useState('priority'); // 'priority' | 'all'
 
   const {
     processTree,
@@ -49,9 +98,8 @@ export default function ProcessTree() {
 
   const [expandedPids, setExpandedPids] = useState(new Set());
   const [killTarget, setKillTarget] = useState(null);
-  const prevAgentRef = useRef('');
 
-  // Auto-dismiss success notification after 4.5 seconds
+  // Auto-dismiss success after 4.5s
   useEffect(() => {
     if (actionSuccess) {
       const timer = setTimeout(() => {
@@ -61,53 +109,40 @@ export default function ProcessTree() {
     }
   }, [actionSuccess, clearActionSuccess]);
 
-  // Client-side dedup: ưu tiên agent active, nếu không thì last_seen mới nhất
+  // Dedup agents by hostname (prefer active, then latest last_seen)
   const dedupedAgents = useMemo(() => {
     if (!agents || agents.length === 0) return [];
     const byHostname = {};
     for (const a of agents) {
       const key = a.hostname || a.id;
       const existing = byHostname[key];
-      if (!existing) {
-        byHostname[key] = a;
-        continue;
-      }
-      const aIsActive = (a.status || '').toLowerCase() === 'active' || (a.status || '').toLowerCase() === 'online';
-      const eIsActive = (existing.status || '').toLowerCase() === 'active' || (existing.status || '').toLowerCase() === 'online';
-
-      if (aIsActive && !eIsActive) {
-        byHostname[key] = a;
-      } else if (!aIsActive && eIsActive) {
-        // keep existing
-      } else {
+      if (!existing) { byHostname[key] = a; continue; }
+      const aActive = ['active', 'online'].includes((a.status || '').toLowerCase());
+      const eActive = ['active', 'online'].includes((existing.status || '').toLowerCase());
+      if (aActive && !eActive) byHostname[key] = a;
+      else if (!aActive && eActive) continue;
+      else {
         const aTs = a.last_seen || a.created_at;
         const eTs = existing.last_seen || existing.created_at;
-        if (aTs && (!eTs || new Date(aTs) > new Date(eTs))) {
-          byHostname[key] = a;
-        }
+        if (aTs && (!eTs || new Date(aTs) > new Date(eTs))) byHostname[key] = a;
       }
     }
     return Object.values(byHostname);
   }, [agents]);
 
-  // Ưu tiên chọn agent active làm default
+  // Default agent selection → prefer active
   useEffect(() => {
-    if (dedupedAgents.length > 0) {
-      const isCurrentValid = dedupedAgents.some((a) => a.id === selectedAgent);
-      if (!selectedAgent || !isCurrentValid) {
-        const activeAgent =
-          dedupedAgents.find((a) => {
-            const s = (a.status || '').toLowerCase();
-            return s === 'active' || s === 'online';
-          }) || dedupedAgents[0];
-        if (activeAgent) {
-          setSelectedAgent(activeAgent.id);
-        }
-      }
+    if (dedupedAgents.length === 0) return;
+    const isCurrentValid = dedupedAgents.some((a) => a.id === selectedAgent);
+    if (!selectedAgent || !isCurrentValid) {
+      const active =
+        dedupedAgents.find((a) => ['active', 'online'].includes((a.status || '').toLowerCase())) ||
+        dedupedAgents[0];
+      if (active) setSelectedAgent(active.id);
     }
   }, [dedupedAgents, selectedAgent]);
 
-  // Auto-expand tree when agent changes or process tree loads, while preserving user expanded state
+  // Auto-expand important nodes when tree loads
   useEffect(() => {
     if (!processTree || !selectedAgent) return;
     const roots = processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]);
@@ -116,78 +151,58 @@ export default function ProcessTree() {
     setExpandedPids((prev) => {
       const next = new Set(prev);
       let changed = false;
-
       const walk = (nodes, depth) => {
         for (const n of nodes || []) {
-          // Auto-expand: depth < 2, HOẶC process quan trọng (explorer/notepad/edge/code)
           const isImportant = /explorer\.exe|notepad\.exe|msedge\.exe|chrome\.exe|Code\.exe/i.test(n.name || '');
           if ((depth < 2 || isImportant || n.is_suspicious) && !next.has(n.pid)) {
             next.add(n.pid);
             changed = true;
           }
-          if (Array.isArray(n.children)) {
-            walk(n.children, depth + 1);
-          }
+          if (Array.isArray(n.children)) walk(n.children, depth + 1);
         }
       };
       walk(roots, 0);
-
-      // Chỉ trả set mới nếu có thay đổi → tránh re-render vô ích
       return changed ? next : prev;
     });
   }, [processTree, selectedAgent]);
 
-  const agentOptions = useMemo(() => {
-    return dedupedAgents.map((a) => {
-      const isActive = (a.status || '').toLowerCase() === 'active' || (a.status || '').toLowerCase() === 'online';
-      const badge = isActive ? ' 🟢' : ' ⚪';
-      const name = a.name || a.hostname || a.id;
-      const ip = a.ip || a.ip_address || 'N/A';
-      return {
-        value: a.id,
-        label: `${name} (${ip})${badge}`,
-      };
-    });
-  }, [dedupedAgents]);
+  const agentOptions = useMemo(
+    () =>
+      dedupedAgents.map((a) => {
+        const isActive = ['active', 'online'].includes((a.status || '').toLowerCase());
+        return {
+          value: a.id,
+          label: `${a.name || a.hostname || a.id} (${a.ip || a.ip_address || 'N/A'})${isActive ? ' 🟢' : ' ⚪'}`,
+        };
+      }),
+    [dedupedAgents]
+  );
 
   const handleToggle = useCallback((pid) => {
     setExpandedPids((prev) => {
       const next = new Set(prev);
-      if (next.has(pid)) {
-        next.delete(pid);
-      } else {
-        next.add(pid);
-      }
+      next.has(pid) ? next.delete(pid) : next.add(pid);
       return next;
     });
   }, []);
 
-  const handleKillPidAction = useCallback((proc) => {
-    openKillModal(proc, false);
-  }, []);
-
-  const handleKillTreeAction = useCallback((proc) => {
-    openKillModal(proc, true);
-  }, []);
+  const handleKillPidAction = useCallback((proc) => openKillModal(proc, false), []); // eslint-disable-line
+  const handleKillTreeAction = useCallback((proc) => openKillModal(proc, true), []); // eslint-disable-line
 
   const expandAll = () => {
     const allPids = new Set();
-    const collect = (nodes) => {
-      nodes.forEach((n) => {
-        if (n && n.pid) {
-          allPids.add(n.pid);
-          if (Array.isArray(n.children)) collect(n.children);
-        }
-      });
-    };
+    const collect = (nodes) => nodes.forEach((n) => {
+      if (n && n.pid) {
+        allPids.add(n.pid);
+        if (Array.isArray(n.children)) collect(n.children);
+      }
+    });
     const roots = processTree?.tree || (Array.isArray(processTree) ? processTree : [processTree]);
     if (Array.isArray(roots)) collect(roots);
     setExpandedPids(allPids);
   };
 
-  const collapseAll = () => {
-    setExpandedPids(new Set());
-  };
+  const collapseAll = () => setExpandedPids(new Set());
 
   const openKillModal = (proc, isTreeMode = true) => {
     setKillTarget({ ...proc, defaultKillTree: isTreeMode });
@@ -198,20 +213,14 @@ export default function ProcessTree() {
       const result = await killProcess(selectedAgent, pid, { reason, killTree });
       toast.success(`Đã gửi lệnh ${result?.action_type || (killTree ? 'kill_tree' : 'kill_process')} cho PID ${pid}`);
       if (clearError) clearError();
-      if (killTree) {
-        await handleKillProcessTree(pid);
-      } else {
-        await handleKillProcess(pid);
-      }
-      setTimeout(() => {
-        refreshProcessData();
-      }, 1500);
+      if (killTree) await handleKillProcessTree(pid);
+      else await handleKillProcess(pid);
+      setTimeout(() => refreshProcessData(), 1500);
     } catch (err) {
       if (err.response?.status === 429) {
-        const detail = err.response.data?.detail || "";
+        const detail = err.response.data?.detail || '';
         const match = detail.match(/(\d+)s remaining/);
-        const remaining = match ? match[1] : "unknown";
-        toast.error(`⏳ Agent đang cooldown. Còn ${remaining}s`, { duration: 6000 });
+        toast.error(`⏳ Agent đang cooldown. Còn ${match ? match[1] : 'unknown'}s`, { duration: 6000 });
       } else {
         toast.error(`Kill failed: ${err.response?.data?.detail || err.message}`);
       }
@@ -219,8 +228,8 @@ export default function ProcessTree() {
     }
   };
 
-
-  const renderTreeContent = () => {
+  /** Render full process tree. allowKillAll → show kill buttons on ALL non-PPL processes. */
+  const renderTreeContent = (allowKillAll = false) => {
     if (!processTree) {
       return (
         <EmptyState
@@ -230,9 +239,7 @@ export default function ProcessTree() {
         />
       );
     }
-
     const treeData = processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]);
-
     if (!Array.isArray(treeData) || treeData.length === 0) {
       return (
         <EmptyState
@@ -242,7 +249,6 @@ export default function ProcessTree() {
         />
       );
     }
-
     return (
       <div className="process-tree-container">
         {treeData.map((rootNode) => (
@@ -255,6 +261,7 @@ export default function ProcessTree() {
             onKillPid={handleKillPidAction}
             onKillTree={handleKillTreeAction}
             killing={killing}
+            allowKillAll={allowKillAll}
           />
         ))}
       </div>
@@ -273,10 +280,13 @@ export default function ProcessTree() {
 
   return (
     <div>
+      {/* ===== Page header ===== */}
       <div className="page-header">
         <div>
           <h1 className="page-title">Process & Root Cause Analysis</h1>
-          <p className="page-subtitle">Inspect host process trees, identify anomalous parent-child relationships, and terminate malicious execution</p>
+          <p className="page-subtitle">
+            Inspect host process trees, identify anomalous parent-child relationships, and terminate malicious execution
+          </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           {killing && (
@@ -285,12 +295,7 @@ export default function ProcessTree() {
             </span>
           )}
           <div style={{ width: 260 }} title="Các agent cũ cùng hostname đã được tự động ẩn để tránh nhầm lẫn">
-            <Dropdown
-              options={agentOptions}
-              value={selectedAgent}
-              onChange={setSelectedAgent}
-              disabled={killing}
-            />
+            <Dropdown options={agentOptions} value={selectedAgent} onChange={setSelectedAgent} disabled={killing} />
           </div>
           <Button
             variant="outline"
@@ -303,179 +308,175 @@ export default function ProcessTree() {
         </div>
       </div>
 
-      {/* Success Notification Alert */}
+      {/* ===== Success alert ===== */}
       {actionSuccess && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0.75rem 1rem',
-            background: 'rgba(0,192,123,0.12)',
-            border: '1px solid var(--success)',
-            borderRadius: 'var(--radius-sm)',
-            marginBottom: '1.25rem',
-            color: 'var(--success)',
-            fontSize: '0.875rem',
-            fontWeight: 600
-          }}
-        >
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0.75rem 1rem', background: 'var(--success-dim)',
+          border: '1px solid var(--success)', borderRadius: 'var(--radius-md)',
+          marginBottom: '1.25rem', color: 'var(--success)',
+          fontSize: '0.875rem', fontWeight: 600, boxShadow: '0 0 12px var(--success-glow)',
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FiCheckCircle size={17} />
             <span>{actionSuccess} — Process list refreshed successfully.</span>
           </div>
-          <button
-            onClick={clearActionSuccess}
-            style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          >
+          <button onClick={clearActionSuccess} style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer' }}>
             <FiX size={16} />
           </button>
         </div>
       )}
 
-      {/* Error Alert */}
+      {/* ===== Error alert ===== */}
       {error && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0.75rem 1rem',
-            background: 'rgba(239,68,68,0.12)',
-            border: '1px solid var(--error)',
-            borderRadius: 'var(--radius-sm)',
-            marginBottom: '1.25rem',
-            color: 'var(--error)',
-            fontSize: '0.875rem',
-            fontWeight: 600
-          }}
-        >
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0.75rem 1rem', background: 'var(--error-dim)',
+          border: '1px solid var(--error)', borderRadius: 'var(--radius-md)',
+          marginBottom: '1.25rem', color: 'var(--error)',
+          fontSize: '0.875rem', fontWeight: 600, boxShadow: '0 0 12px var(--error-glow)',
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FiAlertOctagon size={17} />
             <span>{error}</span>
           </div>
-          <button
-            onClick={clearError}
-            style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          >
+          <button onClick={clearError} style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer' }}>
             <FiX size={16} />
           </button>
         </div>
       )}
 
-      {/* Flagged Suspicious Processes Alert Card */}
-      <div className="card" style={{ marginBottom: '1.5rem', borderLeft: '4px solid var(--error)' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <FiAlertOctagon size={18} /> Flagged Suspicious Processes ({suspiciousProcesses.length})
-        </h3>
-
-        {suspiciousProcesses.length === 0 ? (
-          <div style={{ fontSize: '0.85rem', color: 'var(--success)' }}>
-            ✓ No active suspicious processes detected on agent <strong>{selectedAgent}</strong>.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-            {suspiciousProcesses.map((proc) => (
-              <div
-                key={proc.pid}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '0.75rem 1rem',
-                  background: 'rgba(239,68,68,0.06)',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid rgba(239,68,68,0.25)',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <span style={{ fontWeight: 700, fontFamily: 'monospace', color: 'var(--error)' }}>
-                      <InfoTooltip {...TOOLTIPS.PID}>PID {proc.pid}</InfoTooltip>
-                    </span>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{proc.name}</span>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
-                      {proc.exe || proc.path || proc.cmdline || ''}
-                    </span>
-                  </div>
-
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                    Reason: <strong>{proc.reason || 'Malicious heuristic flagged'}</strong>
-                  </div>
-
-                  {Array.isArray(proc.parent_chain) && proc.parent_chain.length > 0 && (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <FiTerminal size={12} /> <InfoTooltip {...TOOLTIPS.PPID}>Parent Execution Lineage:</InfoTooltip>{' '}
-                      {proc.parent_chain.map((p, idx) => (
-                        <span key={p.pid || idx} style={{ fontFamily: 'monospace' }}>
-                          {idx > 0 && ' → '}
-                          {p.name} (<InfoTooltip {...TOOLTIPS.PID}>PID {p.pid}</InfoTooltip>)
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    iconLeft={<FiXCircle size={14} />}
-                    onClick={() => openKillModal(proc, false)}
-                    disabled={killing}
-                    title="Dừng tiến trình này"
-                  >
-                    Kill PID {proc.pid}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    iconLeft={<FiLayers size={14} />}
-                    onClick={() => openKillModal(proc, true)}
-                    disabled={killing}
-                    title="Dừng tiến trình độc hại (kèm process con)"
-                  >
-                    Kill Tree {proc.pid}
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+      {/* ===== Tab bar ===== */}
+      <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border-primary)', marginBottom: '1.25rem' }}>
+        <TabButton
+          active={activeTab === 'priority'}
+          onClick={() => setActiveTab('priority')}
+          icon={<FiShield size={14} />}
+          label="Priority / Flagged"
+          count={suspiciousProcesses.length}
+          countTone={suspiciousProcesses.length > 0 ? 'critical' : 'success'}
+        />
+        <TabButton
+          active={activeTab === 'all'}
+          onClick={() => setActiveTab('all')}
+          icon={<FiList size={14} />}
+          label="All Processes"
+          count={processTree?.total_processes}
+        />
       </div>
 
-      {/* Complete Execution Tree Card */}
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <FiCpu color="var(--primary)" /> Complete Execution Tree Hierarchy
-            {processTree?.total_processes ? (
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
-                ({processTree.total_processes} processes)
-              </span>
-            ) : null}
+      {/* ===== TAB: Priority / Flagged ===== */}
+      {activeTab === 'priority' && (
+        <div className="card" style={{
+          borderLeft: '4px solid var(--critical)',
+          background: 'var(--bg-secondary)',
+          boxShadow: 'inset 4px 0 12px -4px var(--critical-glow)',
+        }}>
+          <h3 style={{
+            fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem',
+            color: 'var(--critical)', display: 'flex', alignItems: 'center',
+            gap: '0.5rem', letterSpacing: '-0.01em',
+          }}>
+            <FiAlertOctagon size={18} /> Flagged Suspicious Processes ({suspiciousProcesses.length})
           </h3>
 
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <Button variant="ghost" size="sm" iconLeft={<FiMaximize2 size={13} />} onClick={expandAll} disabled={killing}>
-              Expand All
-            </Button>
-            <Button variant="ghost" size="sm" iconLeft={<FiMinimize2 size={13} />} onClick={collapseAll} disabled={killing}>
-              Collapse All
-            </Button>
-          </div>
+          {suspiciousProcesses.length === 0 ? (
+            <div style={{ fontSize: '0.85rem', color: 'var(--success)' }}>
+              ✓ No active suspicious processes detected on agent <strong>{selectedAgent}</strong>.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              {suspiciousProcesses.map((proc) => (
+                <div key={proc.pid} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '0.75rem 1rem', background: 'rgba(239,68,68,0.06)',
+                  borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239,68,68,0.25)',
+                }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ fontWeight: 700, fontFamily: 'monospace', color: 'var(--error)' }}>
+                        <InfoTooltip {...TOOLTIPS.PID}>PID {proc.pid}</InfoTooltip>
+                      </span>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{proc.name}</span>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                        {proc.exe || proc.path || proc.cmdline || ''}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                      Reason: <strong>{proc.reason || 'Malicious heuristic flagged'}</strong>
+                    </div>
+                    {Array.isArray(proc.parent_chain) && proc.parent_chain.length > 0 && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                        <FiTerminal size={12} /> <InfoTooltip {...TOOLTIPS.PPID}>Parent Execution Lineage:</InfoTooltip>{' '}
+                        {proc.parent_chain.map((p, idx) => (
+                          <span key={p.pid || idx} style={{ fontFamily: 'monospace' }}>
+                            {idx > 0 && ' → '}
+                            {p.name} (<InfoTooltip {...TOOLTIPS.PID}>PID {p.pid}</InfoTooltip>)
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <Button
+                      variant="ghost" size="sm" iconLeft={<FiXCircle size={14} />}
+                      onClick={() => openKillModal(proc, false)} disabled={killing}
+                      title="Dừng tiến trình này"
+                    >
+                      Kill PID {proc.pid}
+                    </Button>
+                    <Button
+                      variant="danger" size="sm" iconLeft={<FiLayers size={14} />}
+                      onClick={() => openKillModal(proc, true)} disabled={killing}
+                      title="Dừng tiến trình độc hại (kèm process con)"
+                    >
+                      Kill Tree {proc.pid}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+      )}
 
-        {loading ? (
-          <div className="skeleton" style={{ height: '320px' }} />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {renderTreeContent()}
+      {/* ===== TAB: All Processes ===== */}
+      {activeTab === 'all' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <FiCpu color="var(--primary)" /> Complete Execution Tree Hierarchy
+              {processTree?.total_processes ? (
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', fontWeight: 400 }}>
+                  ({processTree.total_processes} processes)
+                </span>
+              ) : null}
+            </h3>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <Button variant="ghost" size="sm" iconLeft={<FiMaximize2 size={13} />} onClick={expandAll} disabled={killing}>
+                Expand All
+              </Button>
+              <Button variant="ghost" size="sm" iconLeft={<FiMinimize2 size={13} />} onClick={collapseAll} disabled={killing}>
+                Collapse All
+              </Button>
+            </div>
           </div>
-        )}
-      </div>
 
-      {/* Kill Process Modal */}
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
+            💡 Kill buttons available for all non-PPL processes. PPL processes (lsass, csrss, wininit, ...) are protected by Windows and cannot be terminated.
+          </div>
+
+          {loading ? (
+            <div className="skeleton" style={{ height: '320px' }} />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {renderTreeContent(true)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===== Kill modal ===== */}
       <KillProcessModal
         isOpen={!!killTarget}
         process={killTarget}

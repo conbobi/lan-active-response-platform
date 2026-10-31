@@ -1,224 +1,246 @@
 import React, { memo } from 'react';
-import { FiChevronDown, FiChevronRight, FiXCircle, FiLayers } from 'react-icons/fi';
-import Button from '../ui/Button';
+import { FiXCircle, FiLayers, FiAlertTriangle, FiLock } from 'react-icons/fi';
+
+const SEVERITY_COLORS = {
+  critical: { bg: 'var(--critical-dim)', color: 'var(--critical)', border: 'var(--critical)' },
+  high:     { bg: 'var(--error-dim)',    color: 'var(--error)',    border: 'var(--error)' },
+  medium:   { bg: 'var(--warning-dim)',  color: 'var(--warning)',  border: 'var(--warning)' },
+  low:      { bg: 'var(--success-dim)',  color: 'var(--success)',  border: 'var(--success)' },
+};
+
+function getSeverity(proc) {
+  if (proc.is_suspicious) return 'high';
+  const score = proc.risk_score || proc.score || 0;
+  if (score >= 85) return 'critical';
+  if (score >= 70) return 'high';
+  if (score >= 50) return 'medium';
+  return 'low';
+}
+
+// PPL (Protected Process Light) — Windows will refuse termination
+const PPL_REGEX = /csrss\.exe|wininit\.exe|winlogon\.exe|services\.exe|smss\.exe|lsass\.exe|^System$|^\[?System/i;
 
 function TreeNodeInner({
   node,
-  depth = 0,
   level = 0,
   expandedPids,
   onToggle,
   onKillPid,
   onKillTree,
-  killing = false,
+  killing,
+  allowKillAll = false,
 }) {
   if (!node) return null;
 
   const hasChildren = Array.isArray(node.children) && node.children.length > 0;
   const isExpanded = expandedPids ? expandedPids.has(node.pid) : false;
-  const indent = level * 20;
+  const indent = level * 18;
 
-  // Highlight explorer + notepad + edge (user-interactive processes)
-  const isUserProcess = /explorer\.exe|notepad\.exe|msedge\.exe|chrome\.exe|Code\.exe/i.test(node.name || '');
-  const isSusp = Boolean(node.is_suspicious);
+  const isUserProcess = /explorer\.exe|notepad\.exe|msedge\.exe|chrome\.exe|firefox\.exe|Code\.exe|code\.exe/i.test(node.name || '');
+  const isSystemProcess = /svchost\.exe|csrss\.exe|wininit\.exe|winlogon\.exe|services\.exe|smss\.exe|lsass\.exe|System|\[System/i.test(node.name || '');
+  const isProtected = PPL_REGEX.test(node.name || '');
+
+  const isFlagged = node.is_suspicious || isUserProcess;
+  // Kill buttons: hidden for PPL. Shown for flagged/user always. Shown for others ONLY in "All" tab (allowKillAll).
+  const showActions = !isProtected && (isFlagged || allowKillAll);
+
+  // Visual identity
+  let nameColor = 'var(--text-primary)';
+  let nameWeight = '600';
+  let rowBg = 'transparent';
+  let rowBorder = 'transparent';
+  let icon = '·';
+  let iconColor = 'var(--text-tertiary)';
+
+  if (node.is_suspicious) {
+    nameColor = 'var(--error)';
+    nameWeight = '700';
+    rowBg = 'rgba(239, 68, 68, 0.06)';
+    rowBorder = 'rgba(239, 68, 68, 0.35)';
+    icon = '⚠';
+    iconColor = 'var(--error)';
+  } else if (isUserProcess) {
+    nameColor = 'var(--primary)';
+    nameWeight = '600';
+    rowBg = 'rgba(79, 172, 254, 0.06)';
+    rowBorder = 'rgba(79, 172, 254, 0.25)';
+    icon = '◉';
+    iconColor = 'var(--primary)';
+  } else if (isSystemProcess) {
+    nameColor = 'var(--text-secondary)';
+    nameWeight = '500';
+    icon = '◆';
+    iconColor = 'var(--text-tertiary)';
+  }
 
   return (
-    <div style={{ marginLeft: `${indent}px`, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ marginLeft: indent }}>
+      {/* ===== Row ===== */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0.45rem 0.75rem',
-          marginBottom: '0.3rem',
-          borderRadius: 'var(--radius-sm, 6px)',
-          background: isSusp
-            ? 'rgba(239, 68, 68, 0.08)'
-            : isUserProcess
-            ? 'rgba(59, 130, 246, 0.07)'
-            : 'var(--bg-secondary, #1e293b)',
-          border: isSusp
-            ? '1px solid rgba(239, 68, 68, 0.35)'
-            : isUserProcess
-            ? '1px solid rgba(59, 130, 246, 0.3)'
-            : '1px solid var(--border, #334155)',
-          transition: 'background 0.15s ease',
+          gap: '0.5rem',
+          padding: '0.4rem 0.6rem',
+          borderRadius: 'var(--radius-sm)',
+          background: rowBg,
+          border: `1px solid ${rowBorder}`,
+          marginBottom: '2px',
+          transition: 'all 0.15s ease',
+          cursor: hasChildren ? 'pointer' : 'default',
+          position: 'relative',
         }}
+        onMouseEnter={(e) => {
+          if (!rowBg || rowBg === 'transparent') e.currentTarget.style.background = 'var(--bg-tertiary)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = rowBg;
+        }}
+        onClick={() => hasChildren && onToggle && onToggle(node.pid)}
       >
-        {/* Left Side: Expand button & Process details */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            flex: 1,
-            overflow: 'hidden',
-            cursor: hasChildren ? 'pointer' : 'default',
-          }}
-          onClick={() => hasChildren && onToggle && onToggle(node.pid)}
-        >
-          {/* Expand toggle */}
+        {/* Expand icon */}
+        <span style={{
+          width: '14px', display: 'inline-flex', alignItems: 'center',
+          justifyContent: 'center', color: iconColor,
+          fontSize: '10px', fontWeight: 700, flexShrink: 0,
+        }}>
+          {hasChildren ? (isExpanded ? '▼' : '▶') : '·'}
+        </span>
+
+        {/* Process icon */}
+        <span style={{ color: iconColor, fontSize: '11px', flexShrink: 0, fontWeight: 700 }}>
+          {icon}
+        </span>
+
+        {/* Process name */}
+        <span style={{
+          fontFamily: 'var(--font-mono)', fontSize: '0.8rem',
+          fontWeight: nameWeight, color: nameColor, flexShrink: 0,
+        }}>
+          {node.name || 'unknown'}
+        </span>
+
+        {/* PID badge */}
+        <span style={{
+          fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
+          padding: '0.1rem 0.4rem', background: 'var(--mono-bg)',
+          color: 'var(--mono-text)', border: '1px solid var(--mono-border)',
+          borderRadius: 'var(--radius-sm)', flexShrink: 0,
+        }}>
+          PID {node.pid}
+        </span>
+
+        {/* PPID */}
+        {node.parent_pid !== null && node.parent_pid !== undefined && (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.68rem', color: 'var(--text-tertiary)', flexShrink: 0 }}>
+            PPID {node.parent_pid}
+          </span>
+        )}
+
+        {/* Suspicious badge */}
+        {node.is_suspicious && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: '0.2rem',
+            padding: '0.1rem 0.45rem', fontSize: '0.65rem', fontWeight: 700,
+            background: 'var(--error-dim)', color: 'var(--error)',
+            border: '1px solid var(--error)', borderRadius: 'var(--radius-full)',
+            textTransform: 'uppercase', letterSpacing: '0.03em',
+            flexShrink: 0, boxShadow: '0 0 8px var(--error-glow)',
+          }}>
+            <FiAlertTriangle size={9} /> Suspicious
+          </span>
+        )}
+
+        {/* PPL badge */}
+        {isProtected && (
           <span
+            title="Protected Process Light (PPL) — Windows refuses termination"
             style={{
-              width: 18,
-              height: 18,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-secondary, #94a3b8)',
-              flexShrink: 0,
+              display: 'inline-flex', alignItems: 'center', gap: '0.2rem',
+              padding: '0.1rem 0.45rem', fontSize: '0.62rem', fontWeight: 700,
+              background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)',
+              border: '1px solid var(--border-primary)', borderRadius: 'var(--radius-full)',
+              textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0,
             }}
           >
-            {hasChildren ? (
-              isExpanded ? (
-                <FiChevronDown size={15} color="var(--primary, #3b82f6)" />
-              ) : (
-                <FiChevronRight size={15} />
-              )
-            ) : (
-              '·'
-            )}
+            <FiLock size={9} /> PPL
           </span>
+        )}
 
-          {/* Process Name */}
+        {/* Cmdline */}
+        {node.exe && (
           <span
+            title={node.exe}
             style={{
-              fontFamily: 'monospace',
-              fontSize: '0.85rem',
-              fontWeight: isUserProcess || isSusp ? 700 : 600,
-              color: isSusp
-                ? 'var(--error, #ef4444)'
-                : isUserProcess
-                ? '#38bdf8'
-                : 'var(--text-primary, #f8fafc)',
+              fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
+              color: 'var(--text-tertiary)', marginLeft: 'auto',
+              maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap', flexShrink: 1,
             }}
           >
-            {node.name || 'unknown'}
+            {node.exe}
           </span>
+        )}
 
-          {/* PID & PPID Badges */}
-          <span
-            style={{
-              fontFamily: 'monospace',
-              fontSize: '0.75rem',
-              color: 'var(--text-tertiary, #64748b)',
-              background: 'rgba(0,0,0,0.2)',
-              padding: '2px 5px',
-              borderRadius: '4px',
-            }}
-          >
-            PID: {node.pid}
-          </span>
-          {node.parent_pid !== null && node.parent_pid !== undefined && (
-            <span
-              style={{
-                fontFamily: 'monospace',
-                fontSize: '0.72rem',
-                color: 'var(--text-tertiary, #64748b)',
-              }}
-            >
-              PPID: {node.parent_pid}
-            </span>
-          )}
-
-          {/* Suspicious Alert Badge */}
-          {isSusp && (
-            <span
-              style={{
-                fontSize: '0.7rem',
-                fontWeight: 700,
-                background: '#ef4444',
-                color: '#ffffff',
-                padding: '1px 6px',
-                borderRadius: '4px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}
-            >
-              ⚠ Suspicious
-            </span>
-          )}
-
-          {/* Executable Path */}
-          {node.exe && (
-            <span
-              style={{
-                fontSize: '0.75rem',
-                color: 'var(--text-tertiary, #94a3b8)',
-                fontFamily: 'monospace',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                maxWidth: 280,
-              }}
-              title={node.exe}
-            >
-              {node.exe}
-            </span>
-          )}
-        </div>
-
-        {/* Right Side: Metrics & Termination Actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
-          {node.cpu_percent !== undefined && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #94a3b8)' }}>
-              CPU: <strong>{node.cpu_percent}%</strong>
-            </span>
-          )}
-          {node.memory_percent !== undefined && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary, #94a3b8)' }}>
-              RAM: <strong>{node.memory_percent}%</strong>
-            </span>
-          )}
-
-          {onKillPid && (
-            <Button
-              variant="ghost"
-              size="sm"
-              iconLeft={<FiXCircle size={13} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                onKillPid(node);
-              }}
+        {/* Kill actions */}
+        {showActions && (
+          <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.5rem', flexShrink: 0 }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); onKillPid && onKillPid(node); }}
               disabled={killing}
-              title={`Dừng tiến trình PID ${node.pid}`}
-            >
-              Kill PID
-            </Button>
-          )}
-
-          {onKillTree && (
-            <Button
-              variant={isSusp ? 'danger' : 'outline'}
-              size="sm"
-              iconLeft={<FiLayers size={13} />}
-              onClick={(e) => {
-                e.stopPropagation();
-                onKillTree(node);
+              title={`Kill PID ${node.pid}`}
+              style={{
+                padding: '0.2rem 0.4rem',
+                background: isFlagged ? 'var(--bg-elevated)' : 'transparent',
+                color: isFlagged ? 'var(--warning)' : 'var(--text-tertiary)',
+                border: `1px solid ${isFlagged ? 'var(--border-primary)' : 'transparent'}`,
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer', fontSize: '0.7rem',
+                display: 'inline-flex', alignItems: 'center', gap: '0.15rem',
+                opacity: isFlagged ? 1 : 0.7,
               }}
-              disabled={killing}
-              title={`Dừng tiến trình PID ${node.pid} và toàn bộ tiến trình con`}
             >
-              Kill Tree
-            </Button>
-          )}
-        </div>
+              <FiXCircle size={10} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onKillTree && onKillTree(node); }}
+              disabled={killing}
+              title={`Kill tree PID ${node.pid}`}
+              style={{
+                padding: '0.2rem 0.4rem',
+                background: isFlagged ? 'var(--error-dim)' : 'transparent',
+                color: isFlagged ? 'var(--error)' : 'var(--text-tertiary)',
+                border: `1px solid ${isFlagged ? 'var(--error)' : 'transparent'}`,
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer', fontSize: '0.7rem',
+                display: 'inline-flex', alignItems: 'center', gap: '0.15rem',
+                opacity: isFlagged ? 1 : 0.7,
+              }}
+            >
+              <FiLayers size={10} />
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Children Nodes Recursion */}
+      {/* ===== Children ===== */}
       {isExpanded && hasChildren && (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div style={{
+          borderLeft: '1px dashed var(--border-subtle)',
+          marginLeft: '7px',
+          paddingLeft: '4px',
+        }}>
           {node.children.map((child) => (
             <TreeNode
               key={child.pid}
               node={child}
-              depth={depth + 1}
-              level={level + 1}
+              level={0}
               expandedPids={expandedPids}
               onToggle={onToggle}
               onKillPid={onKillPid}
               onKillTree={onKillTree}
               killing={killing}
+              allowKillAll={allowKillAll}
             />
           ))}
         </div>
@@ -227,13 +249,12 @@ function TreeNodeInner({
   );
 }
 
-// Memoized TreeNode: only re-render if node reference, expanded state, level, or killing changes
-const TreeNode = memo(TreeNodeInner, (prevProps, nextProps) => {
+const TreeNode = memo(TreeNodeInner, (prev, next) => {
   return (
-    prevProps.node === nextProps.node &&
-    prevProps.expandedPids === nextProps.expandedPids &&
-    prevProps.level === nextProps.level &&
-    prevProps.killing === nextProps.killing
+    prev.node === next.node &&
+    prev.expandedPids === next.expandedPids &&
+    prev.killing === next.killing &&
+    prev.allowKillAll === next.allowKillAll
   );
 });
 

@@ -1,0 +1,529 @@
+/* ============================================================================
+   SOC DARK THEME — Blue Team Aesthetic
+   Inspired by: Splunk, Elastic Security, CrowdStrike Falcon, Microsoft Sentinel
+   ============================================================================ */
+
+:root {
+  /* ========== BACKGROUND LAYERS (darkest → lightest) ========== */
+  --bg-primary: #0a0e1a;         /* Deep navy — main canvas */
+  --bg-secondary: #111827;       /* Card surface */
+  --bg-tertiary: #1a2235;        /* Hover / active */
+  --bg-elevated: #1f2a44;        /* Modal / dropdown / tooltip */
+  --bg-overlay: rgba(10, 14, 26, 0.85);  /* Modal backdrop */
+
+  /* Compatibility aliases with index.css */
+  --bg: #0a0e1a;
+  --bg-card: #111827;
+  --border: #2a3349;
+  --bg-header: #111827;
+  --bg-sidebar: #080b14;
+
+  /* ========== BORDERS ========== */
+  --border-primary: #2a3349;     /* Default */
+  --border-subtle: #1f2738;      /* Divider */
+  --border-strong: #3a4560;      /* Emphasized */
+  --border-focus: #4facfe;       /* Focus ring */
+
+  /* ========== TEXT (high contrast cho readability) ========== */
+  --text-primary: #e8eef7;       /* Main text — gần trắng */
+  --text-secondary: #a0aec0;     /* Supporting */
+  --text-tertiary: #7a869a;      /* Meta, timestamps — vẫn đọc được */
+  --text-disabled: #4a5470;
+  --text-on-accent: #ffffff;
+
+  /* ========== ACCENT (SOC signature = cyan/blue) ========== */
+  --primary: #4facfe;            /* Cyan blue */
+  --primary-hover: #6bc2ff;
+  --primary-dim: rgba(79, 172, 254, 0.15);
+  --primary-glow: rgba(79, 172, 254, 0.4);
+
+  /* ========== STATUS COLORS (bright enough for dark bg) ========== */
+  --success: #22c55e;            /* Bright green */
+  --success-dim: rgba(34, 197, 94, 0.15);
+  --success-glow: rgba(34, 197, 94, 0.3);
+
+  --warning: #f59e0b;            /* Amber */
+  --warning-dim: rgba(245, 158, 11, 0.15);
+  --warning-glow: rgba(245, 158, 11, 0.3);
+
+  --error: #ef4444;              /* Bright red */
+  --error-dim: rgba(239, 68, 68, 0.15);
+  --error-glow: rgba(239, 68, 68, 0.35);
+
+  --critical: #ff2d55;           /* Neon red — critical alerts */
+  --critical-dim: rgba(255, 45, 85, 0.18);
+  --critical-glow: rgba(255, 45, 85, 0.5);
+
+  --info: #a855f7;               /* Purple — informational */
+  --info-dim: rgba(168, 85, 247, 0.15);
+
+  /* ========== MONOSPACE (terminal aesthetic) ========== */
+  --mono-bg: #0d1424;
+  --mono-text: #7dd3fc;          /* Cyan bright — technical data */
+  --mono-text-dim: #38bdf8;
+  --mono-border: #1e3a5f;
+
+  /* ========== SHADOWS (darker for depth on dark) ========== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 16px var(--primary-glow);
+
+  /* ========== RADIUS ========== */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* ========== FONTS ========== */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, 'Liberation Mono', monospace;
+
+  /* ========== SPACING ========== */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+}
+
+/* ============================================================================
+   BASE STYLES
+   ============================================================================ */
+
+html, body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle grid pattern — SOC war-room feel */
+body {
+  background-image:
+    linear-gradient(rgba(79, 172, 254, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 172, 254, 0.02) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-attachment: fixed;
+}
+
+#root {
+  min-height: 100vh;
+  background: transparent;
+}
+
+/* ============================================================================
+   SCROLLBAR — custom dark (SOC tools always have this)
+   ============================================================================ */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+  border: 2px solid var(--bg-secondary);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* ============================================================================
+   CARD
+   ============================================================================ */
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+}
+
+/* ============================================================================
+   PAGE HEADER
+   ============================================================================ */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 0.25rem 0;
+  letter-spacing: -0.02em;
+}
+
+.page-subtitle {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ============================================================================
+   MONOSPACE / TERMINAL BLOCKS
+   ============================================================================ */
+
+code, pre, .mono {
+  font-family: var(--font-mono);
+  background: var(--mono-bg);
+  color: var(--mono-text);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  font-size: 0.85em;
+  border: 1px solid var(--mono-border);
+}
+
+pre {
+  padding: var(--space-3);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* PID / path display */
+.pid-mono {
+  font-family: var(--font-mono);
+  color: var(--mono-text);
+  background: var(--mono-bg);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  font-size: 0.85em;
+}
+
+/* ============================================================================
+   BADGES / PILLS
+   ============================================================================ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15em 0.55em;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  line-height: 1.4;
+}
+
+.badge-success {
+  background: var(--success-dim);
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.badge-warning {
+  background: var(--warning-dim);
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.badge-error,
+.badge-critical {
+  background: var(--error-dim);
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.badge-info {
+  background: var(--info-dim);
+  color: var(--info);
+  border-color: rgba(168, 85, 247, 0.4);
+}
+
+.badge-primary {
+  background: var(--primary-dim);
+  color: var(--primary);
+  border-color: rgba(79, 172, 254, 0.4);
+}
+
+/* ============================================================================
+   BUTTON (dark variant)
+   ============================================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--primary-dim);
+  color: var(--primary);
+  border-color: rgba(79, 172, 254, 0.5);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary);
+  color: var(--text-on-accent);
+  box-shadow: 0 0 12px var(--primary-glow);
+}
+
+.btn-danger {
+  background: var(--error-dim);
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--error);
+  color: var(--text-on-accent);
+  box-shadow: 0 0 12px var(--error-glow);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ============================================================================
+   DROPDOWN (dark)
+   ============================================================================ */
+
+.dropdown-trigger {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  color: var(--text-primary);
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.dropdown-menu {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.dropdown-item {
+  color: var(--text-primary);
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+
+.dropdown-item:hover {
+  background: var(--primary-dim);
+  color: var(--primary);
+}
+
+.dropdown-item.active {
+  background: var(--primary-dim);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* ============================================================================
+   MODAL (dark)
+   ============================================================================ */
+
+.modal-overlay {
+  background: var(--bg-overlay);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--border-primary);
+  padding: var(--space-4);
+}
+
+.modal-body {
+  padding: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.modal-footer {
+  border-top: 1px solid var(--border-primary);
+  padding: var(--space-4);
+}
+
+/* ============================================================================
+   FORM INPUTS (dark)
+   ============================================================================ */
+
+input[type="text"],
+input[type="search"],
+input[type="number"],
+textarea,
+select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  color: var(--text-primary);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-dim);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ============================================================================
+   SKELETON LOADER
+   ============================================================================ */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    var(--bg-elevated) 50%,
+    var(--bg-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================================================
+   LIVE INDICATOR (SOC signature)
+   ============================================================================ */
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success-glow);
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--success-glow); }
+  50% { opacity: 0.5; box-shadow: 0 0 16px var(--success-glow); }
+}
+
+/* ============================================================================
+   SPIN ANIMATION (already in code but let's ensure)
+   ============================================================================ */
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   GLOW EFFECTS (SOC accent for critical items)
+   ============================================================================ */
+
+.glow-error {
+  box-shadow: 0 0 12px var(--error-glow);
+}
+
+.glow-warning {
+  box-shadow: 0 0 12px var(--warning-glow);
+}
+
+.glow-primary {
+  box-shadow: 0 0 12px var(--primary-glow);
+}
+
+/* ============================================================================
+   PROCESS TREE SPECIFIC
+   ============================================================================ */
+
+.process-tree-container {
+  font-family: var(--font-sans);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* ============================================================================
+   REACT-HOT-TOAST (dark override)
+   ============================================================================ */
+
+.toast-dark {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+/* ============================================================================
+   SELECTION
+   ============================================================================ */
+
+::selection {
+  background: var(--primary-dim);
+  color: var(--primary);
+}
