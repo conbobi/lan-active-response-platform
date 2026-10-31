@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import useProcessTree from '../hooks/useProcessTree';
 import { useAgents } from '../hooks/useAgents';
@@ -11,6 +11,7 @@ import EmptyState from '../components/ui/EmptyState';
 import InfoTooltip from '../components/ui/InfoTooltip';
 import { TOOLTIPS } from '../constants/tooltips';
 import KillProcessModal from '../components/process/KillProcessModal';
+import TreeNode from '../components/process/TreeNode';
 import { killProcess } from '../api/process';
 import {
   FiCpu,
@@ -60,65 +61,96 @@ export default function ProcessTree() {
     }
   }, [actionSuccess, clearActionSuccess]);
 
-  useEffect(() => {
-    if (agents.length > 0 && !selectedAgent) {
-      setSelectedAgent(agents[0].id);
+  // Client-side dedup: ưu tiên agent active, nếu không thì last_seen mới nhất
+  const dedupedAgents = useMemo(() => {
+    if (!agents || agents.length === 0) return [];
+    const byHostname = {};
+    for (const a of agents) {
+      const key = a.hostname || a.id;
+      const existing = byHostname[key];
+      if (!existing) {
+        byHostname[key] = a;
+        continue;
+      }
+      const aIsActive = (a.status || '').toLowerCase() === 'active' || (a.status || '').toLowerCase() === 'online';
+      const eIsActive = (existing.status || '').toLowerCase() === 'active' || (existing.status || '').toLowerCase() === 'online';
+
+      if (aIsActive && !eIsActive) {
+        byHostname[key] = a;
+      } else if (!aIsActive && eIsActive) {
+        // keep existing
+      } else {
+        const aTs = a.last_seen || a.created_at;
+        const eTs = existing.last_seen || existing.created_at;
+        if (aTs && (!eTs || new Date(aTs) > new Date(eTs))) {
+          byHostname[key] = a;
+        }
+      }
     }
-  }, [agents, selectedAgent]);
+    return Object.values(byHostname);
+  }, [agents]);
+
+  // Ưu tiên chọn agent active làm default
+  useEffect(() => {
+    if (dedupedAgents.length > 0) {
+      const isCurrentValid = dedupedAgents.some((a) => a.id === selectedAgent);
+      if (!selectedAgent || !isCurrentValid) {
+        const activeAgent =
+          dedupedAgents.find((a) => {
+            const s = (a.status || '').toLowerCase();
+            return s === 'active' || s === 'online';
+          }) || dedupedAgents[0];
+        if (activeAgent) {
+          setSelectedAgent(activeAgent.id);
+        }
+      }
+    }
+  }, [dedupedAgents, selectedAgent]);
 
   // Auto-expand tree when agent changes or process tree loads, while preserving user expanded state
   useEffect(() => {
-    if (!processTree) return;
+    if (!processTree || !selectedAgent) return;
     const roots = processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]);
     if (!Array.isArray(roots)) return;
 
-    const isAgentChanged = prevAgentRef.current !== selectedAgent;
-    prevAgentRef.current = selectedAgent;
+    setExpandedPids((prev) => {
+      const next = new Set(prev);
+      let changed = false;
 
-    // Collect auto-expand PIDs (top 2 levels or suspicious nodes)
-    const autoExpandPids = new Set();
-    const collectPids = (nodes, depth = 0) => {
-      nodes.forEach((n) => {
-        if (n && n.pid) {
-          if (depth < 2 || n.is_suspicious) {
-            autoExpandPids.add(n.pid);
+      const walk = (nodes, depth) => {
+        for (const n of nodes || []) {
+          // Auto-expand: depth < 2, HOẶC process quan trọng (explorer/notepad/edge/code)
+          const isImportant = /explorer\.exe|notepad\.exe|msedge\.exe|chrome\.exe|Code\.exe/i.test(n.name || '');
+          if ((depth < 2 || isImportant || n.is_suspicious) && !next.has(n.pid)) {
+            next.add(n.pid);
+            changed = true;
           }
           if (Array.isArray(n.children)) {
-            collectPids(n.children, depth + 1);
+            walk(n.children, depth + 1);
           }
         }
-      });
-    };
-    collectPids(roots, 0);
-
-    setExpandedPids((prev) => {
-      // If agent changed or first load, initialize with default top-level expanded PIDs
-      if (isAgentChanged || prev.size === 0) {
-        return autoExpandPids;
-      }
-      // Otherwise preserve all user-expanded PIDs and add any newly detected suspicious nodes
-      const next = new Set(prev);
-      const collectSuspiciousOnly = (nodes) => {
-        nodes.forEach((n) => {
-          if (n && n.pid && n.is_suspicious) {
-            next.add(n.pid);
-          }
-          if (Array.isArray(n.children)) collectSuspiciousOnly(n.children);
-        });
       };
-      collectSuspiciousOnly(roots);
-      return next;
+      walk(roots, 0);
+
+      // Chỉ trả set mới nếu có thay đổi → tránh re-render vô ích
+      return changed ? next : prev;
     });
   }, [processTree, selectedAgent]);
 
   const agentOptions = useMemo(() => {
-    return agents.map((a) => ({
-      value: a.id,
-      label: `${a.name || a.hostname} (${a.ip || a.ip_address})`,
-    }));
-  }, [agents]);
+    return dedupedAgents.map((a) => {
+      const isActive = (a.status || '').toLowerCase() === 'active' || (a.status || '').toLowerCase() === 'online';
+      const badge = isActive ? ' 🟢' : ' ⚪';
+      const name = a.name || a.hostname || a.id;
+      const ip = a.ip || a.ip_address || 'N/A';
+      return {
+        value: a.id,
+        label: `${name} (${ip})${badge}`,
+      };
+    });
+  }, [dedupedAgents]);
 
-  const toggleExpand = (pid) => {
+  const handleToggle = useCallback((pid) => {
     setExpandedPids((prev) => {
       const next = new Set(prev);
       if (next.has(pid)) {
@@ -128,7 +160,15 @@ export default function ProcessTree() {
       }
       return next;
     });
-  };
+  }, []);
+
+  const handleKillPidAction = useCallback((proc) => {
+    openKillModal(proc, false);
+  }, []);
+
+  const handleKillTreeAction = useCallback((proc) => {
+    openKillModal(proc, true);
+  }, []);
 
   const expandAll = () => {
     const allPids = new Set();
@@ -180,152 +220,6 @@ export default function ProcessTree() {
   };
 
 
-  // Render recursive process tree nodes with expand/collapse
-  const renderTreeNode = (node, depth = 0) => {
-    if (!node) return null;
-    const hasChildren = Array.isArray(node.children) && node.children.length > 0;
-    const isExpanded = expandedPids.has(node.pid);
-    const isSusp = node.is_suspicious;
-
-    return (
-      <div key={`tree-node-${node.pid}`} style={{ display: 'flex', flexDirection: 'column' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0.55rem 0.85rem',
-            marginLeft: `${depth * 22}px`,
-            borderLeft: depth > 0 ? '2px solid var(--border)' : 'none',
-            background: isSusp ? 'rgba(239,68,68,0.08)' : 'var(--bg-secondary)',
-            border: isSusp ? '1px solid rgba(239,68,68,0.3)' : '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            marginBottom: '0.35rem',
-            transition: 'background 0.2s ease',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, overflow: 'hidden' }}>
-            {hasChildren ? (
-              <button
-                onClick={() => toggleExpand(node.pid)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '2px',
-                }}
-                title={isExpanded ? 'Collapse' : 'Expand'}
-              >
-                {isExpanded ? <FiChevronDown size={16} color="var(--primary)" /> : <FiChevronRight size={16} />}
-              </button>
-            ) : (
-              <span style={{ width: 16, display: 'inline-block' }} />
-            )}
-
-            {depth > 0 && <FiCornerDownRight size={13} color="var(--text-tertiary)" />}
-
-            <span
-              style={{
-                fontWeight: 700,
-                fontFamily: 'monospace',
-                fontSize: '0.82rem',
-                color: isSusp ? 'var(--error)' : 'var(--primary)',
-                minWidth: 70,
-              }}
-            >
-              <InfoTooltip {...TOOLTIPS.PID}>PID {node.pid}</InfoTooltip>
-            </span>
-
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.875rem' }}>
-              {node.name}
-            </span>
-
-            {node.cmdline && (
-              <span
-                style={{
-                  fontSize: '0.76rem',
-                  color: 'var(--text-tertiary)',
-                  fontFamily: 'monospace',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  maxWidth: 320,
-                }}
-              >
-                <InfoTooltip term="Cmdline" definition={node.cmdline}>
-                  ({node.cmdline})
-                </InfoTooltip>
-              </span>
-            )}
-
-            {isSusp && <Badge status="critical" label="SUSPICIOUS" />}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0 }}>
-            {node.cpu_percent !== undefined && (
-              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                CPU: <strong>{node.cpu_percent}%</strong>
-              </span>
-            )}
-            {node.memory_percent !== undefined && (
-              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                RAM: <strong>{node.memory_percent}%</strong>
-              </span>
-            )}
-
-            <button
-              className="text-red-600 hover:text-red-800 p-1"
-              onClick={() => openKillModal(node, false)}
-              title="Dừng tiến trình này"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--error, #ef4444)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                padding: '4px',
-                borderRadius: '4px',
-              }}
-            >
-              <FiXCircle size={16} />
-            </button>
-            <Button
-              variant="ghost"
-              size="sm"
-              iconLeft={<FiXCircle size={13} />}
-              onClick={() => openKillModal(node, false)}
-              disabled={killing}
-              title="Dừng tiến trình này"
-            >
-              Kill PID
-            </Button>
-            <Button
-              variant={isSusp ? 'danger' : 'outline'}
-              size="sm"
-              iconLeft={<FiLayers size={13} />}
-              onClick={() => openKillModal(node, true)}
-              disabled={killing}
-              title="Dừng tiến trình độc hại (kèm process con)"
-            >
-              Kill Tree
-            </Button>
-          </div>
-        </div>
-
-        {/* Render child nodes recursively if expanded */}
-        {hasChildren && isExpanded && (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {node.children.map((child) => renderTreeNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const renderTreeContent = () => {
     if (!processTree) {
       return (
@@ -349,7 +243,22 @@ export default function ProcessTree() {
       );
     }
 
-    return treeData.map((rootNode) => renderTreeNode(rootNode, 0));
+    return (
+      <div className="process-tree-container">
+        {treeData.map((rootNode) => (
+          <TreeNode
+            key={rootNode.pid}
+            node={rootNode}
+            level={0}
+            expandedPids={expandedPids}
+            onToggle={handleToggle}
+            onKillPid={handleKillPidAction}
+            onKillTree={handleKillTreeAction}
+            killing={killing}
+          />
+        ))}
+      </div>
+    );
   };
 
   if (error && !processTree) {
@@ -375,7 +284,7 @@ export default function ProcessTree() {
               <FiRotateCw size={14} className="spin" /> Dispatching Kill & Syncing...
             </span>
           )}
-          <div style={{ width: 240 }}>
+          <div style={{ width: 260 }} title="Các agent cũ cùng hostname đã được tự động ẩn để tránh nhầm lẫn">
             <Dropdown
               options={agentOptions}
               value={selectedAgent}

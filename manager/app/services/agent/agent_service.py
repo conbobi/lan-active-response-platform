@@ -1,5 +1,6 @@
 import uuid
 import logging
+from datetime import datetime, timezone
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent import Agent
@@ -133,8 +134,43 @@ class AgentService(AbstractService[AgentRepository]):
             raise AgentNotFoundError(agent_id)
         return agent
 
-    async def list_agents(self, skip: int = 0, limit: int = 100) -> List[Agent]:
-        return await self.repository.list(skip=skip, limit=limit)
+    async def list_agents(self, skip: int = 0, limit: int = 100, deduplicate: bool = True) -> List[Agent]:
+        if not deduplicate:
+            return await self.repository.list(skip=skip, limit=limit)
+
+        agents = await self.repository.list(skip=0, limit=10000)
+        latest_by_hostname = {}
+        for a in agents:
+            key = a.hostname or a.id
+            if key not in latest_by_hostname:
+                latest_by_hostname[key] = a
+                continue
+
+            existing = latest_by_hostname[key]
+            a_status = getattr(a.status, "value", str(a.status)).lower()
+            e_status = getattr(existing.status, "value", str(existing.status)).lower()
+            a_active = a_status in ("active", "online")
+            e_active = e_status in ("active", "online")
+
+            if a_active and not e_active:
+                latest_by_hostname[key] = a
+            elif not a_active and e_active:
+                pass
+            else:
+                a_ts = a.last_seen or a.created_at
+                e_ts = existing.last_seen or existing.created_at
+                if a_ts and (not e_ts or a_ts > e_ts):
+                    latest_by_hostname[key] = a
+
+        deduped = list(latest_by_hostname.values())
+        deduped.sort(
+            key=lambda x: (
+                1 if getattr(x.status, "value", str(x.status)).lower() in ("active", "online") else 0,
+                x.last_seen or x.created_at or datetime.min.replace(tzinfo=timezone.utc)
+            ),
+            reverse=True
+        )
+        return deduped[skip : skip + limit]
 
     async def delete_agent(self, agent_id: str) -> bool:
         return await self.repository.delete(agent_id)

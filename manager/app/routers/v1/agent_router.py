@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Dict
-from fastapi import APIRouter, Depends, status, Body
+from fastapi import APIRouter, Depends, status, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
@@ -33,10 +33,15 @@ async def get_agent_history(agent_id: str, limit: int = 50, db: AsyncSession = D
 
 
 @router.get("/", response_model=List[AgentOut])
-async def list_agents(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+async def list_agents(
+    skip: int = 0,
+    limit: int = 100,
+    deduplicate: bool = Query(True, description="Deduplicate by hostname, keep latest"),
+    db: AsyncSession = Depends(get_db)
+):
     """List all registered agents."""
     service = AgentService(db)
-    return await service.list_agents(skip=skip, limit=limit)
+    return await service.list_agents(skip=skip, limit=limit, deduplicate=deduplicate)
 
 
 @router.post("/", response_model=AgentOut, status_code=status.HTTP_201_CREATED)

@@ -4,12 +4,16 @@ import json
 import time
 import asyncio
 from typing import List, Dict, Any
+from datetime import datetime
 import psutil
 import websockets
 
 AGENT_ID = os.getenv("AGENT_ID", "WIN-DEMO-01")
 MANAGER_URL = os.getenv("MANAGER_URL", "wss://edr.alwayready.id.vn/ws/agent")
-INTERVAL = 0.5
+
+# ⚠️ QUAN TRỌNG: 15 giây (không phải 0.5s)
+# 0.5s = test nhanh (spam log), 15s = production
+INTERVAL = float(os.getenv("AGENT_INTERVAL", "15"))
 
 
 import subprocess
@@ -17,6 +21,7 @@ import shutil
 import hashlib
 from urllib.parse import urlparse
 import socket
+import re
 
 # ============ ISOLATION ============
 ISOLATE_RULE_PREFIX = "LARP_ISOLATE_"
@@ -26,7 +31,6 @@ def get_manager_ip_port():
     parsed = urlparse(MANAGER_URL)
     host = parsed.hostname or "192.168.30.105"
     port = parsed.port or 8005
-    # Resolve hostname → IP nếu cần
     try:
         ip = socket.gethostbyname(host)
     except Exception:
@@ -37,72 +41,41 @@ def get_manager_ip_port():
 def handle_isolate(payload):
     """Selective isolation: block all except Manager IP:port."""
     manager_ip, manager_port = get_manager_ip_port()
-    
     try:
-        # Xóa rules cũ (idempotent)
-        subprocess.run(
-            ["netsh", "advfirewall", "firewall", "delete", "rule",
-             f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT"],
-            capture_output=True
-        )
-        subprocess.run(
-            ["netsh", "advfirewall", "firewall", "delete", "rule",
-             f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_IN"],
-            capture_output=True
-        )
-        
-        # Cho phép Manager IP outbound (WebSocket)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule",
+                        f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT"], capture_output=True)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule",
+                        f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_IN"], capture_output=True)
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT",
             "dir=out", "action=allow",
-            f"remoteip={manager_ip}",
-            f"remoteport={str(manager_port)}",
-            "protocol=TCP"
+            f"remoteip={manager_ip}", f"remoteport={str(manager_port)}", "protocol=TCP"
         ], check=True, capture_output=True)
-        
-        # Cho phép Manager inbound (response packets)
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_IN",
             "dir=in", "action=allow",
-            f"remoteip={manager_ip}",
-            "protocol=TCP"
+            f"remoteip={manager_ip}", "protocol=TCP"
         ], check=True, capture_output=True)
-        
-        # Block tất cả outbound còn lại
-        subprocess.run([
-            "netsh", "advfirewall", "set", "allprofiles",
-            "firewallpolicy", "blockinbound,blockoutbound"
-        ], check=False, capture_output=True)
-        
-        return {
-            "status": "success",
-            "message": f"Isolated. Manager {manager_ip}:{manager_port} whitelisted",
-            "manager_ip": manager_ip,
-            "manager_port": manager_port,
-        }
+        subprocess.run(["netsh", "advfirewall", "set", "allprofiles",
+                        "firewallpolicy", "blockinbound,blockoutbound"],
+                       check=False, capture_output=True)
+        return {"status": "success",
+                "message": f"Isolated. Manager {manager_ip}:{manager_port} whitelisted",
+                "manager_ip": manager_ip, "manager_port": manager_port}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
 def handle_unisolate(payload):
-    """Remove isolation rules, restore network."""
     try:
         for rule_name in [f"{ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT",
                           f"{ISOLATE_RULE_PREFIX}ALLOW_MGR_IN"]:
-            subprocess.run(
-                ["netsh", "advfirewall", "firewall", "delete", "rule",
-                 f"name={rule_name}"],
-                capture_output=True
-            )
-        
-        # Restore allow all
-        subprocess.run([
-            "netsh", "advfirewall", "set", "allprofiles",
-            "firewallpolicy", "allowinbound,allowoutbound"
-        ], capture_output=True)
-        
+            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule",
+                            f"name={rule_name}"], capture_output=True)
+        subprocess.run(["netsh", "advfirewall", "set", "allprofiles",
+                        "firewallpolicy", "allowinbound,allowoutbound"], capture_output=True)
         return {"status": "success", "message": "Network unisolated"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -113,12 +86,9 @@ def handle_kill_process(payload):
     pid = payload.get("pid")
     if not pid:
         return {"status": "error", "message": "Missing PID"}
-    
     try:
-        result = subprocess.run(
-            ["taskkill", "/F", "/PID", str(pid)],
-            capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             return {"status": "success", "message": f"Killed PID {pid}"}
         return {"status": "error", "message": result.stderr or result.stdout}
@@ -130,12 +100,9 @@ def handle_kill_process_tree(payload):
     pid = payload.get("pid")
     if not pid:
         return {"status": "error", "message": "Missing PID"}
-    
     try:
-        result = subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True, text=True, timeout=15
-        )
+        result = subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                                capture_output=True, text=True, timeout=15)
         if result.returncode == 0:
             return {"status": "success", "message": f"Killed tree PID {pid}"}
         return {"status": "error", "message": result.stderr or result.stdout}
@@ -145,55 +112,35 @@ def handle_kill_process_tree(payload):
 handle_kill_tree = handle_kill_process_tree
 
 
-# ============ QUARANTINE FILE ============
+# ============ QUARANTINE ============
 QUARANTINE_DIR = "C:\\ProgramData\\LARP\\Quarantine"
 
 def handle_quarantine(payload):
     file_path = payload.get("file_path") or payload.get("path")
     if not file_path:
         return {"status": "error", "message": "Missing file_path"}
-    
     if not os.path.exists(file_path):
         return {"status": "error", "message": f"Not found: {file_path}"}
-    
     try:
         os.makedirs(QUARANTINE_DIR, exist_ok=True)
-        
-        # Hash trước khi move
         sha256 = hashlib.sha256()
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
         file_hash = sha256.hexdigest()
-        
-        # Move vào quarantine
         ts = int(time.time())
         basename = os.path.basename(file_path)
-        dest_name = f"{ts}_{basename}.quarantine"
-        dest_path = os.path.join(QUARANTINE_DIR, dest_name)
-        
+        dest_path = os.path.join(QUARANTINE_DIR, f"{ts}_{basename}.quarantine")
         shutil.move(file_path, dest_path)
-        
-        # Metadata
-        meta = {
-            "original_path": file_path,
-            "quarantine_path": dest_path,
-            "sha256": file_hash,
-            "quarantined_at": ts,
-        }
+        meta = {"original_path": file_path, "quarantine_path": dest_path,
+                "sha256": file_hash, "quarantined_at": ts}
         with open(f"{dest_path}.meta", "w") as f:
             json.dump(meta, f, indent=2)
-        
-        return {
-            "status": "success",
-            "quarantine_path": dest_path,
-            "sha256": file_hash,
-        }
+        return {"status": "success", "quarantine_path": dest_path, "sha256": file_hash}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
-# ============ DISPATCH MAP ============
 COMMAND_HANDLERS = {
     "isolate": handle_isolate,
     "unisolate": handle_unisolate,
@@ -205,80 +152,42 @@ COMMAND_HANDLERS = {
 }
 
 
-import re
-
 SUSPICIOUS_PATTERNS = [
-    # Tool tấn công cụ thể — match full word/pattern
-    r"\bmimikatz\b",
-    r"\bmeterpreter\b",
-    r"\bcobaltstrike\b",
-    r"\blazagne\b",
-    r"\bprocdump(?:\.exe)?\b.*\blsass\b",       # procdump dump lsass
-    r"\bcomsvcs\.dll\b.*MiniDump",              # LOLBin
-    r"\bsekurlsa::",                            # mimikatz commands
-    r"\blsadump::",
-    r"\bkerberos::golden",
-
-    # Reverse shell patterns
-    r"\bnc(?:\.exe)?\b.*-e\b.*(?:cmd|powershell|sh|bash)",  # nc reverse shell
-    r"\bncat\b.*-e\b",
-    r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",         # PS encoded
+    r"\bmimikatz\b", r"\bmeterpreter\b", r"\bcobaltstrike\b", r"\blazagne\b",
+    r"\bprocdump(?:\.exe)?\b.*\blsass\b", r"\bcomsvcs\.dll\b.*MiniDump",
+    r"\bsekurlsa::", r"\blsadump::", r"\bkerberos::golden",
+    r"\bnc(?:\.exe)?\b.*-e\b.*(?:cmd|powershell|sh|bash)", r"\bncat\b.*-e\b",
+    r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",
     r"\bpowershell\b.*-w(?:indowstyle)?\s+hidden",
-
-    # MSBuild inline exec (đã có trong living_off_land nhưng backup)
     r"\bmsbuild(?:\.exe)?\b.*/t:Run",
-
-    # Certificate abuse
     r"\bcertutil\b.*-urlcache.*-split.*-f\s+http",
     r"\bcertutil\b.*-decodehex",
-
-    # Suspicious paths (chỉ match file thực thi trực tiếp trong thư mục temp/public)
     r"\\users\\public\\[^\\/\s\"']+\.(?:exe|dll|ps1|vbs|js)\b",
     r"\\appdata\\local\\temp\\[^\\/\s\"']+\.(?:exe|dll|ps1|vbs|js)\b",
 ]
 
 
 def is_process_suspicious(name: str, cmdline: str, exe: str = "") -> bool:
-    """Check process suspicion — KHÔNG dựa vào tên process, chỉ cmdline/path."""
     if not cmdline or not name:
         return False
-
     full_str = f"{name} {cmdline} {exe}".lower()
-
-    # Match patterns (regex)
     for pattern in SUSPICIOUS_PATTERNS:
         if re.search(pattern, full_str, re.IGNORECASE):
             return True
-
     return False
 
 
 def collect_processes() -> List[Dict[str, Any]]:
-    """
-    Collect running processes on Windows using psutil.
-    Extracts pid, ppid, name, exe path, command line arguments.
-    Agent sends raw data; manager performs authoritative risk evaluation.
-    """
     processes = []
     for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline']):
         try:
             info = proc.info
             cmdline_raw = info.get('cmdline')
-            if isinstance(cmdline_raw, list):
-                cmdline = " ".join(str(arg) for arg in cmdline_raw)
-            else:
-                cmdline = str(cmdline_raw or "")
-
-            name = info.get("name") or ""
-            exe = info.get("exe") or ""
-
+            cmdline = " ".join(str(arg) for arg in cmdline_raw) if isinstance(cmdline_raw, list) else str(cmdline_raw or "")
             processes.append({
-                "pid": info.get("pid"),
-                "ppid": info.get("ppid"),
-                "name": name,
-                "exe": exe,
-                "cmdline": cmdline,
-                "is_suspicious": False,
+                "pid": info.get("pid"), "ppid": info.get("ppid"),
+                "name": info.get("name") or "", "exe": info.get("exe") or "",
+                "cmdline": cmdline, "is_suspicious": False,
             })
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
@@ -288,9 +197,6 @@ def collect_processes() -> List[Dict[str, Any]]:
 
 
 def collect_network() -> List[Dict[str, Any]]:
-    """
-    Collect established network connections with associated PID, process name, and cmdline.
-    """
     connections = []
     try:
         for conn in psutil.net_connections(kind='inet'):
@@ -303,20 +209,13 @@ def collect_network() -> List[Dict[str, Any]]:
             except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
                 proc_name = 'unknown'
                 cmdline = ''
-
-            laddr = conn.laddr
-            raddr = conn.raddr
+            laddr, raddr = conn.laddr, conn.raddr
             if not raddr:
                 continue
-
             connections.append({
-                "pid": conn.pid,
-                "process_name": proc_name,
-                "cmdline": cmdline,
-                "src_ip": laddr.ip if laddr else "",
-                "src_port": laddr.port if laddr else 0,
-                "dst_ip": raddr.ip if raddr else "",
-                "dst_port": raddr.port if raddr else 0,
+                "pid": conn.pid, "process_name": proc_name, "cmdline": cmdline,
+                "src_ip": laddr.ip if laddr else "", "src_port": laddr.port if laddr else 0,
+                "dst_ip": raddr.ip if raddr else "", "dst_port": raddr.port if raddr else 0,
                 "protocol": "TCP",
             })
     except Exception as e:
@@ -324,11 +223,24 @@ def collect_network() -> List[Dict[str, Any]]:
     return connections
 
 
+# ============ HEARTBEAT ACK TRACKING (fix half-open) ============
+_last_message_time = time.time()
+_last_heartbeat_sent = 0.0
+
+
+def _log(msg: str):
+    """Log với timestamp để dễ debug timeline."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+
 async def send_telemetry(ws) -> None:
-    """Gửi heartbeat + telemetry mỗi 15s."""
+    """Gửi heartbeat + telemetry mỗi INTERVAL giây."""
+    global _last_heartbeat_sent
     while True:
         try:
-            # 1. Gửi HEARTBEAT trước
+            now = time.time()
+            _last_heartbeat_sent = now
+            
             heartbeat = {
                 "type": "HEARTBEAT",
                 "payload": {
@@ -340,115 +252,144 @@ async def send_telemetry(ws) -> None:
             }
             await ws.send(json.dumps(heartbeat))
 
-            # 2. Thu thập processes & network
             procs = collect_processes()
             conns = collect_network()
 
-            # 3. Gửi PROCESS_LIST để Manager lưu vào bảng process_info phục vụ Process Tree UI
-            proc_list_msg = {
+            await ws.send(json.dumps({
                 "type": "PROCESS_LIST",
-                "payload": {
-                    "agent_id": AGENT_ID,
-                    "processes": procs,
-                    "timestamp": time.time(),
-                },
+                "payload": {"agent_id": AGENT_ID, "processes": procs, "timestamp": now},
                 "wait_ack": False,
-            }
-            await ws.send(json.dumps(proc_list_msg))
+            }))
 
-            # 4. Gửi TELEMETRY_RISK để tính toán risk score
-            msg = {
+            await ws.send(json.dumps({
                 "type": "TELEMETRY_RISK",
                 "payload": {
-                    "agent_id": AGENT_ID,
-                    "platform": "windows",
-                    "process_list": procs,
-                    "network_connections": conns,
-                    "timestamp": time.time(),
+                    "agent_id": AGENT_ID, "platform": "windows",
+                    "process_list": procs, "network_connections": conns,
+                    "timestamp": now,
                 }
-            }
-            await ws.send(json.dumps(msg))
-            print(f"[+] Heartbeat + PROCESS_LIST ({len(procs)}) + telemetry: {len(conns)} conns")
-
+            }))
+            
+            _log(f"[+] Sent HB + PROCESS_LIST ({len(procs)}) + telemetry ({len(conns)} conns)")
             await asyncio.sleep(INTERVAL)
-        except websockets.exceptions.ConnectionClosed:
-            print("[!] Connection closed by server, reconnect...")
+            
+        except websockets.exceptions.ConnectionClosed as e:
+            _log(f"[!] Connection closed (send): code={e.code} — reconnect")
             raise
         except Exception as e:
-            print(f"[!] Send error: {type(e).__name__}: {e}")
+            _log(f"[!] Send error: {type(e).__name__}: {e}")
             raise
 
 
 async def _execute_and_ack(ws, command_id, action, params):
-    print(f"[*] Received command: {action} (id={command_id})")
+    _log(f"[*] Received command: {action} (id={command_id})")
     handler = COMMAND_HANDLERS.get(action)
-    if handler:
-        result = handler(params)
-    else:
-        result = {"status": "error", "message": f"Unknown action: {action}"}
-
-    # Map status to valid CommandStatus ('success' or 'failed') for backend schema validation
+    result = handler(params) if handler else {"status": "error", "message": f"Unknown: {action}"}
     status_str = "success" if result.get("status") == "success" else "failed"
     ack = {
         "type": "COMMAND_ACK",
         "payload": {
-            "command_id": command_id,
-            "status": status_str,
+            "command_id": command_id, "status": status_str,
             "error_message": result.get("message") if status_str == "failed" else None,
-            "result": result,
-            "executed_at": time.time(),
+            "result": result, "executed_at": time.time(),
         }
     }
     await ws.send(json.dumps(ack))
-    print(f"[+] ACK sent: {action} -> {result.get('status')}")
+    _log(f"[+] ACK sent: {action} -> {result.get('status')}")
 
 
 async def receive_commands(ws) -> None:
-    """Lắng nghe command từ Manager và thực thi."""
+    """Nhận mọi message từ Manager — cập nhật _last_message_time mỗi lần."""
+    global _last_message_time
     async for raw in ws:
+        _last_message_time = time.time()  # ← BẤT KỲ message nào = Manager còn sống
         try:
             msg = json.loads(raw)
             msg_type = msg.get("type")
 
             if msg_type == "COMMAND":
                 payload = msg.get("payload", {})
-                command_id = payload.get("command_id")
-                action = payload.get("action")
-                params = payload.get("params") or payload.get("payload") or {}
-                await _execute_and_ack(ws, command_id, action, params)
+                await _execute_and_ack(
+                    ws,
+                    payload.get("command_id"),
+                    payload.get("action"),
+                    payload.get("params") or payload.get("payload") or {},
+                )
             elif "pending_commands" in msg:
-                # Commands piggybacked in HEARTBEAT response
+                # Heartbeat response = ack (đã update _last_message_time ở trên)
                 for cmd in msg["pending_commands"]:
-                    command_id = cmd.get("command_id")
-                    action = cmd.get("action")
-                    params = cmd.get("payload") or {}
-                    await _execute_and_ack(ws, command_id, action, params)
-            else:
-                if msg_type:
-                    print(f"[*] Ignored msg type: {msg_type}")
+                    await _execute_and_ack(
+                        ws,
+                        cmd.get("command_id"),
+                        cmd.get("action"),
+                        cmd.get("payload") or {},
+                    )
+            # else: heartbeat_ack, ping, etc → đã update time, không cần log
         except websockets.exceptions.ConnectionClosed:
-            print("[!] Connection closed by server in receive_commands, reconnect...")
+            _log("[!] Connection closed (recv) — reconnect")
             raise
         except Exception as e:
-            print(f"[!] Receive error: {type(e).__name__}: {e}")
+            _log(f"[!] Recv error: {type(e).__name__}: {e}")
+
+
+async def monitor_connection():
+    """
+    Watchdog: nếu > 90 giây không nhận message từ Manager → force close.
+    Fix trường hợp Manager process còn sống nhưng heartbeat handler crash.
+    """
+    global _last_message_time
+    while True:
+        await asyncio.sleep(30)
+        idle = time.time() - _last_message_time
+        if idle > 90:
+            _log(f"[!] WATCHDOG: No message from Manager in {idle:.0f}s — forcing reconnect")
+            raise ConnectionError(f"No message from Manager in {idle:.0f}s")
 
 
 async def main() -> None:
-    """Chạy SEND và RECEIVE song song."""
+    """Reconnect loop với exponential backoff + ping/pong."""
+    retry = 1
+    max_retry = 30
+    
     while True:
         try:
-            print(f"[*] Connecting to {MANAGER_URL} ...")
-            async with websockets.connect(MANAGER_URL) as ws:
-                print(f"[+] Connected")
-
-                # Chạy SONG SONG: gửi telemetry + nhận command
+            _log(f"[*] Connecting to {MANAGER_URL} ...")
+            
+            # ⚠️ KEY FIX: ping_interval + ping_timeout
+            # Library tự gửi PING mỗi 20s, expect PONG trong 10s
+            # Nếu không nhận PONG → raise ConnectionClosed → exit async with → reconnect
+            async with websockets.connect(
+                MANAGER_URL,
+                ping_interval=20,       # ← Gửi PING mỗi 20s
+                ping_timeout=10,        # ← Timeout PONG sau 10s
+                close_timeout=5,
+                open_timeout=15,
+                max_size=16 * 1024 * 1024,  # 16MB cho process list lớn
+            ) as ws:
+                _log(f"[+] Connected — ping_interval=20s")
+                retry = 1  # Reset backoff
+                
+                # Reset watchdog time
+                global _last_message_time
+                _last_message_time = time.time()
+                
+                # Chạy SONG SONG: send + receive + watchdog
                 await asyncio.gather(
                     send_telemetry(ws),
                     receive_commands(ws),
+                    monitor_connection(),
                 )
+                
+        except websockets.exceptions.ConnectionClosed as e:
+            _log(f"[!] ConnectionClosed: code={e.code} reason={e.reason}")
+        except (OSError, ConnectionError, asyncio.TimeoutError) as e:
+            _log(f"[!] Network error: {type(e).__name__}: {e}")
         except Exception as e:
-            print(f"[!] Error: {type(e).__name__}: {e}, retry in 5s")
-            await asyncio.sleep(5)
+            _log(f"[!] Unexpected: {type(e).__name__}: {e}")
+        
+        _log(f"[*] Reconnect in {retry}s...")
+        await asyncio.sleep(retry)
+        retry = min(retry * 2, max_retry)
 
 
 if __name__ == "__main__":

@@ -68,14 +68,14 @@ export const useProcessTree = (agentId = '') => {
     }
   }, [selectedAgentId]);
 
-  // Initial fetch and auto-polling every 10 seconds
+  // Initial fetch and auto-polling every 30 seconds
   useEffect(() => {
     if (selectedAgentId) {
       fetchData(selectedAgentId, true);
 
       const interval = setInterval(() => {
         fetchData(selectedAgentId, false);
-      }, 10000);
+      }, 30000);
 
       return () => clearInterval(interval);
     }

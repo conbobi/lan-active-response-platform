@@ -1,7 +1,6 @@
 import uuid
 import logging
 from typing import Dict, List, Any, Optional
-import networkx as nx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.command import Command
@@ -16,8 +15,8 @@ logger = logging.getLogger(__name__)
 class ProcessTreeService:
     """
     Process Tree & Root Cause Analysis Service.
-    Uses NetworkX directed graphs to construct parent-child process hierarchies,
-    trace suspicious process lineage, and issue process termination commands.
+    Constructs parent-child process hierarchies from snapshot telemetry,
+    traces suspicious process lineage, and issues process termination commands.
     """
 
     def __init__(self, session: AsyncSession):
@@ -26,77 +25,76 @@ class ProcessTreeService:
 
     async def build_tree(self, agent_id: str) -> Dict[str, Any]:
         """
-        Fetch latest process telemetry for an agent, construct a directed graph (DiGraph),
-        and format process hierarchy into a structured JSON tree.
+        Fetch latest process telemetry for an agent and format process hierarchy into a structured JSON tree.
+        Natural roots = processes with parent_pid not in snapshot, parent_pid = 0/None, or parent_pid = pid (self-loop).
         """
         processes = await self.process_repo.get_by_agent(agent_id, limit=500)
         if not processes:
             return {"agent_id": agent_id, "total_processes": 0, "root_count": 0, "tree": []}
 
-        G = nx.DiGraph()
-        proc_dict = {}
+        # Map pid -> process
+        pid_map = {p.pid: p for p in processes}
 
+        # Find natural roots
+        roots = []
         for p in processes:
-            proc_dict[p.pid] = {
-                "pid": p.pid,
-                "parent_pid": p.parent_pid,
-                "name": p.name,
-                "exe": p.exe or p.exe_path or "",
-                "cmdline": p.cmdline,
-                "cpu_percent": p.cpu_percent,
-                "memory_percent": p.memory_percent,
-                "hash": p.hash,
-                "is_suspicious": p.is_suspicious_process(),
-                "created_at": p.created_at.isoformat() if p.created_at else None
-            }
-            G.add_node(p.pid, **proc_dict[p.pid])
+            ppid = p.parent_pid
+            is_root = (
+                ppid is None or
+                ppid == 0 or
+                ppid == p.pid or
+                ppid not in pid_map
+            )
+            if is_root:
+                roots.append(p)
 
-        # Ensure root node (PID 1) exists for hierarchy anchor
-        if 1 not in proc_dict and len(proc_dict) > 0:
-            proc_dict[1] = {
-                "pid": 1,
-                "parent_pid": None,
-                "name": "systemd/init",
-                "exe": "/sbin/init",
-                "cmdline": "init",
-                "cpu_percent": 0.0,
-                "memory_percent": 0.0,
-                "hash": None,
-                "is_suspicious": False,
-                "created_at": None
-            }
-            G.add_node(1, **proc_dict[1])
+        # Fallback if no root found
+        if not roots and processes:
+            roots = [min(processes, key=lambda x: x.pid)]
 
+        # Build children map
+        children_map = {}
         for p in processes:
-            if p.pid == 1:
+            ppid = p.parent_pid
+            if ppid is None or ppid == p.pid or ppid not in pid_map:
                 continue
-            if p.parent_pid and p.parent_pid in proc_dict and p.parent_pid != p.pid:
-                G.add_edge(p.parent_pid, p.pid)
-            elif 1 in proc_dict:
-                # If parent is not in snapshot or orphan, attach to root PID 1 so tree is unbroken
-                G.add_edge(1, p.pid)
+            children_map.setdefault(ppid, []).append(p)
 
-        # Build root nodes (nodes with in-degree 0)
-        roots = [n for n in G.nodes() if G.in_degree(n) == 0]
+        # Recursive build node with branch path cycle detection
+        def build_node(proc, depth=0, path=None):
+            if path is None:
+                path = set()
+            if depth > 50 or proc.pid in path:
+                return self._proc_to_dict(proc, [])
+            current_path = path | {proc.pid}
+            children = children_map.get(proc.pid, [])
+            return self._proc_to_dict(
+                proc,
+                [build_node(c, depth + 1, current_path) for c in children if c.pid not in current_path]
+            )
 
-        visited = set()
-
-        def get_subtree(node_id):
-            if node_id in visited:
-                return dict(proc_dict.get(node_id, {"pid": node_id, "children": []}))
-            visited.add(node_id)
-            node_data = dict(proc_dict.get(node_id, {"pid": node_id}))
-            children = [get_subtree(child) for child in G.successors(node_id) if child not in visited]
-            node_data["children"] = children
-            return node_data
-
-        tree_nodes = [get_subtree(r) for r in roots]
+        tree = [build_node(r) for r in roots]
 
         return {
             "agent_id": agent_id,
             "total_processes": len(processes),
-            "root_count": len(roots),
-            "tree": tree_nodes
+            "root_count": len(tree),
+            "tree": tree,
+        }
+
+    def _proc_to_dict(self, proc, children: list) -> dict:
+        return {
+            "pid": proc.pid,
+            "parent_pid": proc.parent_pid,
+            "name": proc.name,
+            "exe": proc.exe or getattr(proc, "exe_path", "") or "",
+            "cmdline": proc.cmdline or "",
+            "cpu_percent": float(proc.cpu_percent or 0),
+            "memory_percent": float(proc.memory_percent or 0),
+            "hash": proc.hash,
+            "is_suspicious": proc.is_suspicious_process() if hasattr(proc, "is_suspicious_process") else bool(getattr(proc, "is_suspicious", False)),
+            "created_at": proc.created_at.isoformat() if proc.created_at else None,
+            "children": children,
         }
 
     async def find_suspicious_process(self, agent_id: str) -> List[Dict[str, Any]]:
