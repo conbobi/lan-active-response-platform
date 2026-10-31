@@ -6,8 +6,6 @@ import { FactorBreakdown } from '../components/FactorBreakdown';
 import { RiskScoreChart } from '../components/RiskScoreChart';
 import { FiActivity, FiRefreshCw, FiEye, FiCopy, FiCheck, FiShield, FiAlertTriangle } from 'react-icons/fi';
 
-const DEFAULT_AGENTS = ['client1', 'client2', 'client3', 'client4', 'attacker', 'WIN-DEMO-01'];
-
 export function StatusBadge({ score }) {
   const s = Number(score || 0);
   let label = '🟢 Safe';
@@ -44,7 +42,7 @@ export function StatusBadge({ score }) {
 
 export default function RiskMonitor() {
   const [scores, setScores] = useState([]);
-  const [agentsList, setAgentsList] = useState(DEFAULT_AGENTS);
+  const [agentsList, setAgentsList] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
@@ -64,12 +62,12 @@ export default function RiskMonitor() {
         const fetched = await getAgents();
         if (Array.isArray(fetched) && fetched.length > 0) {
           const ids = fetched.map((a) => a.id).filter(Boolean);
-          targetAgents = Array.from(new Set([...ids, ...DEFAULT_AGENTS]));
+          targetAgents = Array.from(new Set(ids));
           setAgentsList(targetAgents);
           agentsListRef.current = targetAgents;
         }
       } catch (err) {
-        console.warn('Failed to fetch dynamic agent list, using defaults', err);
+        console.warn('Failed to fetch dynamic agent list', err);
       }
 
       const results = await Promise.all(
@@ -85,7 +83,7 @@ export default function RiskMonitor() {
 
   useEffect(() => {
     loadData(true);
-    const interval = setInterval(() => loadData(false), 12000);
+    const interval = setInterval(() => loadData(false), 5000);
     return () => clearInterval(interval);
   }, [loadData]);
 
@@ -93,11 +91,12 @@ export default function RiskMonitor() {
     return selectedAgent ? scores.filter((s) => s.agent_id === selectedAgent) : scores;
   }, [scores, selectedAgent]);
 
-  // Chart data for selected agent or top agent
-  const chartAgent = selectedAgent || 'attacker';
+  // Chart data for selected agent or first available agent
+  const chartAgent = selectedAgent || agentsList[0] || (scores[0]?.agent_id || '');
   const chartScores = useMemo(() => {
-    return scores.filter((s) => s.agent_id === chartAgent).slice(0, 30);
+    return chartAgent ? scores.filter((s) => s.agent_id === chartAgent).slice(0, 30) : [];
   }, [scores, chartAgent]);
+
 
   const handleCopyJson = (record) => {
     navigator.clipboard.writeText(JSON.stringify(record, null, 2));

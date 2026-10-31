@@ -69,10 +69,9 @@ export default function PolicyDryRunPanel({
     if (initialAgentId) {
       setSelectedAgentId(initialAgentId);
     } else if (agents.length > 0 && !selectedAgentId) {
-      // Default to client1 if present, or first agent
-      const foundClient1 = agents.find((a) => a.id === 'client1');
-      setSelectedAgentId(foundClient1 ? 'client1' : agents[0].id);
+      setSelectedAgentId(agents[0]?.id || '');
     }
+
 
     // Initial score calculation
     if (initialPolicy) {

@@ -39,14 +39,19 @@ class AgentService(AbstractService[AgentRepository]):
             # Auto register if unknown agent sends heartbeat
             agent = Agent(
                 id=dto.agent_id,
-                hostname=f"agent-{dto.agent_id[:8]}",
-                ip_address=dto.ip_address,          # Lấy từ DTO
-                mac_address=dto.mac_address,         # Lấy từ DTO
+                hostname=dto.hostname or f"agent-{dto.agent_id[:8]}",
+                ip_address=dto.ip_address or "127.0.0.1",
+                mac_address=dto.mac_address or "00:00:00:00:00:00",
                 status=AgentStatus.ACTIVE
             )
             await self.repository.add(agent)
+            logger.info(f"[HEARTBEAT] Auto-registered new agent '{dto.agent_id}' (hostname: {agent.hostname})")
+        else:
+            if dto.hostname and agent.hostname != dto.hostname:
+                agent.hostname = dto.hostname
 
         # Cập nhật tất cả thông tin từ heartbeat
+
         agent.update_heartbeat(
             cpu=dto.cpu,
             ram=dto.ram,

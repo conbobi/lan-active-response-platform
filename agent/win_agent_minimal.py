@@ -8,7 +8,7 @@ import psutil
 import websockets
 
 AGENT_ID = os.getenv("AGENT_ID", "WIN-DEMO-01")
-MANAGER_URL = os.getenv("MANAGER_URL", "ws://192.168.30.105:8005/ws/agent")
+MANAGER_URL = os.getenv("MANAGER_URL", "wss://edr.alwayready.id.vn/ws/agent")
 INTERVAL = 0.5
 
 

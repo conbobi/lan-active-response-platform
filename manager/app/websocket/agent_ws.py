@@ -130,10 +130,14 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
 
 
 async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) -> Tuple[Optional[dict], str]:
-    dto = HeartbeatDTO(**data.get("payload", {}))
+    payload = data.get("payload", {})
+    if not payload.get("agent_id"):
+        payload["agent_id"] = agent_id
+    dto = HeartbeatDTO(**payload)
     active_agent_id = dto.agent_id or agent_id
     agent_svc = AgentService(session)
     await agent_svc.process_heartbeat(dto)
+
     pending_cmds = await command_dispatcher.pull_pending_commands(active_agent_id, session)
     response_payload = {
         "status": "ack",

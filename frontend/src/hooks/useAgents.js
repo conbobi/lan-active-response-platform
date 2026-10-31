@@ -3,16 +3,19 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { getAgents, isolateAgent, unisolateAgent } from '../api/agents';
 
-export const useAgents = () => {
+export const useAgents = ({ autoRefresh = true, refreshInterval = 5000 } = {}) => {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const fetchAgents = useCallback(async () => {
     try {
       const data = await getAgents();
-      setAgents(data);
+      setAgents(Array.isArray(data) ? data : []);
+      setError(null);
     } catch (e) {
       console.error('Failed to fetch agents', e);
+      setError(e);
     } finally {
       setLoading(false);
     }
@@ -20,9 +23,10 @@ export const useAgents = () => {
 
   useEffect(() => {
     fetchAgents();
-    const interval = setInterval(fetchAgents, 5000); // every 5 seconds
+    if (!autoRefresh) return;
+    const interval = setInterval(fetchAgents, refreshInterval);
     return () => clearInterval(interval);
-  }, [fetchAgents]);
+  }, [fetchAgents, autoRefresh, refreshInterval]);
 
   const handleIsolate = async (agentId) => {
     try {
@@ -46,5 +50,16 @@ export const useAgents = () => {
     }
   };
 
-  return { agents, loading, fetchAgents, refetch: fetchAgents, refreshAgents: fetchAgents, handleIsolate, handleUnisolate };
+  return {
+    agents,
+    loading,
+    error,
+    refresh: fetchAgents,
+    fetchAgents,
+    refetch: fetchAgents,
+    refreshAgents: fetchAgents,
+    handleIsolate,
+    handleUnisolate
+  };
 };
+
