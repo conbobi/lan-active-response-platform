@@ -9,17 +9,17 @@ import { FiActivity, FiRefreshCw, FiEye, FiCopy, FiCheck, FiShield, FiAlertTrian
 export function StatusBadge({ score }) {
   const s = Number(score || 0);
   let label = '🟢 Safe';
-  let badgeStyle = { backgroundColor: '#dcfce7', color: '#15803d', border: '1px solid #bbf7d0' };
+  let badgeStyle = { backgroundColor: 'var(--success-dim)', color: 'var(--success)', border: '1px solid rgba(63, 185, 80, 0.4)' };
 
   if (s >= 50) {
     label = '🔴 Incident';
-    badgeStyle = { backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fca5a5' };
+    badgeStyle = { backgroundColor: 'var(--critical-dim)', color: 'var(--critical)', border: '1px solid rgba(255, 123, 114, 0.4)' };
   } else if (s >= 30) {
     label = '🟠 Alert';
-    badgeStyle = { backgroundColor: '#ffedd5', color: '#c2410c', border: '1px solid #fed7aa' };
+    badgeStyle = { backgroundColor: 'var(--error-dim)', color: 'var(--error)', border: '1px solid rgba(248, 81, 73, 0.4)' };
   } else if (s >= 10) {
     label = '🟡 Warning';
-    badgeStyle = { backgroundColor: '#fef9c3', color: '#854d0e', border: '1px solid #fef08a' };
+    badgeStyle = { backgroundColor: 'var(--warning-dim)', color: 'var(--warning)', border: '1px solid rgba(210, 153, 34, 0.4)' };
   }
 
   return (
@@ -109,15 +109,15 @@ export default function RiskMonitor() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
-          <h1 style={{ fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FiActivity style={{ color: '#3b82f6' }} /> Risk Scoring Monitor (EMA & Debounce)
+          <h1 style={{ fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+            <FiActivity style={{ color: 'var(--primary)' }} /> Risk Scoring Monitor (EMA & Debounce)
           </h1>
-          <p style={{ color: '#64748b', fontSize: '14px', marginTop: '4px' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
             Giám sát điểm rủi ro thời gian thực đã qua lọc nhiễu Exponential Moving Average (alpha=0.35)
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
             Cập nhật: {lastRefreshed.toLocaleTimeString('vi-VN')}
           </span>
           <button
@@ -128,9 +128,10 @@ export default function RiskMonitor() {
               alignItems: 'center',
               gap: '6px',
               padding: '8px 14px',
-              borderRadius: '6px',
-              border: '1px solid #cbd5e1',
-              backgroundColor: '#fff',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-primary)',
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-primary)',
               cursor: 'pointer',
               fontWeight: 500,
               fontSize: '13px'
@@ -185,16 +186,16 @@ export default function RiskMonitor() {
       {/* Main Table */}
       <div
         style={{
-          backgroundColor: '#fff',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
+          backgroundColor: 'var(--bg-secondary)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-primary)',
           overflow: 'hidden',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+          boxShadow: 'var(--shadow-sm)'
         }}
       >
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
           <thead>
-            <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569' }}>
+            <tr style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-primary)', color: 'var(--text-secondary)' }}>
               <th style={{ padding: '12px 16px' }}>Agent ID</th>
               <th style={{ padding: '12px 16px', textAlign: 'right' }}>Raw Score</th>
               <th style={{ padding: '12px 16px', textAlign: 'right' }}>Smoothed (EMA)</th>
@@ -207,7 +208,7 @@ export default function RiskMonitor() {
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan="7" style={{ padding: '32px', textAlign: 'center', color: '#94a3b8' }}>
+                <td colSpan="7" style={{ padding: '32px', textAlign: 'center', color: 'var(--text-tertiary)' }}>
                   {loading ? 'Đang tải dữ liệu telemetry...' : 'Chưa có bản ghi điểm rủi ro nào'}
                 </td>
               </tr>
@@ -216,16 +217,16 @@ export default function RiskMonitor() {
                 <tr
                   key={r.id}
                   style={{
-                    borderBottom: '1px solid #f1f5f9',
+                    borderBottom: '1px solid var(--border-subtle)',
                     transition: 'background-color 0.15s'
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
-                  <td style={{ padding: '12px 16px', fontWeight: 600, fontFamily: 'monospace' }}>
+                  <td style={{ padding: '12px 16px', fontWeight: 600, fontFamily: 'monospace', color: 'var(--text-primary)' }}>
                     {r.agent_id}
                   </td>
-                  <td style={{ padding: '12px 16px', textAlign: 'right', color: '#64748b' }}>
+                  <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--text-secondary)' }}>
                     {Number(r.score).toFixed(2)}
                   </td>
                   <td
@@ -233,7 +234,7 @@ export default function RiskMonitor() {
                       padding: '12px 16px',
                       textAlign: 'right',
                       fontWeight: 700,
-                      color: (r.smoothed_score ?? r.score) > 30 ? '#dc2626' : '#1e293b'
+                      color: (r.smoothed_score ?? r.score) > 30 ? 'var(--critical)' : 'var(--text-primary)'
                     }}
                   >
                     {Number(r.smoothed_score ?? r.score).toFixed(2)}
@@ -241,7 +242,7 @@ export default function RiskMonitor() {
                   <td style={{ padding: '12px 16px' }}>
                     <FactorBreakdown factors={r.factors} />
                   </td>
-                  <td style={{ padding: '12px 16px', color: '#64748b', fontSize: '12px' }}>
+                  <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', fontSize: '12px' }}>
                     {new Date(r.timestamp).toLocaleString('vi-VN')}
                   </td>
                   <td style={{ padding: '12px 16px', textAlign: 'center' }}>
@@ -252,9 +253,10 @@ export default function RiskMonitor() {
                       onClick={() => setDetailRecord(r)}
                       style={{
                         padding: '4px 8px',
-                        borderRadius: '4px',
-                        border: '1px solid #cbd5e1',
-                        backgroundColor: '#fff',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-primary)',
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-primary)',
                         cursor: 'pointer',
                         fontSize: '12px',
                         display: 'inline-flex',
@@ -276,19 +278,19 @@ export default function RiskMonitor() {
       <div
         style={{
           marginTop: '24px',
-          backgroundColor: '#fff',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
+          backgroundColor: 'var(--bg-secondary)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-primary)',
           padding: '20px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+          boxShadow: 'var(--shadow-sm)'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FiActivity style={{ color: '#10b981' }} />
+          <h2 style={{ fontSize: '16px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+            <FiActivity style={{ color: 'var(--success)' }} />
             Biểu đồ so sánh Raw vs Smoothed Score (30 chu kỳ gần nhất — {chartAgent})
           </h2>
-          <span style={{ fontSize: '12px', color: '#64748b' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
             Đường xanh lá: Smoothed (EMA) | Đường tím nhạt: Raw telemetry score
           </span>
         </div>
@@ -304,30 +306,32 @@ export default function RiskMonitor() {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.6)',
+            backgroundColor: 'var(--bg-overlay)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
-            backdropFilter: 'blur(3px)'
+            backdropFilter: 'blur(4px)'
           }}
           onClick={() => setDetailRecord(null)}
         >
           <div
             style={{
-              backgroundColor: '#fff',
-              borderRadius: '12px',
+              backgroundColor: 'var(--bg-elevated)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--radius-lg)',
               padding: '24px',
               maxWidth: '650px',
               width: '90%',
               maxHeight: '85vh',
               overflowY: 'auto',
-              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)'
+              boxShadow: 'var(--shadow-lg)',
+              color: 'var(--text-primary)'
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-primary)', paddingBottom: '12px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
                 Chi tiết đánh giá rủi ro — {detailRecord.agent_id}
               </h3>
               <button
@@ -337,7 +341,7 @@ export default function RiskMonitor() {
                   background: 'transparent',
                   fontSize: '18px',
                   cursor: 'pointer',
-                  color: '#64748b'
+                  color: 'var(--text-secondary)'
                 }}
               >
                 ✕
@@ -345,23 +349,23 @@ export default function RiskMonitor() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-              <div style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '6px' }}>
-                <div style={{ fontSize: '12px', color: '#64748b' }}>Raw Score</div>
-                <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#475569' }}>
+              <div style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Raw Score</div>
+                <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
                   {Number(detailRecord.score).toFixed(2)}
                 </div>
               </div>
-              <div style={{ backgroundColor: '#f0fdf4', padding: '12px', borderRadius: '6px' }}>
-                <div style={{ fontSize: '12px', color: '#16a34a' }}>Smoothed Score (EMA)</div>
-                <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#15803d' }}>
+              <div style={{ backgroundColor: 'var(--success-dim)', border: '1px solid rgba(63, 185, 80, 0.3)', padding: '12px', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '12px', color: 'var(--success)' }}>Smoothed Score (EMA)</div>
+                <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--success)' }}>
                   {Number(detailRecord.smoothed_score ?? detailRecord.score).toFixed(2)}
                 </div>
               </div>
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '8px' }}>Yếu tố phát hiện (Factors)</h4>
-              <div style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '6px' }}>
+              <h4 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>Yếu tố phát hiện (Factors)</h4>
+              <div style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-sm)' }}>
                 <FactorBreakdown factors={detailRecord.factors} />
               </div>
             </div>

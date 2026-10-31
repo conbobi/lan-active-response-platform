@@ -52,18 +52,21 @@ function FalsePositiveBanner() {
     return (
         <div
             style={{
-                backgroundColor: '#fef2f2',
-                borderLeft: '4px solid #ef4444',
+                backgroundColor: 'var(--error-dim)',
+                borderLeft: '4px solid var(--error)',
+                borderTop: '1px solid rgba(248, 81, 73, 0.25)',
+                borderRight: '1px solid rgba(248, 81, 73, 0.25)',
+                borderBottom: '1px solid rgba(248, 81, 73, 0.25)',
                 padding: '12px 16px',
                 marginBottom: '16px',
-                borderRadius: '6px',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                borderRadius: 'var(--radius-sm)',
+                boxShadow: '0 0 12px var(--error-glow)'
             }}
         >
-            <div style={{ fontWeight: 700, color: '#991b1b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ fontWeight: 700, color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 ⚠️ Cảnh báo: Phát hiện False Positive trong hệ thống chấm điểm rủi ro
             </div>
-            <ul style={{ fontSize: '13px', color: '#b91c1c', marginTop: '4px', paddingLeft: '20px' }}>
+            <ul style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '4px', paddingLeft: '20px' }}>
                 {hasManagerFP && (
                     <li>• {fpData.details?.manager_ip_records ?? 0} bản ghi nhận diện nhầm kết nối Manager (172.19.0.3) là C2 Beaconing</li>
                 )}

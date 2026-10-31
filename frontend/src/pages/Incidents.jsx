@@ -165,7 +165,7 @@ export default function Incidents() {
       contained: { label: 'Contained', color: '#f97316', bg: 'rgba(249, 115, 22, 0.15)' },
       resolved: { label: 'Resolved', color: '#22c55e', bg: 'rgba(34, 197, 94, 0.15)' },
       false_positive: { label: 'False Positive', color: '#a855f7', bg: 'rgba(168, 85, 247, 0.15)' },
-      closed: { label: 'Closed', color: '#6b7280', bg: 'rgba(107, 114, 128, 0.15)' },
+      closed: { label: 'Closed', color: '#a8b3bf', bg: 'rgba(168, 179, 191, 0.15)' },
     };
 
     const datasets = [];

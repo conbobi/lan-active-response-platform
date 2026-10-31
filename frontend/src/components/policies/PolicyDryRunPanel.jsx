@@ -27,11 +27,11 @@ import {
 } from 'react-icons/fi';
 
 const getScoreSeverity = (score) => {
-  if (score >= 85) return { label: 'Critical', color: '#991b1b', bg: 'rgba(153, 27, 27, 0.12)' };
-  if (score >= 70) return { label: 'Severe', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.12)' };
-  if (score >= 50) return { label: 'High', color: '#f97316', bg: 'rgba(249, 115, 22, 0.12)' };
-  if (score >= 30) return { label: 'Moderate', color: '#eab308', bg: 'rgba(234, 179, 8, 0.12)' };
-  return { label: 'Safe', color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)' };
+  if (score >= 85) return { label: 'Critical', color: 'var(--critical)', bg: 'var(--critical-dim)' };
+  if (score >= 70) return { label: 'Severe', color: 'var(--error)', bg: 'var(--error-dim)' };
+  if (score >= 50) return { label: 'High', color: '#f97316', bg: 'rgba(249, 115, 22, 0.15)' };
+  if (score >= 30) return { label: 'Moderate', color: 'var(--warning)', bg: 'var(--warning-dim)' };
+  return { label: 'Safe', color: 'var(--success)', bg: 'var(--success-dim)' };
 };
 
 export default function PolicyDryRunPanel({

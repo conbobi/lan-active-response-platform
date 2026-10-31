@@ -160,51 +160,61 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
   // 7. Loading skeleton
   if (loading) {
     return (
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 mb-6 animate-pulse">
-        <div className="h-24 bg-gray-200 rounded mb-4" />
-        <div className="h-6 bg-gray-200 rounded w-1/2 mx-auto" />
-      </div>
+      <div className="skeleton" style={{ height: '140px', borderRadius: 'var(--radius-lg)', marginBottom: '1.5rem' }} />
     );
   }
 
   // 8. Config theo level
   const config = {
-    safe: { icon: '🟢', color: 'text-green-600', bg: 'bg-green-50', text: 'HỆ THỐNG AN TOÀN' },
-    warning: { icon: '🟡', color: 'text-yellow-600', bg: 'bg-yellow-50', text: 'CẦN CHÚ Ý' },
-    critical: { icon: '🔴', color: 'text-red-600', bg: 'bg-red-50', text: 'NGUY HIỂM' },
+    safe: { icon: '🟢', color: 'var(--success)', bg: 'var(--success-dim)', border: 'rgba(63, 185, 80, 0.4)', text: 'HỆ THỐNG AN TOÀN' },
+    warning: { icon: '🟡', color: 'var(--warning)', bg: 'var(--warning-dim)', border: 'rgba(210, 153, 34, 0.4)', text: 'CẦN CHÚ Ý' },
+    critical: { icon: '🔴', color: 'var(--critical)', bg: 'var(--critical-dim)', border: 'rgba(255, 123, 114, 0.5)', text: 'NGUY HIỂM' },
   }[level];
 
   return (
-    <div className={`rounded-xl shadow-sm border-2 p-8 mb-6 transition-all duration-500 ${config.bg} ${level === 'critical' ? 'border-red-500 animate-pulse' : 'border-gray-200'
-      }`}>
+    <div style={{
+      background: 'var(--bg-secondary)',
+      border: `1px solid ${config.border}`,
+      boxShadow: level === 'critical' ? '0 0 16px var(--critical-glow)' : 'var(--shadow-sm)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '2rem',
+      marginBottom: '1.5rem',
+      transition: 'all 0.3s ease',
+    }}>
       <div className="text-center">
-        <div className={`text-6xl mb-4 ${level === 'critical' ? 'animate-bounce' : ''}`}>
+        <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>
           {config.icon}
         </div>
-        <div className={`text-3xl font-bold mb-2 ${config.color}`}>
+        <div style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '0.5rem', color: config.color, letterSpacing: '-0.02em' }}>
           {config.text}
         </div>
-        <div className="text-gray-500 mb-4">
-          <InfoTooltip {...TOOLTIPS.HealthScore}>Health Score</InfoTooltip>: <span className="font-semibold text-gray-900 text-xl">{healthScore}</span>/100
+        <div style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.95rem' }}>
+          <InfoTooltip {...TOOLTIPS.HealthScore}>Health Score</InfoTooltip>: <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '1.25rem' }}>{healthScore}</span>/100
         </div>
 
         {/* Agents summary */}
-        <div className="flex justify-center gap-6 text-sm mb-4">
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', fontSize: '0.875rem', marginBottom: '1rem' }}>
           <div>
-            <span className="font-bold text-green-600">{aliveAgents.length}</span>
-            <span className="text-gray-500 ml-1">agents alive</span>
+            <span style={{ fontWeight: 700, color: 'var(--success)' }}>{aliveAgents.length}</span>
+            <span style={{ color: 'var(--text-secondary)', marginLeft: '0.25rem' }}>agents alive</span>
           </div>
           {offlineAgents > 0 && (
             <div>
-              <span className="font-bold text-gray-400">{offlineAgents}</span>
-              <span className="text-gray-500 ml-1">offline</span>
+              <span style={{ fontWeight: 700, color: 'var(--text-tertiary)' }}>{offlineAgents}</span>
+              <span style={{ color: 'var(--text-secondary)', marginLeft: '0.25rem' }}>offline</span>
             </div>
           )}
         </div>
 
         {unresolvedCritical.length > 0 && (
-          <div className="bg-red-100 border border-red-300 rounded-lg p-3 mb-4">
-            <div className="text-red-800 font-semibold">
+          <div style={{
+            background: 'var(--critical-dim)',
+            border: '1px solid rgba(255, 123, 114, 0.35)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '0.75rem 1rem',
+            marginBottom: '1rem',
+          }}>
+            <div style={{ color: 'var(--critical)', fontWeight: 600, fontSize: '0.9rem' }}>
               🚨 {unresolvedCritical.length} critical attack{unresolvedCritical.length > 1 ? 's' : ''} chưa xử lý
             </div>
           </div>
@@ -212,8 +222,8 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
 
         {/* Critical Incidents Context List */}
         {unresolvedCritical.length > 0 && (
-          <div className="mt-4 space-y-2 text-left">
-            <div className="text-red-800 font-semibold mb-2 text-sm">
+          <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', textAlign: 'left' }}>
+            <div style={{ color: 'var(--critical)', fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.875rem' }}>
               ⚠️ Cần xử lý NGAY:
             </div>
             {unresolvedCritical.slice(0, 3).map(incident => {
@@ -228,26 +238,34 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
 
               return (
                 <div key={incident.id}
-                  className="bg-white border border-red-300 rounded-lg p-3 
-                                hover:bg-red-50 hover:border-red-500 cursor-pointer transition-all shadow-sm"
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-primary)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '0.75rem 1rem',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                   onClick={() => navigate(`/incidents/${incident.id}`)}>
-                  <div className="flex justify-between items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xl">🚨</span>
-                        <span className="font-bold text-red-900">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                        <span>🚨</span>
+                        <span style={{ fontWeight: 700, color: 'var(--critical)', fontSize: '0.875rem' }}>
                           {agentId}
                         </span>
-                        <span className="text-xs text-gray-500">
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
                           · {timeAgo}
                         </span>
                       </div>
-                      <div className="text-sm text-red-800 font-medium ml-7 truncate">
+                      <div style={{ fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         Attack: {attackType}
                       </div>
-                      <div className="text-xs text-gray-600 ml-7 mt-1">
-                        Score: <strong>{score}/100</strong>
-                        {isIsolated && <span className="ml-2 text-green-700 font-semibold">· 🛡 AUTO-ISOLATED</span>}
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                        Score: <strong style={{ color: 'var(--text-primary)' }}>{score}/100</strong>
+                        {isIsolated && <span style={{ marginLeft: '0.5rem', color: 'var(--success)', fontWeight: 600 }}>· 🛡 AUTO-ISOLATED</span>}
                       </div>
                     </div>
                     <button
@@ -255,7 +273,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
                         e.stopPropagation();
                         navigate(`/incidents/${incident.id}`);
                       }}
-                      className="text-blue-600 hover:underline text-sm font-semibold whitespace-nowrap">
+                      style={{ color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
                       Xem →
                     </button>
                   </div>
@@ -263,7 +281,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
               );
             })}
             {unresolvedCritical.length > 3 && (
-              <div className="text-center text-sm text-gray-600 py-2">
+              <div style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '0.5rem 0' }}>
                 và {unresolvedCritical.length - 3} sự cố khác...
               </div>
             )}
@@ -271,7 +289,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
         )}
 
         {/* Helper text */}
-        <div className="text-xs text-gray-400 mt-4">
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '1rem' }}>
           (Chỉ tính agents đang hoạt động + incidents trong 24h)
         </div>
       </div>

@@ -97,13 +97,13 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
   if (threats.length === 0) {
     return (
       <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-        <h3 style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1rem' }}>
+        <h3 style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
           🚨 Recent Threats
         </h3>
-        <div style={{ textAlign: 'center', padding: '2rem 0', color: '#16a34a' }}>
+        <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--success)' }}>
           <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✅</div>
           <div style={{ fontWeight: 600 }}>Không có mối đe dọa</div>
-          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
             Hệ thống đang an toàn trong 24h qua
           </div>
         </div>
@@ -114,12 +114,12 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
   return (
     <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h3 style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+        <h3 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
           🚨 Recent Threats
         </h3>
         <button
           onClick={() => navigate('/incidents')}
-          style={{ fontSize: '0.75rem', color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
+          style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
           Xem tất cả →
         </button>
       </div>
@@ -130,10 +130,10 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
           const severity = score >= 85 ? 'critical' : score >= 50 ? 'high' : 'medium';
           const attackType = extractAttackType(incident);
           
-          const bgColor = severity === 'critical' ? '#fef2f2' :
-                         severity === 'high' ? '#fff7ed' : '#fefce8';
-          const borderColor = severity === 'critical' ? '#dc2626' :
-                             severity === 'high' ? '#ea580c' : '#ca8a04';
+          const bgColor = severity === 'critical' ? 'var(--critical-dim)' :
+                         severity === 'high' ? 'var(--error-dim)' : 'var(--warning-dim)';
+          const borderColor = severity === 'critical' ? 'var(--critical)' :
+                             severity === 'high' ? 'var(--error)' : 'var(--warning)';
           
           return (
             <div
@@ -149,7 +149,7 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
               }}
               onMouseEnter={e => {
                 e.currentTarget.style.transform = 'translateX(4px)';
-                e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.05)';
+                e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
               }}
               onMouseLeave={e => {
                 e.currentTarget.style.transform = 'translateX(0)';
@@ -158,10 +158,10 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)' }}>
                     {incident.agent_id} · {getTimeAgo(incident.created_at || incident.createdAt)}
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '0.2rem', 
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem', 
                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {attackType}
                   </div>
@@ -172,7 +172,7 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
                   padding: '0.2rem 0.5rem',
                   borderRadius: '4px',
                   background: borderColor,
-                  color: 'white',
+                  color: 'var(--text-inverse)',
                   marginLeft: '0.5rem'
                 }}>
                   {score}

@@ -108,8 +108,8 @@ export default function Sidebar() {
       {/* Sidebar Footer */}
       <div className="sidebar-footer" style={{ marginTop: 'auto', paddingTop: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-          <FiSliders size={14} color="#64748b" />
-          <span style={{ fontSize: '0.75rem', color: '#64748b' }}>LARP SOC Platform v2.0</span>
+          <FiSliders size={14} color="var(--text-tertiary)" />
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>LARP SOC Platform v2.0</span>
         </div>
       </div>
     </nav>

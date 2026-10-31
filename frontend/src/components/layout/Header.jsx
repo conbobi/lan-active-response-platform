@@ -14,7 +14,7 @@ export default function Header() {
         <button className="header-icon-btn" title="Search"><FiSearch size={16} /></button>
         <button className="header-icon-btn" title="Notifications" style={{ position: 'relative' }}>
           <FiBell size={16} />
-          <span style={{ position: 'absolute', top: 6, right: 6, width: 7, height: 7, background: 'var(--error)', borderRadius: '50%', border: '1.5px solid #fff' }} />
+          <span style={{ position: 'absolute', top: 6, right: 6, width: 7, height: 7, background: 'var(--error)', borderRadius: '50%', border: '1.5px solid var(--bg-secondary)' }} />
         </button>
         <button className="header-icon-btn" title="Settings"><FiSettings size={16} /></button>
         <div className="header-avatar" title="Admin">AD</div>

@@ -1,24 +1,31 @@
 import React, { memo } from 'react';
 import { FiXCircle, FiLayers, FiAlertTriangle, FiLock } from 'react-icons/fi';
 
-const SEVERITY_COLORS = {
-  critical: { bg: 'var(--critical-dim)', color: 'var(--critical)', border: 'var(--critical)' },
-  high:     { bg: 'var(--error-dim)',    color: 'var(--error)',    border: 'var(--error)' },
-  medium:   { bg: 'var(--warning-dim)',  color: 'var(--warning)',  border: 'var(--warning)' },
-  low:      { bg: 'var(--success-dim)',  color: 'var(--success)',  border: 'var(--success)' },
+// ---------------------------------------------------------------------------
+// PPL (Protected Process Light) — Windows refuses termination
+// ---------------------------------------------------------------------------
+const PPL_REGEX =
+  /csrss\.exe|wininit\.exe|winlogon\.exe|services\.exe|smss\.exe|lsass\.exe|^System$|^\[?System/i;
+
+// System processes (killable but should look "system")
+const SYSTEM_REGEX =
+  /svchost\.exe|dwm\.exe|taskhostw\.exe|RuntimeBroker\.exe|spoolsv\.exe|audiodg\.exe|ctfmon\.exe|fontdrvhost\.exe|^System$|^\[System/i;
+
+// User-facing processes
+const USER_REGEX =
+  /notepad\.exe|msedge\.exe|chrome\.exe|firefox\.exe|Code\.exe|code\.exe|electron\.exe|powershell\.exe|cmd\.exe/i;
+
+// ---------------------------------------------------------------------------
+// HARDCODED high-contrast colors (do NOT rely on CSS vars — theme may be dim)
+// ---------------------------------------------------------------------------
+const COLOR = {
+  textBright: '#f1f5f9',    // near-white — for PPL + primary names
+  textNormal: '#e5e7eb',    // light gray — for user/system names
+  textMuted: '#9ca3af',    // medium gray — for icons
+  textError: '#ef4444',
+  textPrimary: '#60a5fa',   // light blue
+  textPplIcon: '#c4b5fd',   // light purple icon
 };
-
-function getSeverity(proc) {
-  if (proc.is_suspicious) return 'high';
-  const score = proc.risk_score || proc.score || 0;
-  if (score >= 85) return 'critical';
-  if (score >= 70) return 'high';
-  if (score >= 50) return 'medium';
-  return 'low';
-}
-
-// PPL (Protected Process Light) — Windows will refuse termination
-const PPL_REGEX = /csrss\.exe|wininit\.exe|winlogon\.exe|services\.exe|smss\.exe|lsass\.exe|^System$|^\[?System/i;
 
 function TreeNodeInner({
   node,
@@ -36,42 +43,60 @@ function TreeNodeInner({
   const isExpanded = expandedPids ? expandedPids.has(node.pid) : false;
   const indent = level * 18;
 
-  const isUserProcess = /explorer\.exe|notepad\.exe|msedge\.exe|chrome\.exe|firefox\.exe|Code\.exe|code\.exe/i.test(node.name || '');
-  const isSystemProcess = /svchost\.exe|csrss\.exe|wininit\.exe|winlogon\.exe|services\.exe|smss\.exe|lsass\.exe|System|\[System/i.test(node.name || '');
-  const isProtected = PPL_REGEX.test(node.name || '');
+  const name = node.name || '';
+  const isUserProcess = USER_REGEX.test(name);
+  const isSystemProcess = SYSTEM_REGEX.test(name);
+  const isProtected = PPL_REGEX.test(name);
 
   const isFlagged = node.is_suspicious || isUserProcess;
-  // Kill buttons: hidden for PPL. Shown for flagged/user always. Shown for others ONLY in "All" tab (allowKillAll).
   const showActions = !isProtected && (isFlagged || allowKillAll);
 
-  // Visual identity
-  let nameColor = 'var(--text-primary)';
+  // -------------------------------------------------------------------------
+  // Visual identity — HARDCODED for guaranteed contrast
+  // -------------------------------------------------------------------------
+  let nameColor = COLOR.textNormal;
   let nameWeight = '600';
   let rowBg = 'transparent';
   let rowBorder = 'transparent';
   let icon = '·';
-  let iconColor = 'var(--text-tertiary)';
+  let iconColor = COLOR.textMuted;
 
   if (node.is_suspicious) {
-    nameColor = 'var(--error)';
+    nameColor = COLOR.textError;
     nameWeight = '700';
-    rowBg = 'rgba(239, 68, 68, 0.06)';
-    rowBorder = 'rgba(239, 68, 68, 0.35)';
+    rowBg = 'rgba(239, 68, 68, 0.10)';
+    rowBorder = 'rgba(239, 68, 68, 0.45)';
     icon = '⚠';
-    iconColor = 'var(--error)';
+    iconColor = COLOR.textError;
   } else if (isUserProcess) {
-    nameColor = 'var(--primary)';
+    nameColor = COLOR.textPrimary;
     nameWeight = '600';
-    rowBg = 'rgba(79, 172, 254, 0.06)';
-    rowBorder = 'rgba(79, 172, 254, 0.25)';
+    rowBg = 'rgba(79, 172, 254, 0.10)';
+    rowBorder = 'rgba(79, 172, 254, 0.35)';
     icon = '◉';
-    iconColor = 'var(--primary)';
+    iconColor = COLOR.textPrimary;
+  } else if (isProtected) {
+    // PPL — brightest + subtle purple tint to stand out from dark bg
+    nameColor = COLOR.textBright;
+    nameWeight = '600';
+    rowBg = 'rgba(139, 92, 246, 0.10)';
+    rowBorder = 'rgba(139, 92, 246, 0.28)';
+    icon = '◆';
+    iconColor = COLOR.textPplIcon;
   } else if (isSystemProcess) {
-    nameColor = 'var(--text-secondary)';
+    // System (killable) — light gray, readable
+    nameColor = COLOR.textNormal;
     nameWeight = '500';
     icon = '◆';
-    iconColor = 'var(--text-tertiary)';
+    iconColor = COLOR.textMuted;
   }
+
+  const PPL_BADGE = {
+    bg: 'rgba(139, 92, 246, 0.28)',
+    fg: '#ddd6fe',
+    border: 'rgba(167, 139, 250, 0.75)',
+    glow: '0 0 10px rgba(139, 92, 246, 0.45)',
+  };
 
   return (
     <div style={{ marginLeft: indent }}>
@@ -89,93 +114,160 @@ function TreeNodeInner({
           transition: 'all 0.15s ease',
           cursor: hasChildren ? 'pointer' : 'default',
           position: 'relative',
+          opacity: 1,
         }}
         onMouseEnter={(e) => {
-          if (!rowBg || rowBg === 'transparent') e.currentTarget.style.background = 'var(--bg-tertiary)';
+          if (!rowBg || rowBg === 'transparent') {
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+          }
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.background = rowBg;
         }}
         onClick={() => hasChildren && onToggle && onToggle(node.pid)}
       >
-        {/* Expand icon */}
-        <span style={{
-          width: '14px', display: 'inline-flex', alignItems: 'center',
-          justifyContent: 'center', color: iconColor,
-          fontSize: '10px', fontWeight: 700, flexShrink: 0,
-        }}>
+        {/* Caret */}
+        <span
+          style={{
+            width: '14px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: iconColor,
+            fontSize: '10px',
+            fontWeight: 700,
+            flexShrink: 0,
+            opacity: 1,
+          }}
+        >
           {hasChildren ? (isExpanded ? '▼' : '▶') : '·'}
         </span>
 
-        {/* Process icon */}
-        <span style={{ color: iconColor, fontSize: '11px', flexShrink: 0, fontWeight: 700 }}>
+        {/* Icon */}
+        <span
+          style={{
+            color: iconColor,
+            fontSize: '11px',
+            flexShrink: 0,
+            fontWeight: 700,
+            opacity: 1,
+          }}
+        >
           {icon}
         </span>
 
-        {/* Process name */}
-        <span style={{
-          fontFamily: 'var(--font-mono)', fontSize: '0.8rem',
-          fontWeight: nameWeight, color: nameColor, flexShrink: 0,
-        }}>
-          {node.name || 'unknown'}
+        {/* Name — HARDCODED bright color */}
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.8rem',
+            fontWeight: nameWeight,
+            color: nameColor,
+            flexShrink: 0,
+            opacity: 1,
+            textShadow: isProtected ? '0 0 8px rgba(139, 92, 246, 0.35)' : 'none',
+          }}
+        >
+          {name || 'unknown'}
         </span>
 
-        {/* PID badge */}
-        <span style={{
-          fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
-          padding: '0.1rem 0.4rem', background: 'var(--mono-bg)',
-          color: 'var(--mono-text)', border: '1px solid var(--mono-border)',
-          borderRadius: 'var(--radius-sm)', flexShrink: 0,
-        }}>
+        {/* PID badge — force bright */}
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.7rem',
+            padding: '0.1rem 0.4rem',
+            background: 'rgba(255, 255, 255, 0.06)',
+            color: '#e2e8f0',
+            border: '1px solid rgba(255, 255, 255, 0.15)',
+            borderRadius: 'var(--radius-sm)',
+            flexShrink: 0,
+            opacity: 1,
+          }}
+        >
           PID {node.pid}
         </span>
 
-        {/* PPID */}
+        {/* PPID — bright enough to read */}
         {node.parent_pid !== null && node.parent_pid !== undefined && (
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.68rem', color: 'var(--text-tertiary)', flexShrink: 0 }}>
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.68rem',
+              color: '#94a3b8',
+              flexShrink: 0,
+              opacity: 1,
+            }}
+          >
             PPID {node.parent_pid}
           </span>
         )}
 
         {/* Suspicious badge */}
         {node.is_suspicious && (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: '0.2rem',
-            padding: '0.1rem 0.45rem', fontSize: '0.65rem', fontWeight: 700,
-            background: 'var(--error-dim)', color: 'var(--error)',
-            border: '1px solid var(--error)', borderRadius: 'var(--radius-full)',
-            textTransform: 'uppercase', letterSpacing: '0.03em',
-            flexShrink: 0, boxShadow: '0 0 8px var(--error-glow)',
-          }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.2rem',
+              padding: '0.1rem 0.45rem',
+              fontSize: '0.65rem',
+              fontWeight: 700,
+              background: 'var(--error-dim)',
+              color: 'var(--error)',
+              border: '1px solid var(--error)',
+              borderRadius: 'var(--radius-full)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.03em',
+              flexShrink: 0,
+              boxShadow: '0 0 8px var(--error-glow)',
+            }}
+          >
             <FiAlertTriangle size={9} /> Suspicious
           </span>
         )}
 
-        {/* PPL badge */}
+        {/* PPL badge — bright purple */}
         {isProtected && (
           <span
             title="Protected Process Light (PPL) — Windows refuses termination"
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: '0.2rem',
-              padding: '0.1rem 0.45rem', fontSize: '0.62rem', fontWeight: 700,
-              background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)',
-              border: '1px solid var(--border-primary)', borderRadius: 'var(--radius-full)',
-              textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+              padding: '0.12rem 0.55rem',
+              fontSize: '0.65rem',
+              fontWeight: 700,
+              background: PPL_BADGE.bg,
+              color: PPL_BADGE.fg,
+              border: `1px solid ${PPL_BADGE.border}`,
+              borderRadius: 'var(--radius-full)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              flexShrink: 0,
+              boxShadow: PPL_BADGE.glow,
+              opacity: 1,
             }}
           >
-            <FiLock size={9} /> PPL
+            <FiLock size={10} /> PPL
           </span>
         )}
 
-        {/* Cmdline */}
+        {/* Executable path — force readable gray */}
         {node.exe && (
           <span
             title={node.exe}
             style={{
-              fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
-              color: 'var(--text-tertiary)', marginLeft: 'auto',
-              maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap', flexShrink: 1,
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.7rem',
+              color: '#94a3b8',
+              marginLeft: 'auto',
+              maxWidth: '280px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              flexShrink: 1,
+              opacity: 1,
             }}
           >
             {node.exe}
@@ -184,37 +276,56 @@ function TreeNodeInner({
 
         {/* Kill actions */}
         {showActions && (
-          <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.5rem', flexShrink: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.25rem',
+              marginLeft: '0.5rem',
+              flexShrink: 0,
+            }}
+          >
             <button
-              onClick={(e) => { e.stopPropagation(); onKillPid && onKillPid(node); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onKillPid && onKillPid(node);
+              }}
               disabled={killing}
               title={`Kill PID ${node.pid}`}
               style={{
                 padding: '0.2rem 0.4rem',
                 background: isFlagged ? 'var(--bg-elevated)' : 'transparent',
-                color: isFlagged ? 'var(--warning)' : 'var(--text-tertiary)',
+                color: isFlagged ? 'var(--warning)' : '#94a3b8',
                 border: `1px solid ${isFlagged ? 'var(--border-primary)' : 'transparent'}`,
                 borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer', fontSize: '0.7rem',
-                display: 'inline-flex', alignItems: 'center', gap: '0.15rem',
-                opacity: isFlagged ? 1 : 0.7,
+                cursor: 'pointer',
+                fontSize: '0.7rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.15rem',
+                opacity: isFlagged ? 1 : 0.8,
               }}
             >
               <FiXCircle size={10} />
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); onKillTree && onKillTree(node); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onKillTree && onKillTree(node);
+              }}
               disabled={killing}
               title={`Kill tree PID ${node.pid}`}
               style={{
                 padding: '0.2rem 0.4rem',
                 background: isFlagged ? 'var(--error-dim)' : 'transparent',
-                color: isFlagged ? 'var(--error)' : 'var(--text-tertiary)',
+                color: isFlagged ? 'var(--error)' : '#94a3b8',
                 border: `1px solid ${isFlagged ? 'var(--error)' : 'transparent'}`,
                 borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer', fontSize: '0.7rem',
-                display: 'inline-flex', alignItems: 'center', gap: '0.15rem',
-                opacity: isFlagged ? 1 : 0.7,
+                cursor: 'pointer',
+                fontSize: '0.7rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.15rem',
+                opacity: isFlagged ? 1 : 0.8,
               }}
             >
               <FiLayers size={10} />
@@ -223,13 +334,15 @@ function TreeNodeInner({
         )}
       </div>
 
-      {/* ===== Children ===== */}
+      {/* Children */}
       {isExpanded && hasChildren && (
-        <div style={{
-          borderLeft: '1px dashed var(--border-subtle)',
-          marginLeft: '7px',
-          paddingLeft: '4px',
-        }}>
+        <div
+          style={{
+            borderLeft: '1px dashed var(--border-subtle)',
+            marginLeft: '7px',
+            paddingLeft: '4px',
+          }}
+        >
           {node.children.map((child) => (
             <TreeNode
               key={child.pid}
