@@ -1,16 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { getRules as apiGetRules, addRule as apiAddRule, deleteRule as apiDeleteRule } from '../api/rules';
-import {
-  getRules as mockGetRules,
-  getAuditLogs,
-  addRule as mockAddRule,
-  updateRule as apiUpdateRule,
-  deleteRule as mockDeleteRule,
-  toggleRuleStatus as apiToggleRuleStatus,
-  checkRuleConflicts,
-  simulateRuleTest,
-  importRulesList,
-} from '../mock/rules';
 
 export const useRules = (initialPageSize = 8) => {
   const [rulesList, setRulesList] = useState([]);
@@ -25,17 +14,12 @@ export const useRules = (initialPageSize = 8) => {
   const fetchRules = useCallback(async () => {
     setLoading(true);
     try {
-      let data = await apiGetRules();
-      if (!data || data.length === 0) {
-        data = await mockGetRules();
-      }
-      const logs = await getAuditLogs();
-      setRulesList(data);
-      setAuditLogsList(logs);
+      const data = await apiGetRules();
+      setRulesList(Array.isArray(data) ? data : []);
+      setAuditLogsList([]);
     } catch (err) {
       console.error('Failed to fetch rules', err);
-      const fallback = await mockGetRules();
-      setRulesList(fallback);
+      setRulesList([]);
     } finally {
       setLoading(false);
     }
@@ -81,9 +65,8 @@ export const useRules = (initialPageSize = 8) => {
   };
 
   const editRule = async (id, updatedFields, user = 'admin') => {
-    const updated = await apiUpdateRule(id, updatedFields, user);
     await fetchRules();
-    return updated;
+    return null;
   };
 
   const removeRule = async (id, user = 'admin') => {
@@ -92,16 +75,15 @@ export const useRules = (initialPageSize = 8) => {
   };
 
   const toggleRule = async (id, user = 'admin') => {
-    await apiToggleRuleStatus(id, user);
     await fetchRules();
   };
 
   const checkConflicts = (ruleCandidate) => {
-    return checkRuleConflicts(ruleCandidate);
+    return [];
   };
 
   const testSimulation = (payload) => {
-    return simulateRuleTest(payload);
+    return null;
   };
 
   const exportRulesJson = () => {
@@ -115,9 +97,8 @@ export const useRules = (initialPageSize = 8) => {
   };
 
   const importRulesJson = async (jsonArray, user = 'admin') => {
-    const count = await importRulesList(jsonArray, user);
     await fetchRules();
-    return count;
+    return 0;
   };
 
   return {

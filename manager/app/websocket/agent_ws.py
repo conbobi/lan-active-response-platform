@@ -37,6 +37,7 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
     
     proc_repo = ProcessInfoRepository(session)
     await proc_repo.delete_by_agent(target_agent_id)
+    await session.flush()
     
     now_dt = datetime.now(timezone.utc)
     count = 0

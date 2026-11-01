@@ -290,11 +290,21 @@ Access the API documentation
 
 Open http://localhost:8005/docs for Swagger UI.
 
-Run malware simulation scripts (for testing)
-
 bash
 docker-compose exec client1 bash /app/malware_sim/backdoor_sim.sh &
 Or any other script in /app/malware_sim/.
+
+### Seed Default Response Policies
+Seed graduated containment policies (Block IP, Isolate Host, Isolate Group):
+```bash
+make seed-policies
+# Or directly:
+docker exec -i larp-db-1 psql -U larp -d larpdb < manager/scripts/seed_policies.sql
+```
+Verify with:
+```bash
+curl -s http://localhost:8005/api/v1/policies/
+```
 
 API Documentation
 The backend exposes a comprehensive REST API under /api/v1. Main endpoint groups:

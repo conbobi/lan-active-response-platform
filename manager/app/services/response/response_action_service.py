@@ -184,3 +184,19 @@ class ResponseActionService:
 
     async def list_actions_by_incident(self, incident_id: str) -> List[ResponseAction]:
         return await self.action_repo.get_by_incident(incident_id)
+
+    async def list_all_actions(
+        self,
+        agent_id: Optional[str] = None,
+        action_type: Optional[str] = None,
+        status: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> List[ResponseAction]:
+        return await self.action_repo.list_all(
+            agent_id=agent_id,
+            action_type=action_type,
+            status=status,
+            skip=skip,
+            limit=limit
+        )

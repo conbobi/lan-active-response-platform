@@ -20,6 +20,25 @@ class ResponseActionRepository(SqlAlchemyRepository[ResponseAction]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_all(
+        self,
+        agent_id: Optional[str] = None,
+        action_type: Optional[str] = None,
+        status: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> List[ResponseAction]:
+        stmt = select(ResponseAction)
+        if agent_id:
+            stmt = stmt.where(ResponseAction.agent_id == agent_id)
+        if action_type:
+            stmt = stmt.where(ResponseAction.action_type == action_type)
+        if status:
+            stmt = stmt.where(ResponseAction.status == status)
+        stmt = stmt.order_by(ResponseAction.created_at.desc()).offset(skip).limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_by_agent(self, agent_id: str, limit: int = 50, offset: int = 0) -> List[ResponseAction]:
         stmt = (
             select(ResponseAction)

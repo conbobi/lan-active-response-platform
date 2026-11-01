@@ -45,6 +45,27 @@ async def create_and_apply_action(
     )
 
 
+@router.get("/actions", response_model=List[ResponseActionResponse], include_in_schema=False)
+@router.get("/actions/", response_model=List[ResponseActionResponse])
+async def list_all_actions(
+    agent_id: Optional[str] = Query(None, description="Filter by agent ID"),
+    action_type: Optional[str] = Query(None, description="Filter by action type"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db)
+):
+    """Lấy danh sách tất cả các response actions trong hệ thống."""
+    service = ResponseActionService(db)
+    return await service.list_all_actions(
+        agent_id=agent_id,
+        action_type=action_type,
+        status=status,
+        skip=skip,
+        limit=limit
+    )
+
+
 @router.get("/actions/{action_id}", response_model=ResponseActionResponse)
 async def get_response_action(
     action_id: str,
