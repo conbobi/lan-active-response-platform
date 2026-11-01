@@ -15,7 +15,7 @@ const CHANNEL_OPTIONS = [
   { value: 'telegram', label: 'Telegram Bot API' },
 ];
 
-export default function Notifications() {
+export default function Notifications({ embedded = false }) {
   const { configs, logs, loading, refreshNotifications, createConfig } = useNotifications();
 
   const [activeTab, setActiveTab] = useState('configs');
@@ -54,20 +54,38 @@ export default function Notifications() {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">SOC Notifications & Dispatch</h1>
-          <p className="page-subtitle">Configure real-time alerting notification channels, webhooks, and review dispatch logs</p>
+      {!embedded ? (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">SOC Notifications & Dispatch</h1>
+            <p className="page-subtitle">Configure real-time alerting notification channels, webhooks, and review dispatch logs</p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshNotifications}>
+              Refresh
+            </Button>
+            <Button variant="primary" iconLeft={<FiPlus size={15} />} onClick={() => setModalOpen(true)}>
+              Add Notification Channel
+            </Button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshNotifications}>
-            Refresh
-          </Button>
-          <Button variant="primary" iconLeft={<FiPlus size={15} />} onClick={() => setModalOpen(true)}>
-            Add Notification Channel
-          </Button>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              Outbound Alert Channels, Webhooks & Log Audits ({configs.length} active)
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={14} />} onClick={refreshNotifications}>
+              Refresh
+            </Button>
+            <Button variant="primary" size="sm" iconLeft={<FiPlus size={14} />} onClick={() => setModalOpen(true)}>
+              Add Channel
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Tabs */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>

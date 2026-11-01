@@ -77,35 +77,11 @@ export const getFlows = async (params = {}) => {
       return flowList.map(mapFlow).filter(Boolean);
     }
     if (Array.isArray(data)) {
-      return [];
-    }
+    return [];
   } catch (err) {
-    console.error('API Error in getFlows, falling back to simulated data:', err);
+    console.error('API Error in getFlows:', err);
+    throw err;
   }
-
-  // Client fallback when API is unreachable
-  const now = Date.now();
-  const count = 18;
-  const targetAgent = params?.agent_id || 'all';
-  return Array.from({ length: count }, (_, i) => {
-    const ts = new Date(now - (count - 1 - i) * 15000).toISOString();
-    const wave = (i % 5) * 5;
-    const isAttacker = targetAgent === 'attacker';
-    const syn = isAttacker ? 55 + wave + Math.floor(Math.random() * 20) : 22 + wave + Math.floor(Math.random() * 12);
-    const udp = isAttacker ? 35 + wave + Math.floor(Math.random() * 15) : 7 + Math.floor(Math.random() * 8);
-    return {
-      id: `flow-gen-${i}`,
-      agent_id: targetAgent,
-      src_ip: isAttacker ? '192.168.10.99' : '192.168.10.11',
-      dst_ip: '192.168.10.1',
-      protocol: i % 3 === 0 ? 'UDP' : 'TCP',
-      syn,
-      udp,
-      total: syn + udp,
-      bytes_sent: (syn + udp) * 110,
-      timestamp: ts,
-    };
-  });
 };
 
 export default { getFlows, getTrafficStats, mapFlow };

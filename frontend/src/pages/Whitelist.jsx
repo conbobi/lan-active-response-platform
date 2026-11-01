@@ -9,7 +9,7 @@ import Modal from '../components/ui/Modal';
 import SearchBar from '../components/ui/SearchBar';
 import { FiCheckSquare, FiPlus, FiTrash2, FiShield, FiRotateCw } from 'react-icons/fi';
 
-export default function Whitelist() {
+export default function Whitelist({ embedded = false }) {
   const { whitelist, loading, refreshWhitelist, addWhitelistEntry, removeWhitelistEntry } = useWhitelist();
   const { agents } = useAgents();
 
@@ -71,20 +71,38 @@ export default function Whitelist() {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Authorized Whitelist</h1>
-          <p className="page-subtitle">Configure trusted processes, paths, and agents exempted from active automated response actions</p>
+      {!embedded ? (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Authorized Whitelist</h1>
+            <p className="page-subtitle">Configure trusted processes, paths, and agents exempted from active automated response actions</p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshWhitelist}>
+              Refresh
+            </Button>
+            <Button variant="primary" iconLeft={<FiPlus size={15} />} onClick={() => setModalOpen(true)}>
+              Add Whitelist Entry
+            </Button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshWhitelist}>
-            Refresh
-          </Button>
-          <Button variant="primary" iconLeft={<FiPlus size={15} />} onClick={() => setModalOpen(true)}>
-            Add Whitelist Entry
-          </Button>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              Trusted Exclusions & Safe Process Signatures ({whitelist.length})
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={14} />} onClick={refreshWhitelist}>
+              Refresh
+            </Button>
+            <Button variant="primary" size="sm" iconLeft={<FiPlus size={14} />} onClick={() => setModalOpen(true)}>
+              Add Whitelist Entry
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

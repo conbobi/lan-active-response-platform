@@ -24,6 +24,7 @@ async def create_incident(dto: IncidentCreate, db: AsyncSession = Depends(get_db
     return await service.create_incident(dto)
 
 
+@router.get("", response_model=List[IncidentOut], include_in_schema=False)
 @router.get("/", response_model=List[IncidentOut])
 async def list_incidents(skip: int = 0, limit: int = 200, db: AsyncSession = Depends(get_db)):
     """List security incidents."""

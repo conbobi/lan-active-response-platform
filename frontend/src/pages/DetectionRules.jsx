@@ -8,6 +8,7 @@ import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import FilterTabs from '../components/ui/FilterTabs';
 import ProcessChainManager from '../components/rules/ProcessChainManager';
+import YaraRules from './YaraRules';
 import {
   FiShield,
   FiPlus,
@@ -25,6 +26,7 @@ const CATEGORIES = ['All', 'OS', 'Network', 'Process', 'Behavior'];
 const MAIN_TABS = [
   { value: 'detection', label: 'Core Risk Rules' },
   { value: 'process-chains', label: 'Process Chain Detection' },
+  { value: 'yara', label: 'YARA Signatures' },
 ];
 
 
@@ -318,6 +320,8 @@ export default function DetectionRules({ defaultTab, initialTab }) {
 
       {mainTab === 'process-chains' ? (
         <ProcessChainManager />
+      ) : mainTab === 'yara' ? (
+        <YaraRules embedded={true} />
       ) : (
         <>
 

@@ -9,6 +9,7 @@ from app.services.common.setting_service import SettingService
 router = APIRouter(tags=["Settings"])
 
 
+@router.get("", response_model=List[SystemSettingOut], include_in_schema=False)
 @router.get("/", response_model=List[SystemSettingOut])
 async def list_system_settings(db: AsyncSession = Depends(get_db)):
     """Retrieve list of system settings and configuration parameters."""

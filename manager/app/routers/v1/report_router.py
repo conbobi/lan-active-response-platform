@@ -13,6 +13,7 @@ from app.services.incident.report_service import ReportService
 router = APIRouter(tags=["Reports"])
 
 
+@router.get("", response_model=List[ReportOut], include_in_schema=False)
 @router.get("/", response_model=List[ReportOut])
 async def list_reports(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     """Retrieve list of generated PDF security reports."""

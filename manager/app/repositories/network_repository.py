@@ -43,7 +43,7 @@ class NetworkRepository:
         # Get threat IOC IPs
         ioc_result = await self.session.execute(
             select(ThreatIndicator.value).where(
-                ThreatIndicator.type.in_(['ip', 'ip:port'])
+                ThreatIndicator.indicator_type.in_(['ip', 'ip:port'])
             )
         )
         ioc_ips = {row[0] for row in ioc_result.all()}

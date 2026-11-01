@@ -166,17 +166,39 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
                     {attackType}
                   </div>
                 </div>
-                <span style={{
-                  fontSize: '0.7rem',
-                  fontWeight: 700,
-                  padding: '0.2rem 0.5rem',
-                  borderRadius: '4px',
-                  background: borderColor,
-                  color: 'var(--text-inverse)',
-                  marginLeft: '0.5rem'
-                }}>
-                  {score}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const pid = incident.culprit_process?.pid || '';
+                      navigate(`/investigate?tab=process&agent=${encodeURIComponent(incident.agent_id)}${pid ? `&pid=${pid}` : ''}`);
+                    }}
+                    title="Open in Process Tree"
+                    style={{
+                      background: 'rgba(255,255,255,0.08)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '4px',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      padding: '0.2rem 0.45rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🌳 Tree
+                  </button>
+                  <span style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    padding: '0.2rem 0.5rem',
+                    borderRadius: '4px',
+                    background: borderColor,
+                    color: 'var(--text-inverse)',
+                  }}>
+                    {score}
+                  </span>
+                </div>
               </div>
             </div>
           );

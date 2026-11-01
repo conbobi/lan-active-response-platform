@@ -22,7 +22,7 @@ const MONTH_OPTIONS = [
   { value: '12', label: 'December' },
 ];
 
-export default function Reports() {
+export default function Reports({ embedded = false }) {
   const { reports, loading, generating, refreshReports, generateReport, downloadReport } = useReports();
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('8');
@@ -50,20 +50,38 @@ export default function Reports() {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Executive SOC Reports</h1>
-          <p className="page-subtitle">Generate and download monthly SOC incident, risk trend, and network health reports</p>
+      {!embedded ? (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Executive SOC Reports</h1>
+            <p className="page-subtitle">Generate and download monthly SOC incident, risk trend, and network health reports</p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshReports}>
+              Refresh
+            </Button>
+            <Button variant="primary" iconLeft={<FiPlusCircle size={15} />} onClick={() => setModalOpen(true)}>
+              Generate New Report
+            </Button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshReports}>
-            Refresh
-          </Button>
-          <Button variant="primary" iconLeft={<FiPlusCircle size={15} />} onClick={() => setModalOpen(true)}>
-            Generate New Report
-          </Button>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              Monthly Threat Analytics & Incident Dossiers ({reports.length})
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={14} />} onClick={refreshReports}>
+              Refresh
+            </Button>
+            <Button variant="primary" size="sm" iconLeft={<FiPlusCircle size={14} />} onClick={() => setModalOpen(true)}>
+              Generate Report
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>

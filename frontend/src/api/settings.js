@@ -3,7 +3,7 @@ import api from './api';
 
 export const getSettings = async () => {
   try {
-    const data = await api.get('/settings');
+    const data = await api.get('/settings/');
     return data;
   } catch (error) {
     console.error('API Error in getSettings:', error);

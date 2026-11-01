@@ -29,7 +29,7 @@ const COMMAND_OPTIONS = [
   { value: 'execute_script', label: 'Execute Shell Script' },
 ];
 
-export default function Commands() {
+export default function Commands({ embedded = false }) {
   const { commands, loading, handleCreateCommand, handleRetryCommand, refreshCommands } = useCommands();
   const { agents } = useAgents();
 
@@ -109,20 +109,38 @@ export default function Commands() {
 
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Command Dispatch & Audit Log</h1>
-          <p className="page-subtitle">Dispatch active response actions and monitor execution state across LAN agents</p>
+      {!embedded ? (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Command Dispatch & Audit Log</h1>
+            <p className="page-subtitle">Dispatch active response actions and monitor execution state across LAN agents</p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshCommands}>
+              Refresh
+            </Button>
+            <Button variant="primary" iconLeft={<FiPlusCircle size={15} />} onClick={() => setIsDispatchModalOpen(true)}>
+              Dispatch Command
+            </Button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Button variant="outline" iconLeft={<FiRotateCw size={15} />} onClick={refreshCommands}>
-            Refresh
-          </Button>
-          <Button variant="primary" iconLeft={<FiPlusCircle size={15} />} onClick={() => setIsDispatchModalOpen(true)}>
-            Dispatch Command
-          </Button>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <div>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              Real-time Queue & Low-level Agent Command Execution
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={14} />} onClick={refreshCommands}>
+              Refresh Queue
+            </Button>
+            <Button variant="primary" size="sm" iconLeft={<FiPlusCircle size={14} />} onClick={() => setIsDispatchModalOpen(true)}>
+              Dispatch Command
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* KPI Header */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>

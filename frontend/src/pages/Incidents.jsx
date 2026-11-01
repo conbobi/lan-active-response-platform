@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useSearchParams, useParams } from 'react-router-dom';
+import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import useIncidents from '../hooks/useIncidents';
 import { useAgents } from '../hooks/useAgents';
+import { useEvents } from '../hooks/useEvents';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -77,7 +78,9 @@ export default function Incidents() {
     handleExecuteAction,
   } = useIncidents();
 
-  const { agents } = useAgents();
+  const navigate = useNavigate();
+  const { events, loading: eventsLoading } = useEvents();
+  const { agents, handleIsolate } = useAgents();
 
   // Filter States
   const [searchTerm, setSearchTerm] = useState('');
@@ -88,12 +91,20 @@ export default function Incidents() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
 
+  // Alerts queue states
+  const [searchParams] = useSearchParams();
+  const [activeQueue, setActiveQueue] = useState(searchParams.get('tab') === 'alerts' ? 'alerts' : 'incidents');
+  const [showChart, setShowChart] = useState(false);
+  const [alertSearch, setAlertSearch] = useState('');
+  const [alertSeverity, setAlertSeverity] = useState('all');
+  const [alertPage, setAlertPage] = useState(1);
+  const [selectedAlert, setSelectedAlert] = useState(null);
+
   // Modals
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [assignModalInc, setAssignModalInc] = useState(null);
   const [assigneeInput, setAssigneeInput] = useState('');
 
-  const [searchParams] = useSearchParams();
   const { id: paramId } = useParams();
   const targetId = paramId || searchParams.get('id');
 
@@ -105,6 +116,21 @@ export default function Incidents() {
       }
     }
   }, [targetId, incidents]);
+
+  // Filtered raw telemetry events for Alerts tab
+  const filteredEvents = useMemo(() => {
+    return (events || []).filter((e) => {
+      const matchSev = alertSeverity === 'all' || (e.severity && e.severity.toLowerCase() === alertSeverity.toLowerCase());
+      const s = alertSearch.toLowerCase();
+      const matchSearch =
+        !s ||
+        (e.type && e.type.toLowerCase().includes(s)) ||
+        (e.agentId && e.agentId.toLowerCase().includes(s)) ||
+        (e.sourceIp && e.sourceIp.includes(s)) ||
+        (e.description && e.description.toLowerCase().includes(s));
+      return matchSev && matchSearch;
+    });
+  }, [events, alertSeverity, alertSearch]);
 
 
 
@@ -408,49 +434,130 @@ export default function Incidents() {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="stats-grid" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(6, 1fr)' }}>
-        <div className="stat-card">
-          <div className="stat-label">Total Incidents</div>
-          <div className="stat-value">{kpis.total}</div>
+      {/* Queue Switcher */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'inline-flex', padding: '0.25rem', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', gap: '0.25rem' }}>
+          <button
+            type="button"
+            onClick={() => setActiveQueue('incidents')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.5rem 1rem',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              border: 'none',
+              cursor: 'pointer',
+              background: activeQueue === 'incidents' ? 'var(--primary)' : 'transparent',
+              color: activeQueue === 'incidents' ? '#fff' : 'var(--text-secondary)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <FiShield size={15} />
+            Security Incidents
+            <span style={{
+              padding: '0.1rem 0.45rem',
+              borderRadius: '999px',
+              fontSize: '0.75rem',
+              background: activeQueue === 'incidents' ? 'rgba(255,255,255,0.2)' : 'var(--bg-tertiary)',
+              color: activeQueue === 'incidents' ? '#fff' : 'var(--text-tertiary)',
+            }}>
+              {incidents.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveQueue('alerts')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.5rem 1rem',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              border: 'none',
+              cursor: 'pointer',
+              background: activeQueue === 'alerts' ? 'var(--primary)' : 'transparent',
+              color: activeQueue === 'alerts' ? '#fff' : 'var(--text-secondary)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <FiActivity size={15} />
+            Raw Telemetry Alerts
+            <span style={{
+              padding: '0.1rem 0.45rem',
+              borderRadius: '999px',
+              fontSize: '0.75rem',
+              background: activeQueue === 'alerts' ? 'rgba(255,255,255,0.2)' : 'var(--bg-tertiary)',
+              color: activeQueue === 'alerts' ? '#fff' : 'var(--text-tertiary)',
+            }}>
+              {events?.length || 0}
+            </span>
+          </button>
         </div>
-        <div className="stat-card" style={{ borderLeft: '3px solid var(--error)' }}>
-          <div className="stat-label" style={{ color: 'var(--error)' }}>Active / Open</div>
-          <div className="stat-value" style={{ color: 'var(--error)' }}>{kpis.openCount}</div>
-        </div>
-        <div className="stat-card" style={{ borderLeft: '3px solid var(--info)' }}>
-          <div className="stat-label" style={{ color: 'var(--info)' }}>Contained</div>
-          <div className="stat-value" style={{ color: 'var(--info)' }}>{kpis.containedCount}</div>
-        </div>
-        <div className="stat-card" style={{ borderLeft: '3px solid var(--success)' }}>
-          <div className="stat-label" style={{ color: 'var(--success)' }}>Resolved</div>
-          <div className="stat-value" style={{ color: 'var(--success)' }}>{kpis.resolvedCount}</div>
-        </div>
-        <div className="stat-card" style={{ borderLeft: '3px solid var(--warning)' }}>
-          <div className="stat-label">False Positive</div>
-          <div className="stat-value">{kpis.falsePositiveCount}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Closed</div>
-          <div className="stat-value">{kpis.closedCount}</div>
-        </div>
+
+        {activeQueue === 'incidents' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            iconLeft={<FiTrendingUp size={14} />}
+            onClick={() => setShowChart(!showChart)}
+          >
+            {showChart ? 'Hide Trends Chart' : 'Show 7-Day Trend Chart'}
+          </Button>
+        )}
       </div>
 
-      {/* Incident Analytics Line Chart */}
-      <div className="card" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <FiTrendingUp size={18} color="var(--primary)" />
-            <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-              Incident Timeline & Trends ({statusFilter.toUpperCase()})
-            </h3>
+      {activeQueue === 'incidents' ? (
+        <>
+          {/* KPI Cards */}
+          <div className="stats-grid" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(6, 1fr)' }}>
+            <div className="stat-card">
+              <div className="stat-label">Total Incidents</div>
+              <div className="stat-value">{kpis.total}</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft: '3px solid var(--error)' }}>
+              <div className="stat-label" style={{ color: 'var(--error)' }}>Active / Open</div>
+              <div className="stat-value" style={{ color: 'var(--error)' }}>{kpis.openCount}</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft: '3px solid var(--info)' }}>
+              <div className="stat-label" style={{ color: 'var(--info)' }}>Contained</div>
+              <div className="stat-value" style={{ color: 'var(--info)' }}>{kpis.containedCount}</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft: '3px solid var(--success)' }}>
+              <div className="stat-label" style={{ color: 'var(--success)' }}>Resolved</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{kpis.resolvedCount}</div>
+            </div>
+            <div className="stat-card" style={{ borderLeft: '3px solid var(--warning)' }}>
+              <div className="stat-label">False Positive</div>
+              <div className="stat-value">{kpis.falsePositiveCount}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Closed</div>
+              <div className="stat-value">{kpis.closedCount}</div>
+            </div>
           </div>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Updated in real-time</span>
-        </div>
-        <div style={{ height: 220, position: 'relative' }}>
-          <Line data={chartData} options={chartOptions} />
-        </div>
-      </div>
+
+          {/* Incident Analytics Line Chart */}
+          {showChart && (
+            <div className="card" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <FiTrendingUp size={18} color="var(--primary)" />
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                    Incident Timeline & Trends ({statusFilter.toUpperCase()})
+                  </h3>
+                </div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Updated in real-time</span>
+              </div>
+              <div style={{ height: 220, position: 'relative' }}>
+                <Line data={chartData} options={chartOptions} />
+              </div>
+            </div>
+          )}
 
       {/* Filter Tabs & Advanced Filters */}
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
@@ -664,6 +771,265 @@ export default function Incidents() {
           </div>
         )}
       </div>
+      </>
+      ) : (
+        /* Raw Telemetry Alerts Queue */
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: '220px' }}>
+              <FiSearch style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+              <input
+                type="text"
+                placeholder="Filter alerts by type, agent, IP, rule, description..."
+                value={alertSearch}
+                onChange={(e) => { setAlertSearch(e.target.value); setAlertPage(1); }}
+                style={{
+                  width: '100%',
+                  paddingLeft: '2.4rem',
+                  paddingRight: '0.75rem',
+                  paddingTop: '0.55rem',
+                  paddingBottom: '0.55rem',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.875rem',
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Severity:</span>
+              {['all', 'critical', 'high', 'medium', 'low'].map((sev) => (
+                <button
+                  key={sev}
+                  type="button"
+                  onClick={() => { setAlertSeverity(sev); setAlertPage(1); }}
+                  style={{
+                    padding: '0.35rem 0.65rem',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    cursor: 'pointer',
+                    border: '1px solid ' + (alertSeverity === sev ? 'var(--primary)' : 'var(--border)'),
+                    background: alertSeverity === sev ? 'var(--primary)' : 'var(--bg-secondary)',
+                    color: alertSeverity === sev ? '#fff' : 'var(--text-secondary)',
+                  }}
+                >
+                  {sev}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Severity</th>
+                <th>Alert / Rule Name</th>
+                <th>Agent</th>
+                <th>Process / Target IP</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {eventsLoading ? (
+                <tr>
+                  <td colSpan="6" style={{ padding: '1rem' }}>
+                    <SkeletonTable rows={6} />
+                  </td>
+                </tr>
+              ) : filteredEvents.length === 0 ? (
+                <tr>
+                  <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>
+                    <EmptyState
+                      icon="🔔"
+                      title="Không có telemetry alerts"
+                      description="Chưa có alert thô nào được ghi nhận phù hợp với bộ lọc hiện tại."
+                    />
+                  </td>
+                </tr>
+              ) : (
+                filteredEvents.slice((alertPage - 1) * 10, alertPage * 10).map((ev, idx) => (
+                  <tr key={ev.id || idx} style={{ cursor: 'pointer' }} onClick={() => setSelectedAlert(ev)}>
+                    <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {ev.timestamp ? formatTime(ev.timestamp) : 'Just now'}
+                    </td>
+                    <td>
+                      <Badge variant={getSeverityVariant(ev.severity)}>
+                        {(ev.severity || 'INFO').toUpperCase()}
+                      </Badge>
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {ev.type || ev.rule_name || ev.title || 'Security Event'}
+                      </div>
+                      {ev.description && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', maxWidth: '400px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {ev.description}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {ev.agentId || ev.agent_id || ev.hostname || 'Unknown'}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        {ev.process_name || ev.processName || (ev.pid ? `PID: ${ev.pid}` : '') || ev.sourceIp || ev.destinationIp || '—'}
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem' }}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          iconLeft={<FiEye size={13} />}
+                          onClick={() => setSelectedAlert(ev)}
+                          title="View Alert Details"
+                        >
+                          Details
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const targetAgent = ev.agentId || ev.agent_id || ev.hostname || '';
+                            const targetPid = ev.pid || ev.process_id || '';
+                            navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${targetPid ? `&pid=${targetPid}` : ''}`);
+                          }}
+                          title="Investigate Process in Tree"
+                        >
+                          🌳 Tree
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          iconLeft={<FiShield size={13} color="var(--error)" />}
+                          onClick={async () => {
+                            const agentId = ev.agentId || ev.agent_id;
+                            if (!agentId) {
+                              toast.error('No agent ID associated with this alert');
+                              return;
+                            }
+                            if (window.confirm(`Isolate endpoint ${agentId} immediately?`)) {
+                              await handleIsolate(agentId);
+                            }
+                          }}
+                          title="Quick Isolate Host"
+                        >
+                          Isolate
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+
+          {filteredEvents.length > 10 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderTop: '1px solid var(--border)' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>
+                Showing {Math.min(filteredEvents.length, 10)} of {filteredEvents.length} telemetry alerts
+              </span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <Button variant="ghost" size="sm" disabled={alertPage === 1} onClick={() => setAlertPage((p) => Math.max(p - 1, 1))}>
+                  Previous
+                </Button>
+                <Button variant="ghost" size="sm" disabled={alertPage * 10 >= filteredEvents.length} onClick={() => setAlertPage((p) => p + 1)}>
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Raw Telemetry Alert Detail Modal */}
+      <Modal
+        isOpen={!!selectedAlert}
+        onClose={() => setSelectedAlert(null)}
+        title={selectedAlert ? `Alert: ${selectedAlert.type || selectedAlert.rule_name || 'Telemetry Event'}` : 'Alert Details'}
+      >
+        {selectedAlert && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <Badge variant={getSeverityVariant(selectedAlert.severity)}>
+                {(selectedAlert.severity || 'INFO').toUpperCase()}
+              </Badge>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                {selectedAlert.timestamp ? formatTime(selectedAlert.timestamp) : 'N/A'}
+              </span>
+            </div>
+
+            <div style={{ padding: '0.85rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Agent / Endpoint</div>
+              <div style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--text-primary)' }}>
+                {selectedAlert.agentId || selectedAlert.agent_id || selectedAlert.hostname || 'Unknown Host'}
+              </div>
+            </div>
+
+            {selectedAlert.description && (
+              <div>
+                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Description</div>
+                <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                  {selectedAlert.description}
+                </p>
+              </div>
+            )}
+
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Raw Event Payload</div>
+              <pre style={{
+                background: 'var(--bg-primary)',
+                padding: '0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border)',
+                fontSize: '0.8rem',
+                color: 'var(--text-secondary)',
+                overflowX: 'auto',
+                maxHeight: '220px',
+              }}>
+                {JSON.stringify(selectedAlert, null, 2)}
+              </pre>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const targetAgent = selectedAlert.agentId || selectedAlert.agent_id || selectedAlert.hostname || '';
+                  const targetPid = selectedAlert.pid || selectedAlert.process_id || '';
+                  setSelectedAlert(null);
+                  navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${targetPid ? `&pid=${targetPid}` : ''}`);
+                }}
+              >
+                🌳 Investigate in Process Tree
+              </Button>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <Button variant="ghost" onClick={() => setSelectedAlert(null)}>
+                  Close
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={async () => {
+                    const agentId = selectedAlert.agentId || selectedAlert.agent_id;
+                    if (agentId && window.confirm(`Isolate endpoint ${agentId} immediately?`)) {
+                      await handleIsolate(agentId);
+                      setSelectedAlert(null);
+                    }
+                  }}
+                >
+                  🛡️ Isolate Endpoint
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* 5-Tab Storyboard Incident Detail Modal */}
       {selectedIncident && (

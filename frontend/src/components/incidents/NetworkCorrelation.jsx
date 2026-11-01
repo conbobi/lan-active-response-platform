@@ -17,21 +17,8 @@ export default function NetworkCorrelation({
   actionLoading,
 }) {
   const networkIndicators = incident?.networkIndicators || [];
-  const culprit = incident?.culpritProcess || { name: 'key_test.exe', pid: 4128 };
-
-  // Fallback demo indicator if empty and incident mentions C2/network
-  const displayIndicators = networkIndicators.length > 0 ? networkIndicators : (
-    incident?.description && (incident.description.includes('4444') || incident.description.includes('c2') || incident.description.includes('network')) ? [
-      {
-        dst_ip: '192.168.10.55',
-        dst_port: 4444,
-        protocol: 'TCP',
-        bytes_sent: 1024,
-        packets_sent: 12,
-        process_name: culprit.name || 'key_test.exe',
-      }
-    ] : []
-  );
+  const culprit = incident?.culpritProcess || incident?.culprit_process || null;
+  const displayIndicators = Array.isArray(networkIndicators) ? networkIndicators : [];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>

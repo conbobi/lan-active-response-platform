@@ -17,6 +17,7 @@ async def create_command(dto: CommandCreate, db: AsyncSession = Depends(get_db))
     return await service.issue_command(dto)
 
 
+@router.get("", response_model=List[CommandOut], include_in_schema=False)
 @router.get("/", response_model=List[CommandOut])
 async def list_commands(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     """List issued commands."""

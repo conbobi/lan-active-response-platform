@@ -10,6 +10,7 @@ from app.services.common.whitelist_service import WhitelistService
 router = APIRouter(tags=["Whitelist"])
 
 
+@router.get("", response_model=List[WhitelistEntryOut], include_in_schema=False)
 @router.get("/", response_model=List[WhitelistEntryOut])
 async def list_whitelist_entries(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     """Retrieve list of whitelisted processes, paths, or agents."""

@@ -13,6 +13,7 @@ from app.services.detection.process_group_service import ProcessGroupService
 router = APIRouter(tags=["Process Groups"])
 
 
+@router.get("", response_model=List[ProcessGroupOut], include_in_schema=False)
 @router.get("/", response_model=List[ProcessGroupOut])
 async def list_process_groups(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     """List all configured process groups."""

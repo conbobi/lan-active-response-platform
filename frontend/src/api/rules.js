@@ -3,7 +3,7 @@ import api from './api';
 
 export const getRules = async () => {
   try {
-    const data = await api.get('/rules');
+    const data = await api.get('/rules/');
     return Array.isArray(data) ? data : [];
   } catch (err) {
     console.error('API Error in getRules:', err);
@@ -12,7 +12,7 @@ export const getRules = async () => {
 };
 
 export const addRule = async (ruleData) => {
-  return await api.post('/rules', ruleData);
+  return await api.post('/rules/', ruleData);
 };
 
 export const deleteRule = async (ruleId) => {

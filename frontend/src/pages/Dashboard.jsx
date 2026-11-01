@@ -1,21 +1,20 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import KpiCard from '../components/ui/KpiCard';
 import AgentTable from '../components/ui/AgentTable';
 import RecentAlerts from '../components/ui/RecentAlerts';
 import Button from '../components/ui/Button';
 import AgentDetailModal from '../components/ui/AgentDetailModal';
-import DockerMonitorTable from '../components/ui/DockerMonitorTable';
 import HealthScoreGauge from '../components/dashboard/HealthScoreGauge';
 import RecentThreats from '../components/dashboard/RecentThreats';
 import ErrorState from '../components/ui/ErrorState';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import { getAgents } from '../api/agents';
+import { getAgents, isolateAgent } from '../api/agents';
 import { getIncidents } from '../api/incidents';
 import { getEvents } from '../api/events';
-import { getDockerStatus } from '../api/docker';
 import { useDashboardSocket } from '../hooks/useDashboardSocket';
-import { FiZap, FiRadio, FiShield } from 'react-icons/fi';
+import { FiRadio, FiShield, FiAlertTriangle, FiRotateCw, FiTerminal, FiEye } from 'react-icons/fi';
 
 function FalsePositiveBanner() {
     const [fpData, setFpData] = useState(null);
@@ -46,7 +45,7 @@ function FalsePositiveBanner() {
     const hasIdleFP = !fpData.idle_agents_safe;
 
     if (!hasManagerFP && !hasIdleFP) {
-        return null; // Không có FP -> tự động ẩn!
+        return null;
     }
 
     return (
@@ -83,38 +82,35 @@ export default function Dashboard() {
     const [agents, setAgents] = useState([]);
     const [incidents, setIncidents] = useState([]);
     const [events, setEvents] = useState([]);
-    const [dockerContainers, setDockerContainers] = useState([]);
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedAgent, setSelectedAgent] = useState(null);
+    const [isolatingId, setIsolatingId] = useState(null);
 
     const loadData = useCallback(async () => {
         try {
-            const [agentsData, incidentsData, eventsData, dockerData] = await Promise.all([
+            const [agentsData, incidentsData, eventsData] = await Promise.all([
                 getAgents(),
                 getIncidents(),
                 getEvents(),
-                getDockerStatus().catch(() => []),
             ]);
 
             setAgents(Array.isArray(agentsData) ? agentsData : []);
             setIncidents(Array.isArray(incidentsData) ? incidentsData : []);
             setEvents(Array.isArray(eventsData) ? eventsData : []);
-            setDockerContainers(Array.isArray(dockerData) ? dockerData : []);
             setError(null);
         } catch (err) {
             console.error('[Dashboard] loadData error:', err);
-            // If we don't have data yet, show error state
             setError(err);
         } finally {
             setLoading(false);
         }
     }, []);
 
-    // Initial load + Real-time polling every 2s (P0.1)
+    // Initial load + Real-time polling every 3s
     useEffect(() => {
         loadData();
-        const interval = setInterval(loadData, 2000);
+        const interval = setInterval(loadData, 3000);
         return () => clearInterval(interval);
     }, [loadData]);
 
@@ -126,6 +122,32 @@ export default function Dashboard() {
     }, [loadData]);
 
     const { isConnected } = useDashboardSocket(handleSocketMessage);
+
+    // Urgent active incident for top banner triage
+    const criticalActiveIncident = useMemo(() => {
+        return incidents.find(
+            (i) =>
+                (i.status === 'open' || i.status === 'investigating' || i.status === 'new') &&
+                ((i.risk_score || 0) >= 70 || i.severity === 'critical' || i.severity === 'high')
+        );
+    }, [incidents]);
+
+    const handleQuickIsolate = async (agentId) => {
+        if (!agentId) return;
+        if (!window.confirm(`Xác nhận cô lập khẩn cấp host ${agentId}? Tất cả kết nối mạng ngoại trừ LARP Server sẽ bị ngắt lập tức.`)) {
+            return;
+        }
+        setIsolatingId(agentId);
+        try {
+            await isolateAgent(agentId);
+            toast.success(`Đã phát lệnh cô lập agent ${agentId} thành công!`);
+            loadData();
+        } catch (err) {
+            toast.error(`Cô lập thất bại: ${err.message || 'Lỗi mạng'}`);
+        } finally {
+            setIsolatingId(null);
+        }
+    };
 
     if (error) {
         return (
@@ -141,54 +163,145 @@ export default function Dashboard() {
     const alertsToday = events.filter((e) => new Date(e.timestamp).toDateString() === new Date().toDateString()).length;
     const blockedIps = events.filter((e) => e.type === 'block_ip').length;
     const isolatedAgents = agents.filter((a) => a.status === 'isolated' || a.is_isolated).length;
+    const unresolvedIncidents = incidents.filter((i) => i.status !== 'resolved' && i.status !== 'closed').length;
 
     return (
         <div>
             <FalsePositiveBanner />
-            <div className="page-header">
+
+            {/* Zone 0: Urgent Critical Threat Banner (if active critical threat exists) */}
+            {criticalActiveIncident && (
+                <div
+                    style={{
+                        background: 'linear-gradient(90deg, rgba(239, 68, 68, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)',
+                        border: '1px solid var(--error)',
+                        borderLeft: '5px solid var(--error)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '1rem 1.25rem',
+                        marginBottom: '1.25rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                        flexWrap: 'wrap',
+                        boxShadow: '0 0 16px rgba(239, 68, 68, 0.25)',
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                        <div
+                            style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: '50%',
+                                background: 'rgba(239, 68, 68, 0.2)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'var(--error)',
+                                flexShrink: 0,
+                            }}
+                        >
+                            <FiAlertTriangle size={20} />
+                        </div>
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 800, color: 'var(--error)', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
+                                    🔴 CRITICAL THREAT ACTIVE: {criticalActiveIncident.title || 'LOLBin Reverse Shell / C2'}
+                                </span>
+                                <span style={{
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700,
+                                    padding: '0.1rem 0.5rem',
+                                    borderRadius: '999px',
+                                    background: 'var(--error)',
+                                    color: '#fff',
+                                }}>
+                                    SCORE {Math.round(criticalActiveIncident.risk_score || 100)}/100
+                                </span>
+                            </div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                                Target Host: <strong style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname || 'WIN-DEMO-01'}</strong>
+                                {criticalActiveIncident.culprit_process?.name && (
+                                    <span> • Culprit: <code style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.culprit_process.name}</code> (PID {criticalActiveIncident.culprit_process.pid || '—'})</span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            iconLeft={<FiShield size={14} />}
+                            disabled={isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname)}
+                            onClick={() => handleQuickIsolate(criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname)}
+                            style={{ background: 'var(--error)', borderColor: 'var(--error)', fontWeight: 700 }}
+                        >
+                            {isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname) ? 'Isolating...' : '1-Click Isolate Host'}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                const targetAgent = criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname || '';
+                                const pid = criticalActiveIncident.culprit_process?.pid || '';
+                                navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid ? `&pid=${pid}` : ''}`);
+                            }}
+                        >
+                            🌳 View in Process Tree
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            iconLeft={<FiEye size={13} />}
+                            onClick={() => navigate(`/incidents?id=${criticalActiveIncident.id}`)}
+                        >
+                            Triage Storyline
+                        </Button>
+                    </div>
+                </div>
+            )}
+
+            {/* Header */}
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                        <h1 className="page-title">Security Dashboard</h1>
+                        <h1 className="page-title">Security Operations Dashboard</h1>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '12px', background: isConnected ? 'rgba(0,192,123,0.12)' : 'rgba(239,68,68,0.12)', color: isConnected ? 'var(--success)' : 'var(--error)' }}>
                             <FiRadio size={12} />
                             <span>{isConnected ? 'LIVE WS' : 'OFFLINE'}</span>
                         </div>
                     </div>
-                    <p className="page-subtitle">AI Agent Manager — Real-time SOC Overview</p>
+                    <p className="page-subtitle">Real-time threat monitoring, posture scoring, and active endpoint response</p>
                 </div>
-                <Button variant="danger" size="md" iconLeft={<FiZap size={14} />} onClick={() => navigate('/attack')}>
-                    Launch Attack Sim
-                </Button>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={13} />} onClick={loadData}>
+                        Refresh
+                    </Button>
+                    <Button variant="primary" size="sm" iconLeft={<FiShield size={14} />} onClick={() => navigate('/incidents')}>
+                        Incidents Queue ({unresolvedIncidents})
+                    </Button>
+                </div>
             </div>
 
-            {/* Health Score Gauge (P0.2 & Fix #1 Context) */}
+            {/* Zone 1: Health Score Gauge Posture */}
             {loading ? <SkeletonCard /> : <HealthScoreGauge agents={agents} incidents={incidents} loading={loading} />}
 
-            {/* KPI Cards */}
+            {/* KPI Cards Row (Clean, accurate values without simulated trends) */}
             <div className="grid-4" style={{ marginBottom: '1.25rem' }}>
-                <KpiCard type="agents" label="Agents Online" value={`${totalOnline}/${agents.length || 0}`} trendValue={12} />
-                <KpiCard type="alerts" label="Alerts Today" value={alertsToday} trendValue={-5} />
-                <KpiCard type="blocked" label="IPs Blocked" value={blockedIps} trendValue={-2} />
-                <KpiCard icon={<FiShield size={20} />} label="Isolated Agents" color="var(--warning)" value={isolatedAgents} trendValue={0} />
+                <KpiCard type="agents" label="Active Endpoints" value={`${totalOnline}/${agents.length || 0}`} />
+                <KpiCard type="alerts" label="Telemetry Alerts Today" value={alertsToday} />
+                <KpiCard type="blocked" label="Firewall Blocks Active" value={blockedIps} />
+                <KpiCard icon={<FiShield size={20} />} label="Isolated Hosts" color="var(--warning)" value={isolatedAgents} />
             </div>
 
-            {/* Middle Grid: Agents Table + Recent Threats (Fix #2) */}
+            {/* Middle Grid: Agents Table + Recent Threats with 1-click links */}
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
                 <AgentTable agents={agents} onViewAgent={setSelectedAgent} />
                 <RecentThreats incidents={incidents} agents={agents} />
             </div>
 
-            {/* Docker Infrastructure Status */}
-            <div style={{ marginBottom: '1.25rem' }}>
-                <DockerMonitorTable
-                    containers={dockerContainers}
-                    loading={loading}
-                    error={null}
-                    onRefresh={loadData}
-                />
-            </div>
-
-            {/* Full-width Recent Alerts (Fix #3 - RiskGauge removed) */}
+            {/* Full-width Recent Alerts Stream */}
             <div style={{ marginBottom: '1.25rem' }}>
                 <RecentAlerts events={events} />
             </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   FiClock,
@@ -11,6 +12,7 @@ import {
   FiX,
   FiServer,
   FiUsers,
+  FiTerminal,
 } from 'react-icons/fi';
 import Button from '../components/ui/Button';
 import KpiCard from '../components/ui/KpiCard';
@@ -23,12 +25,32 @@ import ActionsTable from '../components/actions/ActionsTable';
 import BulkUndoConfirmModal from '../components/actions/BulkUndoConfirmModal';
 import RollbackConfirmModal from '../components/actions/RollbackConfirmModal';
 import AuditLogModal from '../components/actions/AuditLogModal';
+import Commands from './Commands';
 
 import useActions from '../hooks/useActions';
 import { getAgents } from '../api/agents';
 import { listGroups } from '../api/groups';
 
-export default function ActionsHistory() {
+export default function ActionsHistory({ initialTab }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryTab = searchParams.get('tab') || initialTab || 'actions';
+  const [activeMainTab, setActiveMainTab] = useState(queryTab);
+
+  useEffect(() => {
+    if (queryTab && queryTab !== activeMainTab) {
+      setActiveMainTab(queryTab);
+    }
+  }, [queryTab]);
+
+  const switchMainTab = (tab) => {
+    setActiveMainTab(tab);
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev);
+      p.set('tab', tab);
+      return p;
+    });
+  };
+
   // Hook for all aggregated actions with 5s background polling
   const {
     actions,
@@ -391,16 +413,76 @@ export default function ActionsHistory() {
         </div>
       </div>
 
-      {/* KPI Cards Row (4 Cards) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '1rem',
-        }}
-      >
-        <KpiCard
-          title="Total Actions"
+      {/* Top Tabs */}
+      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.25rem' }}>
+        <button
+          type="button"
+          onClick={() => switchMainTab('actions')}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.55rem 1.1rem',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.875rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            border: 'none',
+            background: activeMainTab === 'actions' ? 'var(--primary)' : 'transparent',
+            color: activeMainTab === 'actions' ? '#fff' : 'var(--text-secondary)',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <FiActivity size={15} />
+          Executed Actions & Rollback
+          <span style={{
+            padding: '0.1rem 0.45rem',
+            borderRadius: '999px',
+            fontSize: '0.75rem',
+            background: activeMainTab === 'actions' ? 'rgba(255,255,255,0.2)' : 'var(--bg-secondary)',
+            color: activeMainTab === 'actions' ? '#fff' : 'var(--text-tertiary)',
+          }}>
+            {totalActions}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => switchMainTab('commands')}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.55rem 1.1rem',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.875rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            border: 'none',
+            background: activeMainTab === 'commands' ? 'var(--primary)' : 'transparent',
+            color: activeMainTab === 'commands' ? '#fff' : 'var(--text-secondary)',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <FiTerminal size={15} />
+          Live Command Queue
+        </button>
+      </div>
+
+      {activeMainTab === 'commands' ? (
+        <Commands embedded={true} />
+      ) : (
+        <>
+          {/* KPI Cards Row (4 Cards) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '1rem',
+            }}
+          >
+            <KpiCard
+              title="Total Actions"
           value={totalActions}
           subtitle="Tất cả can thiệp đã kích hoạt"
           icon={<FiActivity size={20} />}
@@ -637,6 +719,8 @@ export default function ActionsHistory() {
             Bỏ chọn
           </Button>
         </div>
+      )}
+        </>
       )}
 
       {/* Bulk Undo Confirmation Modal */}

@@ -6,7 +6,7 @@ import { getAgentActions } from './actions';
  * Lấy danh sách tất cả các Agent Group kèm số lượng máy thành viên.
  */
 export const listGroups = async () => {
-  return await api.get('/groups');
+  return await api.get('/groups/');
 };
 
 /**
@@ -20,7 +20,7 @@ export const getGroup = async (groupId) => {
  * Tạo mới một Agent Group (tùy chọn custom id, name, description).
  */
 export const createGroup = async (data) => {
-  return await api.post('/groups', data);
+  return await api.post('/groups/', data);
 };
 
 /**

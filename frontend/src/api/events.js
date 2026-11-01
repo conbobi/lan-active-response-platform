@@ -14,7 +14,7 @@ export const mapEvent = (e) => ({
 
 export const getEvents = async () => {
   try {
-    const data = await api.get('/events');
+    const data = await api.get('/events/');
     return Array.isArray(data) ? data.map(mapEvent) : [];
   } catch (err) {
     console.error('API Error in getEvents:', err);

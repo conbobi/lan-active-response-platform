@@ -26,6 +26,7 @@ router = APIRouter(tags=["Agent Groups & Batch Actions"])
 # ==============================================================================
 
 @router.get("/groups", response_model=List[AgentGroupResponse])
+@router.get("/groups/", response_model=List[AgentGroupResponse], include_in_schema=False)
 async def list_agent_groups(
     db: AsyncSession = Depends(get_db)
 ):
@@ -46,6 +47,7 @@ async def list_agent_groups(
 
 
 @router.post("/groups", response_model=AgentGroupResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/groups/", response_model=AgentGroupResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 async def create_agent_group(
     dto: AgentGroupCreate,
     db: AsyncSession = Depends(get_db)

@@ -57,6 +57,7 @@ async def create_rule(dto: RuleCreate, db: AsyncSession = Depends(get_db)):
     return await service.create_rule(dto)
 
 
+@router.get("", response_model=List[RuleOut], include_in_schema=False)
 @router.get("/", response_model=List[RuleOut])
 async def list_rules(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     """List detection rules."""

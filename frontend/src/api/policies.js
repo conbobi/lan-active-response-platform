@@ -5,7 +5,7 @@ import api from './api';
  * Lấy danh sách Response Policies từ backend.
  */
 export const listPolicies = async (params = {}) => {
-  return await api.get('/policies', { params });
+  return await api.get('/policies/', { params });
 };
 
 /**
@@ -19,7 +19,7 @@ export const getPolicy = async (policyId) => {
  * Tạo mới một Response Policy.
  */
 export const createPolicy = async (data) => {
-  return await api.post('/policies', data);
+  return await api.post('/policies/', data);
 };
 
 /**

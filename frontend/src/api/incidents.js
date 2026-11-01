@@ -25,64 +25,11 @@ export const mapIncident = (inc) => {
 
 export const getIncidents = async () => {
   try {
-    const data = await api.get('/incidents');
+    const data = await api.get('/incidents/');
     return Array.isArray(data) ? data.map(mapIncident) : [];
   } catch (err) {
-    console.warn('API /incidents error, using fallback incidents dataset:', err);
-    return [
-      {
-        id: 'INC-1001',
-        title: 'High CPU Spike & Reverse Shell Activity',
-        description: 'Agent client4 detected CPU > 90% with active netcat / nc listener on port 4444.',
-        severity: 'high',
-        status: 'open',
-        assignedTo: 'Unassigned',
-        agentId: 'client4',
-        riskScore: 88,
-        notes: '[system]: Incident generated automatically.',
-        createdAt: new Date(Date.now() - 3600000).toISOString(),
-        updatedAt: new Date(Date.now() - 3600000).toISOString(),
-      },
-      {
-        id: 'INC-1002',
-        title: 'Ransomware Mass File Modification',
-        description: 'Agent client1 generated over 50 .encrypted files in /tmp/victim_files.',
-        severity: 'critical',
-        status: 'contained',
-        assignedTo: 'SOC Lead',
-        agentId: 'client1',
-        riskScore: 95,
-        notes: '[SOC Lead]: Automated process tree killed & host network isolated.',
-        createdAt: new Date(Date.now() - 7200000).toISOString(),
-        updatedAt: new Date(Date.now() - 1800000).toISOString(),
-      },
-      {
-        id: 'INC-1003',
-        title: 'LSASS Credential Dump Reading',
-        description: 'Attempted access to /tmp/lsass.dump detected by risk assessment rule.',
-        severity: 'high',
-        status: 'investigating',
-        assignedTo: 'Analyst 1',
-        agentId: 'client2',
-        riskScore: 78,
-        notes: '[Analyst 1]: Investigating memory dump artifact.',
-        createdAt: new Date(Date.now() - 14400000).toISOString(),
-        updatedAt: new Date(Date.now() - 7200000).toISOString(),
-      },
-      {
-        id: 'INC-1004',
-        title: 'Scheduled Task Persistence Anomaly',
-        description: 'Unusual cron job created under /etc/cron.d by non-privileged process.',
-        severity: 'medium',
-        status: 'resolved',
-        assignedTo: 'Analyst 2',
-        agentId: 'client3',
-        riskScore: 45,
-        notes: '[Analyst 2]: Verified benign monitoring cron job.',
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-        updatedAt: new Date(Date.now() - 43200000).toISOString(),
-      },
-    ];
+    console.error('API /incidents/ error:', err);
+    throw err;
   }
 };
 

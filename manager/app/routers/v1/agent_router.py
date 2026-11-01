@@ -32,6 +32,7 @@ async def get_agent_history(agent_id: str, limit: int = 50, db: AsyncSession = D
     return await repo.get_history(agent_id, limit)
 
 
+@router.get("", response_model=List[AgentOut], include_in_schema=False)
 @router.get("/", response_model=List[AgentOut])
 async def list_agents(
     skip: int = 0,

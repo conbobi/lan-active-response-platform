@@ -1,5 +1,6 @@
 // src/components/incidents/ProcessAncestry.jsx
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import api from '../../api/api';
@@ -20,6 +21,7 @@ export default function ProcessAncestry({
   onAction,
   actionLoading,
 }) {
+  const navigate = useNavigate();
   const [incData, setIncData] = useState(incident);
   const [loading, setLoading] = useState(false);
 
@@ -97,11 +99,12 @@ export default function ProcessAncestry({
 
   const culpritPid = culprit?.pid;
   const culpritName = culprit?.name || culprit?.process_name || 'process';
+  const targetAgentId = incData?.agent_id || incData?.agentId || '';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       {/* Top Controls & Status */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
         <div>
           <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
             Process Ancestry Tree
@@ -111,7 +114,19 @@ export default function ProcessAncestry({
           </span>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {targetAgentId && (
+            <Button
+              variant="outline"
+              size="sm"
+              iconLeft={<FiCpu size={13} />}
+              onClick={() => {
+                navigate(`/investigate?agent=${encodeURIComponent(targetAgentId)}&pid=${culpritPid || ''}`);
+              }}
+            >
+              🌳 View in Process Tree
+            </Button>
+          )}
           <Button
             variant="warning"
             size="sm"

@@ -1,61 +1,52 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
-import Alerts from './pages/Alerts';
 import Incidents from './pages/Incidents';
-import Commands from './pages/Commands';
-import RiskAssessment from './pages/RiskAssessment';
-import RiskMonitor from './pages/RiskMonitor';
-import FixVerification from './pages/FixVerification';
-import DetectionRules from './pages/DetectionRules';
-import ThreatIntel from './pages/ThreatIntel';
-import ProcessTree from './pages/ProcessTree';
-import Reports from './pages/Reports';
-import Whitelist from './pages/Whitelist';
-import Notifications from './pages/Notifications';
-import Rules from './pages/Rules';
-import Attack from './pages/Attack';
-import Settings from './pages/Settings';
-import YaraRules from './pages/YaraRules';
-import Groups from './pages/Groups';
-import Policies from './pages/Policies';
 import ActionsHistory from './pages/ActionsHistory';
-import NetworkOverview from './pages/NetworkOverview';
-import NetworkInvestigation from './pages/NetworkInvestigation';
+import Policies from './pages/Policies';
+import DetectionRules from './pages/DetectionRules';
+import Settings from './pages/Settings';
+import Investigate from './pages/Investigate';
 
 export default function App() {
   return (
     <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/network" element={<NetworkOverview />} />
-          <Route path="/network/:id/investigate" element={<NetworkInvestigation />} />
-          <Route path="/agents" element={<Agents />} />
-          <Route path="/groups" element={<Groups />} />
-          <Route path="/alerts" element={<Alerts />} />
-          <Route path="/incidents" element={<Incidents />} />
-          <Route path="/incidents/:id" element={<Incidents />} />
-          <Route path="/actions" element={<ActionsHistory />} />
-          <Route path="/policies" element={<Policies />} />
-          <Route path="/commands" element={<Commands />} />
-          <Route path="/risk" element={<RiskMonitor />} />
-          <Route path="/risk-monitor" element={<RiskMonitor />} />
-          <Route path="/fix-verification" element={<FixVerification />} />
-          <Route path="/risk-legacy" element={<RiskAssessment />} />
-          <Route path="/rules/detection" element={<DetectionRules />} />
-          <Route path="/rules/process-chains" element={<DetectionRules initialTab="process-chains" />} />
-          <Route path="/rules/yara" element={<YaraRules />} />
-          <Route path="/threat-intel" element={<ThreatIntel />} />
-          <Route path="/process" element={<ProcessTree />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/whitelist" element={<Whitelist />} />
-          <Route path="/notifications" element={<Notifications />} />
-          <Route path="/rules" element={<Rules />} />
-          <Route path="/attack" element={<Attack />} />
-          <Route path="/settings" element={<Settings />} />
-        </Route>
-      </Routes>
+      <Route element={<Layout />}>
+        {/* Operations Hub */}
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/incidents" element={<Incidents />} />
+        <Route path="/incidents/:id" element={<Incidents />} />
+        <Route path="/investigate" element={<Investigate />} />
+
+        {/* Response Actions & Automation */}
+        <Route path="/actions" element={<ActionsHistory />} />
+        <Route path="/policies" element={<Policies />} />
+
+        {/* Management & Administration */}
+        <Route path="/agents" element={<Agents />} />
+        <Route path="/detection" element={<DetectionRules />} />
+        <Route path="/rules/detection" element={<DetectionRules />} />
+        <Route path="/rules/process-chains" element={<DetectionRules initialTab="process-chains" />} />
+        <Route path="/rules/yara" element={<DetectionRules initialTab="yara" />} />
+        <Route path="/settings" element={<Settings />} />
+
+        {/* Backward Compatibility Routes (Consolidated into 7 Core Hubs) */}
+        <Route path="/alerts" element={<Navigate to="/incidents?tab=alerts" replace />} />
+        <Route path="/process" element={<Navigate to="/investigate?tab=process" replace />} />
+        <Route path="/network" element={<Navigate to="/investigate?tab=network" replace />} />
+        <Route path="/threat-intel" element={<Navigate to="/investigate?tab=threat-intel" replace />} />
+        <Route path="/groups" element={<Navigate to="/agents?tab=groups" replace />} />
+        <Route path="/commands" element={<Navigate to="/actions?tab=commands" replace />} />
+        <Route path="/whitelist" element={<Navigate to="/settings?tab=whitelist" replace />} />
+        <Route path="/notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
+        <Route path="/reports" element={<Navigate to="/settings?tab=reports" replace />} />
+        <Route path="/rules" element={<Navigate to="/detection" replace />} />
+
+        {/* Catch-all redirect */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
   );
 }

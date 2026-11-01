@@ -57,7 +57,7 @@ export const updateAutoRollbackSettings = async (settings) => {
  */
 export const listAllActions = async () => {
   try {
-    const agents = await api.get('/agents');
+    const agents = await api.get('/agents/');
     const agentList = Array.isArray(agents) ? agents : [];
 
     const promises = agentList.map(async (ag) => {

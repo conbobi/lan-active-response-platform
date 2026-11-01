@@ -13,6 +13,7 @@ from app.services.detection.process_chain_rule_service import ProcessChainRuleSe
 router = APIRouter(tags=["Process Chain Rules"])
 
 
+@router.get("", response_model=List[ProcessChainRuleOut], include_in_schema=False)
 @router.get("/", response_model=List[ProcessChainRuleOut])
 async def list_process_chain_rules(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     """List all process chain rules with attached parent and child groups."""

@@ -3,7 +3,7 @@ import api from './api';
 
 export const getReports = async () => {
   try {
-    const data = await api.get('/reports');
+    const data = await api.get('/reports/');
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error('API Error in getReports:', error);

@@ -22,6 +22,7 @@ router = APIRouter(tags=["Response Policies & Policy Engine"])
 # ==============================================================================
 
 @router.get("/policies", response_model=List[ResponsePolicyResponse])
+@router.get("/policies/", response_model=List[ResponsePolicyResponse], include_in_schema=False)
 async def list_policies(
     db: AsyncSession = Depends(get_db)
 ):
@@ -38,6 +39,7 @@ async def list_policies(
 
 
 @router.post("/policies", response_model=ResponsePolicyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/policies/", response_model=ResponsePolicyResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 async def create_policy(
     dto: ResponsePolicyCreate,
     db: AsyncSession = Depends(get_db)

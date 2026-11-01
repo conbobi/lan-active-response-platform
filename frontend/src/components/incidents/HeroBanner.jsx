@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import InfoTooltip from '../ui/InfoTooltip';
@@ -22,6 +23,7 @@ export default function HeroBanner({
   actionLoading,
   isIsolated,
 }) {
+  const navigate = useNavigate();
   if (!incident) return null;
 
   const culprit = incident.culpritProcess || {
@@ -168,6 +170,19 @@ export default function HeroBanner({
               Kill Tree ({culprit.name})
             </Button>
           )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const targetAgent = incident.agentId || incident.agent_id || incident.agent_hostname || '';
+              const pid = culprit.pid || '';
+              navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid ? `&pid=${pid}` : ''}`);
+            }}
+            title="Open culprit process in interactive root cause tree"
+          >
+            🌳 Jump to Process Tree
+          </Button>
         </div>
       </div>
 

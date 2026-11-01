@@ -11,6 +11,7 @@ from app.models.event import Event
 
 router = APIRouter()
 
+@router.get("", response_model=List[EventOut], include_in_schema=False)
 @router.get("/", response_model=List[EventOut])
 async def list_events(db: AsyncSession = Depends(get_db)):
     repo = EventRepository(db)

@@ -54,6 +54,8 @@ services:
     depends_on:
       manager:
         condition: service_healthy
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - larp-net
 

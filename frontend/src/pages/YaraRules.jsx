@@ -28,7 +28,7 @@ const SAMPLE_RULE_TEMPLATE = `rule Custom_Malware_Pattern {
         any of them
 }`;
 
-export default function YaraRules() {
+export default function YaraRules({ embedded = false }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(false);
   const [agents, setAgents] = useState([]);
@@ -138,30 +138,58 @@ export default function YaraRules() {
 
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1 className="page-title">YARA Malware Signatures</h1>
-          <p className="page-subtitle">Pattern matching engine for binary payload identification, webshells, and ransomware</p>
+      {!embedded ? (
+        <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h1 className="page-title">YARA Malware Signatures</h1>
+            <p className="page-subtitle">Pattern matching engine for binary payload identification, webshells, and ransomware</p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowScanModal(true)}
+              iconLeft={<FiPlay size={14} />}
+            >
+              Dispatch Scan
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowAddModal(true)}
+              iconLeft={<FiPlus size={14} />}
+            >
+              New Rule
+            </Button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowScanModal(true)}
-            iconLeft={<FiPlay size={14} />}
-          >
-            Dispatch Scan
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setShowAddModal(true)}
-            iconLeft={<FiPlus size={14} />}
-          >
-            New Rule
-          </Button>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', padding: '0.5rem 0' }}>
+          <div>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              Binary & Payload Pattern Signatures ({rules.length} active)
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowScanModal(true)}
+              iconLeft={<FiPlay size={14} />}
+            >
+              Dispatch Agent Scan
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowAddModal(true)}
+              iconLeft={<FiPlus size={14} />}
+            >
+              Add YARA Rule
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '1.5rem' }}>
         {/* Rules Table */}

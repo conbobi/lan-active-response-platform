@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import useProcessTree from '../hooks/useProcessTree';
 import { useAgents } from '../hooks/useAgents';
@@ -77,7 +78,11 @@ function TabButton({ active, onClick, icon, label, count, countTone = 'default' 
   );
 }
 
-export default function ProcessTree() {
+export default function ProcessTree({ embedded = false }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryAgent = searchParams.get('agent') || searchParams.get('agent_id');
+  const queryPid = searchParams.get('pid');
+
   const { agents } = useAgents();
   const [selectedAgent, setSelectedAgent] = useState('');
   const [activeTab, setActiveTab] = useState('priority'); // 'priority' | 'all'
@@ -130,19 +135,39 @@ export default function ProcessTree() {
     return Object.values(byHostname);
   }, [agents]);
 
-  // Default agent selection → prefer active
+  // Query param agent selection
+  useEffect(() => {
+    if (!queryAgent || dedupedAgents.length === 0) return;
+    const match = dedupedAgents.find(
+      (a) => a.id.toLowerCase() === queryAgent.toLowerCase() || (a.hostname && a.hostname.toLowerCase() === queryAgent.toLowerCase())
+    );
+    if (match && match.id !== selectedAgent) {
+      setSelectedAgent(match.id);
+    }
+  }, [queryAgent, dedupedAgents, selectedAgent]);
+
+  // Default agent selection → prefer active if no valid agent selected
   useEffect(() => {
     if (dedupedAgents.length === 0) return;
     const isCurrentValid = dedupedAgents.some((a) => a.id === selectedAgent);
     if (!selectedAgent || !isCurrentValid) {
+      if (queryAgent) {
+        const match = dedupedAgents.find(
+          (a) => a.id.toLowerCase() === queryAgent.toLowerCase() || (a.hostname && a.hostname.toLowerCase() === queryAgent.toLowerCase())
+        );
+        if (match) {
+          setSelectedAgent(match.id);
+          return;
+        }
+      }
       const active =
         dedupedAgents.find((a) => ['active', 'online'].includes((a.status || '').toLowerCase())) ||
         dedupedAgents[0];
       if (active) setSelectedAgent(active.id);
     }
-  }, [dedupedAgents, selectedAgent]);
+  }, [dedupedAgents, selectedAgent, queryAgent]);
 
-  // Auto-expand important nodes when tree loads
+  // Auto-expand important nodes & ancestors of queryPid when tree loads
   useEffect(() => {
     if (!processTree || !selectedAgent) return;
     const roots = processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]);
@@ -151,6 +176,28 @@ export default function ProcessTree() {
     setExpandedPids((prev) => {
       const next = new Set(prev);
       let changed = false;
+
+      // Expand ancestors of focused PID
+      if (queryPid) {
+        const target = Number(queryPid);
+        const expandPath = (nodes) => {
+          for (const n of nodes || []) {
+            if (n.pid === target) return true;
+            if (Array.isArray(n.children) && n.children.length > 0) {
+              if (expandPath(n.children)) {
+                next.add(n.pid);
+                changed = true;
+                return true;
+              }
+            }
+          }
+          return false;
+        };
+        expandPath(roots);
+        next.add(target);
+        changed = true;
+      }
+
       const walk = (nodes, depth) => {
         for (const n of nodes || []) {
           const isImportant = /explorer\.exe|notepad\.exe|msedge\.exe|chrome\.exe|Code\.exe/i.test(n.name || '');
@@ -164,7 +211,11 @@ export default function ProcessTree() {
       walk(roots, 0);
       return changed ? next : prev;
     });
-  }, [processTree, selectedAgent]);
+
+    if (queryPid) {
+      setActiveTab('all');
+    }
+  }, [processTree, selectedAgent, queryPid]);
 
   const agentOptions = useMemo(
     () =>
@@ -280,33 +331,60 @@ export default function ProcessTree() {
 
   return (
     <div>
-      {/* ===== Page header ===== */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Process & Root Cause Analysis</h1>
-          <p className="page-subtitle">
-            Inspect host process trees, identify anomalous parent-child relationships, and terminate malicious execution
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {killing && (
-            <span style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <FiRotateCw size={14} className="spin" /> Dispatching Kill & Syncing...
-            </span>
-          )}
-          <div style={{ width: 260 }} title="Các agent cũ cùng hostname đã được tự động ẩn để tránh nhầm lẫn">
-            <Dropdown options={agentOptions} value={selectedAgent} onChange={setSelectedAgent} disabled={killing} />
+      {/* ===== Page header or compact toolbar ===== */}
+      {!embedded ? (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Process & Root Cause Analysis</h1>
+            <p className="page-subtitle">
+              Inspect host process trees, identify anomalous parent-child relationships, and terminate malicious execution
+            </p>
           </div>
-          <Button
-            variant="outline"
-            iconLeft={<FiRotateCw size={15} className={killing ? 'spin' : ''} />}
-            onClick={refreshProcessData}
-            disabled={killing}
-          >
-            {killing ? 'Syncing...' : 'Refresh'}
-          </Button>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            {killing && (
+              <span style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <FiRotateCw size={14} className="spin" /> Dispatching Kill & Syncing...
+              </span>
+            )}
+            <div style={{ width: 260 }} title="Các agent cũ cùng hostname đã được tự động ẩn để tránh nhầm lẫn">
+              <Dropdown options={agentOptions} value={selectedAgent} onChange={setSelectedAgent} disabled={killing} />
+            </div>
+            <Button
+              variant="outline"
+              iconLeft={<FiRotateCw size={15} className={killing ? 'spin' : ''} />}
+              onClick={refreshProcessData}
+              disabled={killing}
+            >
+              {killing ? 'Syncing...' : 'Refresh'}
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Target Agent:</span>
+            <div style={{ width: 280 }} title="Các agent cũ cùng hostname đã được tự động ẩn để tránh nhầm lẫn">
+              <Dropdown options={agentOptions} value={selectedAgent} onChange={setSelectedAgent} disabled={killing} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            {killing && (
+              <span style={{ fontSize: '0.85rem', color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <FiRotateCw size={14} className="spin" /> Dispatching Kill & Syncing...
+              </span>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              iconLeft={<FiRotateCw size={14} className={killing ? 'spin' : ''} />}
+              onClick={refreshProcessData}
+              disabled={killing}
+            >
+              {killing ? 'Syncing...' : 'Refresh'}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* ===== Success alert ===== */}
       {actionSuccess && (
@@ -323,6 +401,39 @@ export default function ProcessTree() {
           </div>
           <button onClick={clearActionSuccess} style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer' }}>
             <FiX size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* ===== Focus PID alert ===== */}
+      {queryPid && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0.6rem 1rem', background: 'var(--primary-dim)',
+          border: '1px solid var(--primary)', borderRadius: 'var(--radius-md)',
+          marginBottom: '1.25rem', color: 'var(--primary)',
+          fontSize: '0.85rem', fontWeight: 600,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiAlertOctagon size={16} />
+            <span>Investigating target PID: <strong className="pid-mono">{queryPid}</strong> on agent {selectedAgent}. Ancestor tree auto-expanded.</span>
+          </div>
+          <button
+            onClick={() => {
+              searchParams.delete('pid');
+              setSearchParams(searchParams);
+            }}
+            style={{
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-primary)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-primary)',
+              padding: '2px 8px',
+              fontSize: '0.75rem',
+              cursor: 'pointer'
+            }}
+          >
+            Clear Focus
           </button>
         </div>
       )}

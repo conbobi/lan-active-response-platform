@@ -3,7 +3,7 @@ import api from './api';
 
 export const getWhitelist = async () => {
   try {
-    const data = await api.get('/whitelist');
+    const data = await api.get('/whitelist/');
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error('API Error in getWhitelist:', error);
@@ -13,7 +13,7 @@ export const getWhitelist = async () => {
 
 export const addWhitelistEntry = async (entry) => {
   try {
-    return await api.post('/whitelist', entry);
+    return await api.post('/whitelist/', entry);
   } catch (error) {
     console.error('API Error in addWhitelistEntry:', error);
     throw error;

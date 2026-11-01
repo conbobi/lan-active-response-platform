@@ -17,61 +17,21 @@ export const mapCommand = (cmd) => {
 
 export const getCommands = async () => {
   try {
-    const data = await api.get('/commands');
+    const data = await api.get('/commands/');
     return Array.isArray(data) ? data.map(mapCommand) : [];
   } catch (err) {
-    console.warn('API /commands not found or error, using default commands data');
-    return [
-      {
-        id: 'CMD-801',
-        agentId: 'client4',
-        command: 'isolate_agent',
-        parameters: '{"reason": "Suspicious outbound traffic"}',
-        status: 'SUCCESS',
-        result: 'Agent client4 network interface isolated successfully.',
-        createdAt: new Date(Date.now() - 1800000).toISOString(),
-        executedAt: new Date(Date.now() - 1795000).toISOString(),
-      },
-      {
-        id: 'CMD-802',
-        agentId: 'client1',
-        command: 'update_firewall_rule',
-        parameters: '{"rule_id": "R-99", "action": "BLOCK_PORT_8080"}',
-        status: 'SUCCESS',
-        result: 'Rule R-99 applied to eBPF table.',
-        createdAt: new Date(Date.now() - 3600000).toISOString(),
-        executedAt: new Date(Date.now() - 3590000).toISOString(),
-      },
-      {
-        id: 'CMD-803',
-        agentId: 'client3',
-        command: 'collect_sys_logs',
-        parameters: '{"duration": "5m"}',
-        status: 'FAILED',
-        result: 'Timeout waiting for response from agent daemon.',
-        createdAt: new Date(Date.now() - 7200000).toISOString(),
-        executedAt: new Date(Date.now() - 7180000).toISOString(),
-      },
-    ];
+    console.error('API /commands/ error:', err);
+    throw err;
   }
 };
 
 export const createCommand = async (payload) => {
   try {
-    const data = await api.post('/commands', payload);
+    const data = await api.post('/commands/', payload);
     return mapCommand(data);
   } catch (err) {
     console.error('API Error in createCommand:', err);
-    return {
-      id: `CMD-${Math.floor(Math.random() * 900) + 100}`,
-      agentId: payload.agent_id || payload.agentId || 'ALL',
-      command: payload.command,
-      parameters: typeof payload.parameters === 'string' ? payload.parameters : JSON.stringify(payload.parameters || {}),
-      status: 'PENDING',
-      result: 'Command dispatched to queue.',
-      createdAt: new Date().toISOString(),
-      executedAt: null,
-    };
+    throw err;
   }
 };
 

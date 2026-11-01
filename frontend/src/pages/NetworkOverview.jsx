@@ -43,32 +43,46 @@ export default function NetworkOverview() {
   }, [load]);
   
   return (
-    <div className="flex h-screen bg-gray-50">
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6 max-w-6xl">
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-2xl font-bold">🌐 Network Monitor</h1>
-            <span className="flex items-center gap-2 text-sm text-green-600">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              Live · 5s
+    <div style={{ display: 'flex', gap: '1.25rem', width: '100%', minHeight: '600px' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+            <h1 className="page-title" style={{ margin: 0 }}>🌐 Network Flow Monitor</h1>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--success)' }}>
+              <span className="live-dot" />
+              Live Telemetry (5s)
             </span>
           </div>
           
-          <div className="flex gap-3 mb-6 flex-wrap">
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
             <select
               value={filters.agent}
               onChange={e => setFilters({...filters, agent: e.target.value})}
-              className="border border-gray-300 rounded px-3 py-1.5 text-sm"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-primary)',
+                color: 'var(--text-primary)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '0.45rem 0.75rem',
+                fontSize: '0.85rem',
+              }}
             >
               <option value="all">Tất cả agents</option>
               {agents.map(a => (
-                <option key={a.id} value={a.id}>{a.id}</option>
+                <option key={a.id} value={a.id}>{a.name || a.hostname || a.id}</option>
               ))}
             </select>
             <select
               value={filters.time}
               onChange={e => setFilters({...filters, time: e.target.value})}
-              className="border border-gray-300 rounded px-3 py-1.5 text-sm"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-primary)',
+                color: 'var(--text-primary)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '0.45rem 0.75rem',
+                fontSize: '0.85rem',
+              }}
             >
               <option value="1h">1 giờ qua</option>
               <option value="24h">24 giờ qua</option>
@@ -77,39 +91,46 @@ export default function NetworkOverview() {
             <select
               value={filters.risk}
               onChange={e => setFilters({...filters, risk: e.target.value})}
-              className="border border-gray-300 rounded px-3 py-1.5 text-sm"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-primary)',
+                color: 'var(--text-primary)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '0.45rem 0.75rem',
+                fontSize: '0.85rem',
+              }}
             >
               <option value="all">Tất cả mức độ</option>
-              <option value="high">🔴 High</option>
-              <option value="medium">🟠 Medium</option>
-              <option value="low">🟢 Low</option>
+              <option value="high">🔴 High Risk</option>
+              <option value="medium">🟠 Medium Risk</option>
+              <option value="low">🟢 Low Risk</option>
             </select>
           </div>
           
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              🚨 Suspicious Connections
-              <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-sm font-normal">
+          <div className="card" style={{ padding: '1.25rem', marginBottom: '1.25rem' }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+              🚨 Suspicious Egress & Ingress Connections
+              <span style={{ background: 'var(--critical-dim)', color: 'var(--critical)', border: '1px solid var(--critical)', padding: '0.1rem 0.5rem', borderRadius: 'var(--radius-full)', fontSize: '0.75rem' }}>
                 {suspicious.length}
               </span>
             </h2>
             
             {loading ? (
-              <div className="space-y-3">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {[1,2,3].map(i => (
-                  <div key={i} className="bg-gray-100 rounded-lg p-4 animate-pulse h-24" />
+                  <div key={i} className="card skeleton" style={{ height: '70px' }} />
                 ))}
               </div>
             ) : suspicious.length === 0 ? (
-              <div className="text-center text-green-600 py-8">
-                <div className="text-4xl mb-2">✅</div>
-                <div className="font-medium">Không có kết nối đáng ngờ</div>
-                <div className="text-sm text-gray-500 mt-1">
+              <div style={{ textAlign: 'center', color: 'var(--success)', padding: '2rem 0' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>✅</div>
+                <div style={{ fontWeight: 600 }}>Không có kết nối mạng đáng ngờ</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
                   {filters.time === '1h' ? 'trong 1 giờ qua' : `trong ${filters.time}`}
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {suspicious.map(conn => (
                   <ConnectionRow
                     key={conn.id}
@@ -122,17 +143,17 @@ export default function NetworkOverview() {
             )}
           </div>
           
-          <div className="grid grid-cols-2 gap-6">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-              <h2 className="font-semibold mb-4">📊 Top Talkers</h2>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+            <div className="card" style={{ padding: '1.25rem' }}>
+              <h2 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--text-primary)' }}>📊 Top Talkers</h2>
               {topTalkers.length === 0 ? (
-                <div className="text-center text-gray-400 py-4 text-sm">Không có dữ liệu</div>
+                <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '1rem 0', fontSize: '0.85rem' }}>Không có dữ liệu</div>
               ) : (
-                <div className="space-y-2">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                   {topTalkers.map((t, i) => (
-                    <div key={i} className="flex justify-between items-center text-sm py-1">
-                      <span className="font-mono truncate">{t.process_name}</span>
-                      <span className="text-gray-600 whitespace-nowrap ml-2">
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', padding: '0.35rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <span className="pid-mono" style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.process_name}</span>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', whiteSpace: 'nowrap', marginLeft: '0.5rem' }}>
                         {t.connections} conn · {t.unique_destinations} dest
                       </span>
                     </div>
@@ -141,16 +162,16 @@ export default function NetworkOverview() {
               )}
             </div>
             
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-              <h2 className="font-semibold mb-4">🌐 L7 Protocols</h2>
+            <div className="card" style={{ padding: '1.25rem' }}>
+              <h2 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '0.75rem', color: 'var(--text-primary)' }}>🌐 L7 Protocols</h2>
               {protocols.length === 0 ? (
-                <div className="text-center text-gray-400 py-4 text-sm">Không có dữ liệu</div>
+                <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '1rem 0', fontSize: '0.85rem' }}>Không có dữ liệu</div>
               ) : (
-                <div className="space-y-2">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                   {protocols.map((p, i) => (
-                    <div key={i} className="flex justify-between items-center text-sm py-1">
-                      <span className="font-mono">{p.protocol}</span>
-                      <span className="text-gray-600">{p.count}</span>
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', padding: '0.35rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <span className="pid-mono">{p.protocol}</span>
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{p.count}</span>
                     </div>
                   ))}
                 </div>
@@ -164,9 +185,9 @@ export default function NetworkOverview() {
         <ConnectionDetail
           conn={selected}
           onClose={() => setSelected(null)}
-          onBlockIP={() => alert('Block IP: chưa implement — roadmap Phase 2')}
-          onKillProcess={() => navigate(`/network/${selected.id}/investigate`)}
-          onInvestigate={() => navigate(`/network/${selected.id}/investigate`)}
+          onBlockIP={() => alert(`Block IP ${selected.dst_ip}: Đang gửi lệnh cách ly firewall`)}
+          onKillProcess={() => navigate(`/investigate?tab=process&agent=${encodeURIComponent(selected.agent_id)}&pid=${selected.pid}`)}
+          onInvestigate={() => navigate(`/investigate?tab=process&agent=${encodeURIComponent(selected.agent_id)}&pid=${selected.pid}`)}
         />
       )}
     </div>
