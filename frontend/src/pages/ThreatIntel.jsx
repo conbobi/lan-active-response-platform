@@ -30,7 +30,7 @@ const INDICATOR_TYPES = [
 
 export default function ThreatIntel() {
   const { loading: queryLoading, result, checkIndicator } = useThreatIntel();
-  const [activeTab, setActiveTab] = useState('lookup'); // 'lookup', 'feeds', 'indicators'
+  const [activeTab, setActiveTab] = useState('indicators'); // 'lookup', 'feeds', 'indicators'
 
   // Lookup state
   const [indicatorType, setIndicatorType] = useState('ip');
@@ -240,33 +240,43 @@ export default function ThreatIntel() {
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                    <div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Indicator Verdict:</div>
-                      <div style={{ marginTop: '0.25rem' }}>
-                        <Badge
-                          status={result.status === 'MALICIOUS' ? 'critical' : 'online'}
-                          label={result.status || 'CLEAN'}
-                        />
-                      </div>
-                    </div>
-                    <RiskGauge value={result.risk_score || (result.status === 'MALICIOUS' ? 90 : 10)} size={110} />
-                  </div>
+                  {(() => {
+                    const isMalicious = result.is_malicious ?? (result.status === 'MALICIOUS');
+                    const score = Math.round(result.confidence ?? result.risk_score ?? (isMalicious ? 85 : 0));
+                    const category = result.threat_type || result.threat_category || 'Clean Traffic';
+                    const displayVal = result.value || indicatorValue;
+                    return (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                          <div>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Indicator Verdict:</div>
+                            <div style={{ marginTop: '0.25rem' }}>
+                              <Badge
+                                status={isMalicious ? 'critical' : 'online'}
+                                label={isMalicious ? 'MALICIOUS' : 'CLEAN'}
+                              />
+                            </div>
+                          </div>
+                          <RiskGauge value={score} size={110} />
+                        </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Indicator Value:</span>
-                      <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>{result.value}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Threat Category:</span>
-                      <span style={{ fontWeight: 600 }}>{result.threat_category || 'Clean Traffic'}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Source:</span>
-                      <span style={{ fontWeight: 500 }}>{result.source || 'Local Threat DB'}</span>
-                    </div>
-                  </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Indicator Value:</span>
+                            <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>{displayVal}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Threat Category:</span>
+                            <span style={{ fontWeight: 600 }}>{category}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Source:</span>
+                            <span style={{ fontWeight: 500 }}>{result.source || 'Local Threat DB'}</span>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>

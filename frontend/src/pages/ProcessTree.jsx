@@ -85,7 +85,7 @@ export default function ProcessTree({ embedded = false }) {
 
   const { agents } = useAgents();
   const [selectedAgent, setSelectedAgent] = useState('');
-  const [activeTab, setActiveTab] = useState('priority'); // 'priority' | 'all'
+  const [activeTab, setActiveTab] = useState('all'); // 'priority' | 'all'
 
   const {
     processTree,

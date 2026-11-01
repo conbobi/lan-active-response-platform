@@ -241,6 +241,13 @@ async def send_telemetry(ws) -> None:
             now = time.time()
             _last_heartbeat_sent = now
             
+            cpu_val = float(psutil.cpu_percent(interval=None))
+            ram_val = float(psutil.virtual_memory().percent)
+            try:
+                disk_val = float(psutil.disk_usage('C:\\').percent if os.name == 'nt' else psutil.disk_usage('/').percent)
+            except Exception:
+                disk_val = 0.0
+
             heartbeat = {
                 "type": "HEARTBEAT",
                 "payload": {
@@ -248,6 +255,9 @@ async def send_telemetry(ws) -> None:
                     "hostname": os.environ.get("COMPUTERNAME", "WIN-DEMO-01"),
                     "platform": "windows",
                     "ip_address": os.getenv("AGENT_IP", "192.168.30.106"),
+                    "cpu": cpu_val,
+                    "ram": ram_val,
+                    "disk": disk_val,
                 }
             }
             await ws.send(json.dumps(heartbeat))

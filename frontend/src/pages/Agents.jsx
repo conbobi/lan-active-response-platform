@@ -324,7 +324,7 @@ export default function Agents({ initialTab }) {
                   <th>IP Address</th>
                   <th>Status</th>
                   <th>CPU / RAM</th>
-                  <th>Firewall</th>
+                  <th>Isolation</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
@@ -375,14 +375,14 @@ export default function Agents({ initialTab }) {
                         </Badge>
                       </td>
                       <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        {agent.cpu_percent != null ? `${agent.cpu_percent}%` : '—'} /{' '}
-                        {agent.ram_percent != null ? `${agent.ram_percent}%` : '—'}
+                        {agent.cpu != null ? `${Math.round(agent.cpu)}%` : '—'} /{' '}
+                        {agent.ram != null ? `${Math.round(agent.ram)}%` : '—'}
                       </td>
                       <td>
-                        {agent.firewall_enabled ? (
-                          <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: '0.8rem' }}>Active</span>
+                        {agent.is_isolated ? (
+                          <span style={{ color: 'var(--error)', fontWeight: 600, fontSize: '0.8rem' }}>Isolated</span>
                         ) : (
-                          <span style={{ color: 'var(--error)', fontSize: '0.8rem' }}>Off</span>
+                          <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: '0.8rem' }}>Online</span>
                         )}
                       </td>
                       <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
