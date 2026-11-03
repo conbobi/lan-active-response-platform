@@ -3,6 +3,7 @@ import { getAIAnalysis, regenerateAIAnalysis, rateAIAnalysis } from '../../api/i
 import Button from "../ui/Button";
 import Badge from "../ui/Badge";
 import toast from "react-hot-toast";
+import AISuggestionPanel from './AISuggestionPanel';
 export default function AIAnalysisTab({ incidentId }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -460,6 +461,12 @@ export default function AIAnalysisTab({ incidentId }) {
           {analysis.root_cause || 'Chưa xác định được nguyên nhân gốc rõ ràng.'}
         </div>
       </div>
+
+      {/* 3.5. Đề xuất phản ứng (Response AI Assist) */}
+      <AISuggestionPanel
+        incidentId={incidentId}
+        onRefresh={() => fetchAnalysis(true)}
+      />
 
       {/* 4. Analyst Feedback & Rating */}
       <div

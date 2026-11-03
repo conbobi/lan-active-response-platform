@@ -49,3 +49,4 @@ class MITREKnowledgeBase:
 
 
 mitre_kb = MITREKnowledgeBase()
+

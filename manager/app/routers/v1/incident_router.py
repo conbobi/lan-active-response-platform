@@ -223,3 +223,74 @@ async def rate_ai_analysis(
         "rating": rating,
         "analysis_id": analysis.id
     }
+
+
+@router.post("/{incident_id}/ai-analysis/suggest-response")
+@router.post("/{incident_id}/ai-analysis/suggest-response/", include_in_schema=False)
+async def suggest_ai_response(
+    incident_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger AI response suggestion generation asynchronously (<2s)."""
+    from app.models.incident import Incident
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    async def _run_suggest():
+        async with AsyncSessionLocal() as session:
+            try:
+                from app.services.ai.ai_response_service import AIResponseService
+                await AIResponseService().suggest_response(incident_id, session)
+                logger.info(f"Background AI response suggestion completed for {incident_id}")
+            except Exception as e:
+                logger.error(f"Background AI response suggestion failed for {incident_id}: {e}", exc_info=True)
+
+    background_tasks.add_task(_run_suggest)
+
+    return {
+        "status": "suggesting",
+        "incident_id": incident_id,
+        "message": "AI response suggestion started. Poll GET /ai-analysis to retrieve result.",
+    }
+
+
+@router.post("/{incident_id}/ai-analysis/apply-suggestion")
+@router.post("/{incident_id}/ai-analysis/apply-suggestion/", include_in_schema=False)
+async def apply_ai_suggestion(
+    incident_id: str,
+    payload: Dict[str, Any] = Body(default={"analyst": "current_user"}),
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply AI response suggestion — delegates to ResponseActionService."""
+    analyst = payload.get("analyst", "current_user")
+    from app.services.ai.ai_response_service import AIResponseService
+    action = await AIResponseService().apply_suggestion(incident_id, analyst, db)
+    return {
+        "status": "applied",
+        "incident_id": incident_id,
+        "action_id": action.id,
+        "action_type": action.action_type,
+    }
+
+
+@router.post("/{incident_id}/ai-analysis/dismiss-suggestion")
+@router.post("/{incident_id}/ai-analysis/dismiss-suggestion/", include_in_schema=False)
+async def dismiss_ai_suggestion(
+    incident_id: str,
+    payload: Dict[str, Any] = Body(default={"analyst": "current_user", "reason": ""}),
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyst dismisses AI response suggestion with reasoning."""
+    analyst = payload.get("analyst", "current_user")
+    reason = payload.get("reason", "")
+    from app.services.ai.ai_response_service import AIResponseService
+    analysis = await AIResponseService().dismiss_suggestion(incident_id, analyst, reason, db)
+    return {
+        "status": "dismissed",
+        "incident_id": incident_id,
+        "analysis_id": analysis.id,
+        "dismiss_reason": analysis.dismiss_reason,
+    }
+

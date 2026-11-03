@@ -2,6 +2,7 @@
 import React from 'react';
 import useActions from '../../hooks/useActions';
 import ActionTimeline from '../actions/ActionTimeline';
+import AISuggestionPanel from './AISuggestionPanel';
 import Button from '../ui/Button';
 import {
   FiLock,
@@ -76,6 +77,14 @@ export default function ActionSuggestions({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
+      {/* SECTION 0: AI RESPONSE SUGGESTION PANEL */}
+      <AISuggestionPanel
+        incidentId={incident?.id}
+        onRefresh={() => {
+          if (onAction) onAction('refresh', {});
+        }}
+      />
+
       {/* SECTION 1: SMART NEXT-STEP RECOMMENDATIONS */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>

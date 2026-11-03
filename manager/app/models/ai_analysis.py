@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 from typing import Optional, Any, List, Dict
-from sqlalchemy import String, Text, Float, ForeignKey, JSON
+from sqlalchemy import String, Text, Float, DateTime, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
@@ -31,3 +32,20 @@ class AIAnalysis(Base, TimestampMixin):
     )  # 'helpful' | 'wrong' | null
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Phase 4 — Response AI Assist (Layer 2)
+    suggested_action: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # kill_process | kill_process_tree | isolate | suspend_process | block_ip | no_action
+    suggestion_params: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )  # {pid: 656, ip: "185.220.101.5", ...}
+    suggestion_reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    blast_radius: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )  # {processes_affected: 5, sessions_affected: 0, reversible: false}
+    applied_by_analyst: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismissed_by_analyst: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    dismissed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismiss_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

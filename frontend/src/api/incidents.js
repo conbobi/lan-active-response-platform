@@ -133,6 +133,9 @@ export const closeIncident = async (id, { label, label_reason, labeled_by = 'cur
 export const getAIAnalysis = (id) => api.get(`/incidents/${id}/ai-analysis`);
 export const regenerateAIAnalysis = (id) => api.post(`/incidents/${id}/ai-analysis/regenerate`);
 export const rateAIAnalysis = (id, rating) => api.post(`/incidents/${id}/ai-analysis/rate`, { rating });
+export const suggestAIResponse = (id) => api.post(`/incidents/${id}/ai-analysis/suggest-response`);
+export const applyAISuggestion = (id, payload = { analyst: 'current_user' }) => api.post(`/incidents/${id}/ai-analysis/apply-suggestion`, payload);
+export const dismissAISuggestion = (id, payload = { analyst: 'current_user', reason: '' }) => api.post(`/incidents/${id}/ai-analysis/dismiss-suggestion`, payload);
 
 export default {
   mapIncident,
@@ -148,4 +151,7 @@ export default {
   getAIAnalysis,
   regenerateAIAnalysis,
   rateAIAnalysis,
+  suggestAIResponse,
+  applyAISuggestion,
+  dismissAISuggestion,
 };

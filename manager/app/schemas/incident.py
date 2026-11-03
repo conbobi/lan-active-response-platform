@@ -95,6 +95,15 @@ class AIAnalysisOut(ORMBaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    suggested_action: Optional[str] = None
+    suggestion_params: Optional[Dict[str, Any]] = None
+    suggestion_reasoning: Optional[str] = None
+    blast_radius: Optional[Dict[str, Any]] = None
+    applied_by_analyst: Optional[str] = None
+    applied_at: Optional[datetime] = None
+    dismissed_by_analyst: Optional[str] = None
+    dismissed_at: Optional[datetime] = None
+    dismiss_reason: Optional[str] = None
 
 
 class AIAnalysisRateDTO(BaseModel):
