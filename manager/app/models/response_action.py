@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 from sqlalchemy import String, JSON, DateTime, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
 
@@ -38,6 +39,14 @@ class ResponseAction(Base, TimestampMixin):
     )
     cooldown_until: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # AI Feedback
+    outcome: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # effective | ineffective | caused_side_effect | rolled_back_by_analyst
+    feedback_signal: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
     )
 
     # Relationships

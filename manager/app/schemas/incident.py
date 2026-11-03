@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from app.schemas.base import ORMBaseModel
 from app.schemas.enums import IncidentSeverity, IncidentStatus
@@ -46,6 +46,17 @@ class IncidentUpdate(ORMBaseModel):
     assigned_to: Optional[str] = None
     risk_score: Optional[float] = None
     notes: Optional[str] = None
+    label: Optional[str] = None
+    label_reason: Optional[str] = None
+    labeled_by: Optional[str] = None
+    labeled_at: Optional[datetime] = None
+
+
+class IncidentLabelUpdate(BaseModel):
+    status: Optional[str] = None
+    label: Optional[str] = None
+    label_reason: Optional[str] = None
+    labeled_by: Optional[str] = "current_user"
 
 
 class IncidentOut(ORMBaseModel):
@@ -59,12 +70,35 @@ class IncidentOut(ORMBaseModel):
     risk_score: float
     notes: Optional[str] = None
     resolved_at: Optional[datetime] = None
+    label: Optional[str] = None
+    label_reason: Optional[str] = None
+    labeled_by: Optional[str] = None
+    labeled_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     culprit_process: Optional[dict] = None
     parent_process: Optional[dict] = None
     network_indicators: Optional[list] = None
     factors_breakdown: Optional[list] = None
+
+
+class AIAnalysisOut(ORMBaseModel):
+    id: str
+    incident_id: str
+    analysis_type: str = "triage"
+    summary: str
+    mitre_techniques: Optional[List[Dict[str, Any]]] = None
+    root_cause: Optional[str] = None
+    model_name: Optional[str] = None
+    confidence: float = 0.0
+    analyst_rating: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AIAnalysisRateDTO(BaseModel):
+    rating: str  # "helpful" | "wrong"
 
 
 # Alias for backward compatibility

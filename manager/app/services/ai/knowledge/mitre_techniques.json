@@ -1,0 +1,246 @@
+{
+  "T1059": {
+    "name": "Command and Scripting Interpreter",
+    "tactic": "execution"
+  },
+  "T1059.001": {
+    "name": "PowerShell",
+    "tactic": "execution"
+  },
+  "T1059.003": {
+    "name": "Windows Command Shell",
+    "tactic": "execution"
+  },
+  "T1059.005": {
+    "name": "Visual Basic",
+    "tactic": "execution"
+  },
+  "T1204": {
+    "name": "User Execution",
+    "tactic": "execution"
+  },
+  "T1204.002": {
+    "name": "Malicious File",
+    "tactic": "execution"
+  },
+  "T1047": {
+    "name": "Windows Management Instrumentation",
+    "tactic": "execution"
+  },
+  "T1053": {
+    "name": "Scheduled Task/Job",
+    "tactic": "execution"
+  },
+  "T1053.005": {
+    "name": "Scheduled Task",
+    "tactic": "execution"
+  },
+  "T1218": {
+    "name": "System Binary Proxy Execution",
+    "tactic": "defense-evasion"
+  },
+  "T1218.007": {
+    "name": "System Binary Proxy Execution: MSBuild",
+    "tactic": "defense-evasion"
+  },
+  "T1218.005": {
+    "name": "System Binary Proxy Execution: Mshta",
+    "tactic": "defense-evasion"
+  },
+  "T1218.010": {
+    "name": "System Binary Proxy Execution: Regsvr32",
+    "tactic": "defense-evasion"
+  },
+  "T1218.011": {
+    "name": "System Binary Proxy Execution: Rundll32",
+    "tactic": "defense-evasion"
+  },
+  "T1055": {
+    "name": "Process Injection",
+    "tactic": "defense-evasion"
+  },
+  "T1055.001": {
+    "name": "Dynamic-link Library Injection",
+    "tactic": "defense-evasion"
+  },
+  "T1055.002": {
+    "name": "Portable Executable Injection",
+    "tactic": "defense-evasion"
+  },
+  "T1070": {
+    "name": "Indicator Removal",
+    "tactic": "defense-evasion"
+  },
+  "T1070.004": {
+    "name": "File Deletion",
+    "tactic": "defense-evasion"
+  },
+  "T1036": {
+    "name": "Masquerading",
+    "tactic": "defense-evasion"
+  },
+  "T1036.005": {
+    "name": "Match Legitimate Name or Location",
+    "tactic": "defense-evasion"
+  },
+  "T1027": {
+    "name": "Obfuscated/Encoded Files or Information",
+    "tactic": "defense-evasion"
+  },
+  "T1562": {
+    "name": "Impair Defenses",
+    "tactic": "defense-evasion"
+  },
+  "T1562.001": {
+    "name": "Disable or Modify Tools",
+    "tactic": "defense-evasion"
+  },
+  "T1112": {
+    "name": "Modify Registry",
+    "tactic": "defense-evasion"
+  },
+  "T1547": {
+    "name": "Boot or Logon Autostart Execution",
+    "tactic": "persistence"
+  },
+  "T1547.001": {
+    "name": "Registry Run Keys / Startup Folder",
+    "tactic": "persistence"
+  },
+  "T1543": {
+    "name": "Create or Modify System Process",
+    "tactic": "persistence"
+  },
+  "T1543.003": {
+    "name": "Windows Service",
+    "tactic": "persistence"
+  },
+  "T1136": {
+    "name": "Create Account",
+    "tactic": "persistence"
+  },
+  "T1548": {
+    "name": "Abuse Elevation Control Mechanism",
+    "tactic": "privilege-escalation"
+  },
+  "T1548.002": {
+    "name": "Bypass User Account Control",
+    "tactic": "privilege-escalation"
+  },
+  "T1134": {
+    "name": "Access Token Manipulation",
+    "tactic": "privilege-escalation"
+  },
+  "T1003": {
+    "name": "OS Credential Dumping",
+    "tactic": "credential-access"
+  },
+  "T1003.001": {
+    "name": "LSASS Memory",
+    "tactic": "credential-access"
+  },
+  "T1003.002": {
+    "name": "Security Account Manager",
+    "tactic": "credential-access"
+  },
+  "T1003.003": {
+    "name": "LSA Secrets",
+    "tactic": "credential-access"
+  },
+  "T1110": {
+    "name": "Brute Force",
+    "tactic": "credential-access"
+  },
+  "T1555": {
+    "name": "Credentials from Password Stores",
+    "tactic": "credential-access"
+  },
+  "T1552": {
+    "name": "Unsecured Credentials",
+    "tactic": "credential-access"
+  },
+  "T1082": {
+    "name": "System Information Discovery",
+    "tactic": "discovery"
+  },
+  "T1083": {
+    "name": "File and Directory Discovery",
+    "tactic": "discovery"
+  },
+  "T1057": {
+    "name": "Process Discovery",
+    "tactic": "discovery"
+  },
+  "T1049": {
+    "name": "System Network Connections Discovery",
+    "tactic": "discovery"
+  },
+  "T1018": {
+    "name": "Remote System Discovery",
+    "tactic": "discovery"
+  },
+  "T1069": {
+    "name": "Permission Groups Discovery",
+    "tactic": "discovery"
+  },
+  "T1021": {
+    "name": "Remote Services",
+    "tactic": "lateral-movement"
+  },
+  "T1021.001": {
+    "name": "Remote Desktop Protocol",
+    "tactic": "lateral-movement"
+  },
+  "T1021.002": {
+    "name": "SMB/Windows Admin Shares",
+    "tactic": "lateral-movement"
+  },
+  "T1570": {
+    "name": "Lateral Tool Transfer",
+    "tactic": "lateral-movement"
+  },
+  "T1071": {
+    "name": "Application Layer Protocol",
+    "tactic": "command-and-control"
+  },
+  "T1071.001": {
+    "name": "Web Protocols",
+    "tactic": "command-and-control"
+  },
+  "T1071.004": {
+    "name": "DNS",
+    "tactic": "command-and-control"
+  },
+  "T1105": {
+    "name": "Ingress Tool Transfer",
+    "tactic": "command-and-control"
+  },
+  "T1573": {
+    "name": "Encrypted Channel",
+    "tactic": "command-and-control"
+  },
+  "T1572": {
+    "name": "Protocol Tunneling",
+    "tactic": "command-and-control"
+  },
+  "T1095": {
+    "name": "Non-Application Layer Protocol",
+    "tactic": "command-and-control"
+  },
+  "T1041": {
+    "name": "Exfiltration Over C2 Channel",
+    "tactic": "exfiltration"
+  },
+  "T1486": {
+    "name": "Data Encrypted for Impact",
+    "tactic": "impact"
+  },
+  "T1490": {
+    "name": "Inhibit System Recovery",
+    "tactic": "impact"
+  },
+  "T1489": {
+    "name": "Service Stop",
+    "tactic": "impact"
+  }
+}

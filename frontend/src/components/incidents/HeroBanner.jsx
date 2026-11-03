@@ -132,6 +132,47 @@ export default function HeroBanner({
                 </InfoTooltip>
               </span>
             ))}
+            {incident.label && (
+              <span
+                className="badge"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  background:
+                    incident.label === 'true_positive'
+                      ? 'rgba(239, 68, 68, 0.15)'
+                      : incident.label === 'false_positive'
+                      ? 'rgba(156, 163, 175, 0.15)'
+                      : incident.label === 'benign'
+                      ? 'rgba(16, 185, 129, 0.15)'
+                      : 'rgba(245, 158, 11, 0.15)',
+                  border:
+                    incident.label === 'true_positive'
+                      ? '1px solid rgba(239, 68, 68, 0.4)'
+                      : incident.label === 'false_positive'
+                      ? '1px solid rgba(156, 163, 175, 0.4)'
+                      : incident.label === 'benign'
+                      ? '1px solid rgba(16, 185, 129, 0.4)'
+                      : '1px solid rgba(245, 158, 11, 0.4)',
+                  color:
+                    incident.label === 'true_positive'
+                      ? '#ef4444'
+                      : incident.label === 'false_positive'
+                      ? '#9ca3af'
+                      : incident.label === 'benign'
+                      ? '#10b981'
+                      : '#f59e0b',
+                }}
+                title={`Ground Truth: ${incident.label} (bởi ${incident.labeledBy || 'N/A'})${incident.labelReason ? `\nLý do: ${incident.labelReason}` : ''}`}
+              >
+                🏷️ AI Ground Truth: {incident.label.toUpperCase()}
+              </span>
+            )}
           </div>
         </div>
 

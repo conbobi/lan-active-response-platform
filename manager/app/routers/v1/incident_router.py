@@ -1,22 +1,30 @@
-from typing import List, Dict, Any
-from fastapi import APIRouter, Depends, status, Body
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, status, Body, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import BackgroundTasks, HTTPException, status
+from app.core.database import AsyncSessionLocal
+import logging
 from app.core.deps import get_db
+from app.models.ai_analysis import AIAnalysis
 from app.schemas.incident import (
     IncidentCreate,
     IncidentUpdate,
     IncidentOut,
     IncidentAssignDTO,
     IncidentNoteAddDTO,
-    IncidentNoteOut
+    IncidentNoteOut,
+    AIAnalysisOut,
+    AIAnalysisRateDTO,
 )
 from app.services.incident.incident_service import IncidentService
 from app.services.incident.incident_timeline_service import IncidentTimelineService
+from app.services.ai.ai_triage_service import AITriageService
 
 router = APIRouter(tags=["Incidents"])
 
-
+logger = logging.getLogger(__name__)
 @router.post("/", response_model=IncidentOut, status_code=status.HTTP_201_CREATED)
 async def create_incident(dto: IncidentCreate, db: AsyncSession = Depends(get_db)):
     """Create a security incident record."""
@@ -47,9 +55,11 @@ async def get_incident(incident_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{incident_id}", response_model=IncidentOut)
+@router.put("/{incident_id}/", response_model=IncidentOut, include_in_schema=False)
 @router.patch("/{incident_id}", response_model=IncidentOut)
+@router.patch("/{incident_id}/", response_model=IncidentOut, include_in_schema=False)
 async def update_incident(incident_id: str, dto: IncidentUpdate, db: AsyncSession = Depends(get_db)):
-    """Update incident parameters or status."""
+    """Update incident parameters, ground truth label, or status."""
     service = IncidentService(db)
     return await service.update_incident(incident_id, dto)
 
@@ -116,3 +126,100 @@ async def list_incident_notes(incident_id: str, db: AsyncSession = Depends(get_d
     """List notes attached to an incident."""
     service = IncidentService(db)
     return await service.list_notes(incident_id)
+
+
+# ============================================================================
+# Layer 1 AI Investigation (AI Triage Analysis & Feedback)
+# ============================================================================
+
+@router.get("/{incident_id}/ai-analysis", response_model=AIAnalysisOut)
+@router.get("/{incident_id}/ai-analysis/", response_model=AIAnalysisOut, include_in_schema=False)
+async def get_ai_analysis(incident_id: str, db: AsyncSession = Depends(get_db)):
+    """Lấy AI analysis gần nhất của incident (không chạy lại)."""
+    stmt = (
+        select(AIAnalysis)
+        .where(AIAnalysis.incident_id == incident_id, AIAnalysis.analysis_type == "triage")
+        .order_by(AIAnalysis.created_at.desc())
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    analysis = res.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="AI analysis not found for this incident"
+        )
+    return analysis
+
+
+@router.post("/{incident_id}/ai-analysis/regenerate")
+@router.post("/{incident_id}/ai-analysis/regenerate/", include_in_schema=False)
+async def regenerate_ai_analysis(
+    incident_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger AI re-analysis asynchronously — returns immediately with status='analyzing'."""
+    # Validate incident exists (quick DB check)
+    from app.models.incident import Incident
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    async def _run_ai():
+        async with AsyncSessionLocal() as session:
+            try:
+                from app.services.ai.ai_triage_service import AITriageService
+                await AITriageService().analyze_incident(incident_id, session)
+                logger.info(f"Background AI triage completed for {incident_id}")
+            except Exception as e:
+                logger.error(f"Background AI triage failed for {incident_id}: {e}", exc_info=True)
+    
+    background_tasks.add_task(_run_ai)
+    
+    return {
+        "status": "analyzing",
+        "incident_id": incident_id,
+        "estimated_seconds": 200,
+        "message": "AI analysis started. Poll GET /ai-analysis to retrieve result.",
+    }
+
+
+@router.post("/{incident_id}/ai-analysis/rate", response_model=Dict[str, Any])
+@router.post("/{incident_id}/ai-analysis/rate/", response_model=Dict[str, Any], include_in_schema=False)
+async def rate_ai_analysis(
+    incident_id: str,
+    payload: Dict[str, Any] = Body(..., example={"rating": "helpful"}),
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyst rate AI summary ('helpful' | 'wrong')."""
+    rating = payload.get("rating")
+    if rating not in ("helpful", "wrong", None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Rating must be 'helpful' or 'wrong'"
+        )
+
+    stmt = (
+        select(AIAnalysis)
+        .where(AIAnalysis.incident_id == incident_id, AIAnalysis.analysis_type == "triage")
+        .order_by(AIAnalysis.created_at.desc())
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    analysis = res.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="AI analysis not found for this incident"
+        )
+
+    analysis.analyst_rating = rating
+    await db.commit()
+    await db.refresh(analysis)
+    return {
+        "status": "ok",
+        "incident_id": incident_id,
+        "rating": rating,
+        "analysis_id": analysis.id
+    }

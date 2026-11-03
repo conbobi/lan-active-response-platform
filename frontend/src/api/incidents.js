@@ -14,6 +14,10 @@ export const mapIncident = (inc) => {
     riskScore: inc.risk_score !== undefined ? inc.risk_score : (inc.riskScore || 0),
     notes: inc.notes || '',
     resolvedAt: inc.resolved_at || inc.resolvedAt || null,
+    label: inc.label || null,
+    labelReason: inc.label_reason || inc.labelReason || '',
+    labeledBy: inc.labeled_by || inc.labeledBy || '',
+    labeledAt: inc.labeled_at || inc.labeledAt || null,
     createdAt: inc.created_at || inc.createdAt || new Date().toISOString(),
     updatedAt: inc.updated_at || inc.updatedAt || new Date().toISOString(),
     culpritProcess: inc.culprit_process || null,
@@ -116,6 +120,20 @@ export const executeIncidentAction = async (incidentId, actionType, params = {},
   }
 };
 
+export const closeIncident = async (id, { label, label_reason, labeled_by = 'current_user' }) => {
+  const data = await api.patch(`/incidents/${id}`, {
+    status: 'closed',
+    label,
+    label_reason,
+    labeled_by,
+  });
+  return mapIncident(data);
+};
+
+export const getAIAnalysis = (id) => api.get(`/incidents/${id}/ai-analysis`);
+export const regenerateAIAnalysis = (id) => api.post(`/incidents/${id}/ai-analysis/regenerate`);
+export const rateAIAnalysis = (id, rating) => api.post(`/incidents/${id}/ai-analysis/rate`, { rating });
+
 export default {
   mapIncident,
   getIncidents,
@@ -124,6 +142,10 @@ export default {
   getIncidentNotes,
   addIncidentNote,
   updateIncidentStatus,
+  closeIncident,
   assignIncident,
   executeIncidentAction,
+  getAIAnalysis,
+  regenerateAIAnalysis,
+  rateAIAnalysis,
 };

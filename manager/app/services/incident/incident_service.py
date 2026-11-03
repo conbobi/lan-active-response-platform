@@ -1,5 +1,6 @@
 import uuid
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +43,16 @@ class IncidentService(AbstractService[IncidentRepository]):
         )
         created = await self.repository.add(inc)
         await self.add_note(created.id, f"Incident created manually with severity {dto.severity}.", user="system")
+
+        # Fire-and-forget AI triage (không block incident creation)
+        try:
+            import asyncio
+            from app.services.ai.ai_triage_service import AITriageService
+            from app.core.database import AsyncSessionLocal
+            asyncio.create_task(AITriageService().analyze_incident(created.id, AsyncSessionLocal()))
+        except Exception as e:
+            logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
+
         return created
 
     async def create_from_risk(
@@ -96,6 +107,15 @@ class IncidentService(AbstractService[IncidentRepository]):
 
         await self.add_note(inc_id, f"Automated incident created due to risk score {risk_score}.", user="system")
 
+        # Fire-and-forget AI triage (không block incident creation)
+        try:
+            import asyncio
+            from app.services.ai.ai_triage_service import AITriageService
+            from app.core.database import AsyncSessionLocal
+            asyncio.create_task(AITriageService().analyze_incident(created.id, AsyncSessionLocal()))
+        except Exception as e:
+            logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
+
         # Trigger notification
         msg = (
             f"🚨 <b>NEW AUTOMATED INCIDENT ({severity.upper()})</b> 🚨\n"
@@ -113,19 +133,41 @@ class IncidentService(AbstractService[IncidentRepository]):
         inc = await self.get_incident(incident_id)
         old_status = inc.status
 
+        # If label is provided, set labeled_at = now()
+        if dto.label is not None:
+            inc.label = dto.label
+            inc.label_reason = dto.label_reason
+            inc.labeled_by = dto.labeled_by or "current_user"
+            inc.labeled_at = datetime.now(timezone.utc)
+
+        # Log warning if closing without label
+        new_status = dto.status
+        is_closing = False
+        if new_status:
+            status_val = new_status.value if hasattr(new_status, "value") else str(new_status).lower()
+            if status_val == "closed":
+                is_closing = True
+
+        if is_closing and not dto.label and not inc.label:
+            logger.warning(f"Closing incident {incident_id} without label — AI feedback unavailable")
+
         for field, value in dto.model_dump(exclude_unset=True).items():
+            if field in ("label", "label_reason", "labeled_by", "labeled_at"):
+                continue
             if value is not None:
                 setattr(inc, field, value)
 
         await self.session.flush()
 
         if dto.status and dto.status != old_status:
+            status_val = dto.status.value if hasattr(dto.status, "value") else str(dto.status)
+            old_status_val = old_status.value if hasattr(old_status, "value") else str(old_status)
             await self.add_note(
                 incident_id,
-                f"Incident status updated from '{old_status.value}' to '{dto.status.value}'.",
-                user=dto.assigned_to or "admin"
+                f"Incident status updated from '{old_status_val}' to '{status_val}'.",
+                user=dto.assigned_to or (dto.labeled_by or "admin")
             )
-            msg = f"🔔 <b>INCIDENT STATUS CHANGED</b>\n<b>ID:</b> {incident_id}\n<b>New Status:</b> {dto.status.value}"
+            msg = f"🔔 <b>INCIDENT STATUS CHANGED</b>\n<b>ID:</b> {incident_id}\n<b>New Status:</b> {status_val}"
             await self.notification_service.send_alert(msg)
 
         return inc
@@ -300,6 +342,8 @@ class IncidentService(AbstractService[IncidentRepository]):
 
     async def close_incident(self, incident_id: str, user: str = "admin") -> Incident:
         inc = await self.get_incident(incident_id)
+        if not inc.label:
+            logger.warning(f"Closing incident {incident_id} without label — AI feedback unavailable")
         inc.status = IncidentStatus.CLOSED
         await self.add_note(incident_id, f"Incident CLOSED by {user}.", user=user)
         await self.session.flush()

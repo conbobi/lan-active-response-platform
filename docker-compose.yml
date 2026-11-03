@@ -2,14 +2,14 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:16-alpine # Bản cài đặt PostgreSQL 16 alpine nhẹ và tiết kiệm tài nguyên
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: larp
       POSTGRES_PASSWORD: larp_password
       POSTGRES_DB: larpdb
     ports:
-      - "5432:5432" # Truy cập DB trực tiếp từ máy host nếu cần debug
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -22,18 +22,21 @@ services:
       retries: 5
 
   manager:
-    build: ./manager # Build FastAPI backend từ ./manager
+    build: ./manager
     restart: unless-stopped
     ports:
-      - "8005:8000" # Mở port 8000 ra máy host port 8005
+      - "8005:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU
+      - OLLAMA_URL=http://ollama:11434
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,14 +46,31 @@ services:
     networks:
       - larp-net
 
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models:/models:ro
+    ports:
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+    networks:
+      - larp-net
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "80:80" # HTTP tiêu chuẩn cho máy host
-      - "5173:80" # Giữ port 5173 quen thuộc để truy cập từ localhost
+      - "80:80"
+      - "5173:80"
     depends_on:
       manager:
         condition: service_healthy
@@ -94,3 +114,4 @@ networks:
 
 volumes:
   pgdata:
+  ollama_data:

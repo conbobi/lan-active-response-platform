@@ -24,6 +24,12 @@ class Incident(Base, TimestampMixin):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # AI Ground Truth & Feedback
+    label: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    label_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    labeled_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    labeled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     def assign_to(self, user_id: str) -> None:
         """Assign incident to a user/operator."""
         self.assigned_to = user_id
