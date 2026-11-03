@@ -38,3 +38,5 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+models/foundation-sec-8b-reasoning-q4_k_m.gguf
+models/Modelfile
