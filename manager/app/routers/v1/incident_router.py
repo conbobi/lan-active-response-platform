@@ -266,13 +266,27 @@ async def apply_ai_suggestion(
     """Apply AI response suggestion — delegates to ResponseActionService."""
     analyst = payload.get("analyst", "current_user")
     from app.services.ai.ai_response_service import AIResponseService
-    action = await AIResponseService().apply_suggestion(incident_id, analyst, db)
-    return {
-        "status": "applied",
-        "incident_id": incident_id,
-        "action_id": action.id,
-        "action_type": action.action_type,
-    }
+    from app.core.exceptions import FlappingCooldownError, AppException
+    try:
+        action = await AIResponseService().apply_suggestion(incident_id, analyst, db)
+        return {
+            "status": "applied",
+            "incident_id": incident_id,
+            "action_id": action.id,
+            "action_type": action.action_type,
+        }
+    except FlappingCooldownError as e:
+        logger.warning(f"Cooldown triggered for {incident_id}: {e.message}")
+        raise HTTPException(status_code=429, detail=e.message)
+    except AppException as e:
+        logger.warning(f"AppException during apply AI suggestion for {incident_id}: {e.message}")
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        msg = str(e)
+        logger.warning(f"Rejecting AI suggestion for {incident_id}: {msg}")
+        if "already applied" in msg or "was dismissed" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @router.post("/{incident_id}/ai-analysis/dismiss-suggestion")
@@ -286,11 +300,17 @@ async def dismiss_ai_suggestion(
     analyst = payload.get("analyst", "current_user")
     reason = payload.get("reason", "")
     from app.services.ai.ai_response_service import AIResponseService
-    analysis = await AIResponseService().dismiss_suggestion(incident_id, analyst, reason, db)
-    return {
-        "status": "dismissed",
-        "incident_id": incident_id,
-        "analysis_id": analysis.id,
-        "dismiss_reason": analysis.dismiss_reason,
-    }
+    from app.core.exceptions import AppException
+    try:
+        analysis = await AIResponseService().dismiss_suggestion(incident_id, analyst, reason, db)
+        return {
+            "status": "dismissed",
+            "incident_id": incident_id,
+            "analysis_id": analysis.id,
+            "dismiss_reason": analysis.dismiss_reason,
+        }
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 

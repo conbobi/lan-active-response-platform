@@ -1,7 +1,7 @@
 import re
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Set
 from collections import defaultdict
 
@@ -105,19 +105,19 @@ class AIResponseService:
                 recent_flows=recent_flows,
             )
 
-            # 8. Calculate real blast radius from endpoint data
-            blast_radius = self._calculate_real_blast_radius(
-                action=validated_action,
+            # 8. Calculate real blast radius from endpoint data (OVERRIDE AI value)
+            real_blast = await self._calculate_real_blast_radius(
+                session=session,
+                agent_id=incident.agent_id,
+                action_type=validated_action,
                 params=validated_params,
-                all_procs=all_procs,
-                recent_flows=recent_flows,
             )
 
             # 9. Update AIAnalysis row with suggestion_* fields
             analysis.suggested_action = validated_action
             analysis.suggestion_params = validated_params
             analysis.suggestion_reasoning = final_reasoning
-            analysis.blast_radius = blast_radius
+            analysis.blast_radius = real_blast
             # Reset analyst review fields if re-suggesting
             analysis.applied_by_analyst = None
             analysis.applied_at = None
@@ -152,19 +152,92 @@ class AIResponseService:
         if not suggestion or not suggestion.suggested_action:
             raise NotFoundError(f"No response suggestion found for incident '{incident_id}'")
 
-        if suggestion.suggested_action == "no_action":
-            raise BadRequestError("Cannot apply 'no_action' response suggestion.")
+        # === IDEMPOTENCY CHECK ===
+        if suggestion.applied_by_analyst:
+            raise ValueError(
+                f"Suggestion already applied by '{suggestion.applied_by_analyst}' "
+                f"at {suggestion.applied_at.isoformat() if suggestion.applied_at else 'N/A'}. "
+                f"To re-apply, analyst must regenerate AI suggestion first."
+            )
 
-        if suggestion.suggested_action not in ALLOWED_ACTIONS:
-            raise BadRequestError(f"Unsupported suggested action '{suggestion.suggested_action}'")
+        if suggestion.dismissed_by_analyst:
+            raise ValueError(
+                f"Suggestion was dismissed by '{suggestion.dismissed_by_analyst}' "
+                f"(reason: {suggestion.dismiss_reason or 'none'}). "
+                f"Cannot apply a dismissed suggestion — regenerate first."
+            )
+        # === END IDEMPOTENCY ===
 
         incident = await session.get(Incident, incident_id)
         if not incident or not incident.agent_id:
             raise NotFoundError(f"Incident '{incident_id}' or associated agent ID was not found")
 
+        # === VALIDATION BLOCK (thêm trước khi dispatch) ===
+        suggested = suggestion.suggested_action
+        params = suggestion.suggestion_params or {}
+
+        if suggested in ("kill_process", "kill_process_tree", "suspend_process"):
+            pid = params.get("pid")
+            if not pid:
+                raise ValueError(f"Missing 'pid' param for {suggested}")
+            try:
+                pid_int = int(pid)
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid 'pid' param: {pid} (must be integer)")
+
+            # Verify PID exists in process_info for this agent
+            stmt = (
+                select(ProcessInfo)
+                .where(ProcessInfo.agent_id == incident.agent_id)
+                .where(ProcessInfo.pid == pid_int)
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            proc = result.scalar_one_or_none()
+            if not proc:
+                raise ValueError(
+                    f"PID {pid_int} not found in process_info for agent {incident.agent_id}. "
+                    f"AI suggestion is stale or hallucinated — refusing to dispatch."
+                )
+
+        elif suggested == "block_ip":
+            ip = params.get("ip")
+            if not ip:
+                raise ValueError("Missing 'ip' param for block_ip")
+
+            # Verify IP exists in recent flows (last 1h)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            stmt = (
+                select(Flow)
+                .where(Flow.agent_id == incident.agent_id)
+                .where(Flow.dst_ip == ip)
+                .where(Flow.start_time >= cutoff)
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            if not result.scalar_one_or_none():
+                raise ValueError(
+                    f"IP {ip} not found in recent flows (1h) for agent {incident.agent_id}. "
+                    f"Refusing to dispatch block_ip."
+                )
+
+        elif suggested in ("isolate", "unisolate"):
+            # Không cần params — agent-level action
+            pass
+
+        elif suggested == "no_action":
+            raise ValueError(
+                "Cannot apply 'no_action' — analyst should simply not act. "
+                "Dismiss the suggestion instead."
+            )
+        else:
+            raise ValueError(f"Unsupported suggested action '{suggested}'")
+
+        # === END VALIDATION ===
+
         # 2. Gọi ResponseActionService.create_and_apply_action
         response_service = ResponseActionService(session)
-        action_params = suggestion.suggestion_params or {}
+        action_params = dict(suggestion.suggestion_params or {})
         reason_text = f"Applied AI suggestion: {(suggestion.suggestion_reasoning or '')[:200]}"
         action_params["reason"] = reason_text
 
@@ -176,7 +249,7 @@ class AIResponseService:
             actor=analyst,
         )
 
-        # 3. Update ai_analysis: applied_by_analyst, applied_at
+        # 3. Update ai_analysis: applied_by_analyst, applied_at (within same transaction)
         now = datetime.now(timezone.utc)
         suggestion.applied_by_analyst = analyst
         suggestion.applied_at = now
@@ -263,6 +336,19 @@ class AIResponseService:
         sim_str = "\n".join(similar_incidents[:2]) if similar_incidents else "Chưa có incident tương tự."
         triage_summary_short = (triage.summary or "")[:250].replace("\n", " ").strip()
 
+        json_example = """{
+  "suggested_action": "kill_process_tree",
+  "params": {"pid": 3748},
+  "confidence": 0.90,
+  "reasoning": "Lý do ngắn gọn 1-2 câu tham chiếu PID hoặc IP.",
+  "blast_radius": {
+    "processes_affected": 2,
+    "sessions_affected": 1,
+    "reversible": false
+  },
+  "risk_if_not_act": "Nguy cơ nếu không hành động."
+}"""
+
         return f"""Bạn là SOC Analyst Tier 2. Dựa trên dữ liệu dưới đây, đề xuất DUY NHẤT 1 HÀNH ĐỘNG PHẢN ỨNG tối ưu.
 
 INCIDENT: {incident.title} (Score: {incident.risk_score}/100) trên Agent {incident.agent_id}
@@ -285,18 +371,7 @@ ALLOWED ACTIONS:
 - no_action: Chỉ giám sát
 
 Trả về DUY NHẤT 1 JSON (không markdown ngoài JSON):
-{{
-  "suggested_action": "kill_process_tree",
-  "params": {{"pid": 3748}},
-  "confidence": 0.90,
-  "reasoning": "Lý do ngắn gọn 1-2 câu tham chiếu PID hoặc IP.",
-  "blast_radius": {{
-    "processes_affected": 2,
-    "sessions_affected": 1,
-    "reversible": false
-  }},
-  "risk_if_not_act": "Nguy cơ nếu không hành động."
-}}
+{json_example}
 """
 
     def _parse_json_answer(self, answer: str) -> dict:
@@ -427,86 +502,94 @@ Trả về DUY NHẤT 1 JSON (không markdown ngoài JSON):
 
         return action, params, reasoning
 
-    def _calculate_real_blast_radius(
-        self,
-        action: str,
-        params: Dict[str, Any],
-        all_procs: List[ProcessInfo],
-        recent_flows: List[Flow],
-    ) -> Dict[str, Any]:
-        """Compute blast radius ground truth from live endpoint process tree and network states."""
-        if action == "no_action":
-            return {
-                "processes_affected": 0,
-                "sessions_affected": 0,
-                "reversible": True,
-            }
-
-        if action in {"kill_process", "suspend_process"}:
+    async def _calculate_real_blast_radius(
+        self, session: AsyncSession, agent_id: str, action_type: str, params: dict
+    ) -> dict:
+        """Calculate actual blast radius from DB — không dùng AI value."""
+        if action_type in ("kill_process", "kill_process_tree", "suspend_process"):
             pid = params.get("pid")
-            proc = next((p for p in all_procs if p.pid == pid), None)
-            sessions_count = 1 if proc and proc.session_id is not None else 0
-            return {
-                "processes_affected": 1,
-                "sessions_affected": sessions_count,
-                "reversible": (action == "suspend_process"),
-            }
-
-        if action == "kill_process_tree":
-            pid = params.get("pid")
-            if pid is None:
+            if not pid:
                 return {"processes_affected": 0, "sessions_affected": 0, "reversible": False}
 
-            # Build children tree
-            children_map = defaultdict(list)
-            proc_by_pid = {}
-            for p in all_procs:
-                proc_by_pid[p.pid] = p
-                if p.parent_pid is not None and p.parent_pid != p.pid:
-                    children_map[p.parent_pid].append(p.pid)
+            try:
+                pid_int = int(pid)
+            except (ValueError, TypeError):
+                return {"processes_affected": 0, "sessions_affected": 0, "reversible": False}
 
-            # Recursive BFS/DFS to find all descendants
-            descendants: Set[int] = set()
-            queue = [pid]
-            while queue:
-                curr = queue.pop(0)
-                descendants.add(curr)
-                for child_pid in children_map.get(curr, []):
-                    if child_pid not in descendants:
-                        queue.append(child_pid)
+            # Load ALL processes for this agent (1 query)
+            stmt = select(ProcessInfo).where(ProcessInfo.agent_id == agent_id)
+            result = await session.execute(stmt)
+            all_procs = list(result.scalars().all())
 
-            affected_procs = [proc_by_pid[p_id] for p_id in descendants if p_id in proc_by_pid]
-            distinct_sessions = {p.session_id for p in affected_procs if p.session_id is not None}
+            if not all_procs:
+                return {"processes_affected": 0, "sessions_affected": 0, "reversible": False}
+
+            # Verify target PID exists
+            by_pid = {p.pid: p for p in all_procs}
+            if pid_int not in by_pid:
+                return {"processes_affected": 0, "sessions_affected": 0, "reversible": False}
+
+            # Recursive descend from target PID
+            if action_type == "kill_process":
+                descendants = [pid_int]
+            else:  # kill_process_tree or suspend_process
+                descendants = [pid_int]
+                frontier = [pid_int]
+                while frontier:
+                    parent = frontier.pop()
+                    children = [p.pid for p in all_procs if p.parent_pid == parent]
+                    descendants.extend(children)
+                    frontier.extend(children)
+
+            # Count unique sessions in affected processes
+            session_ids = {
+                by_pid[p].session_id
+                for p in descendants
+                if p in by_pid and by_pid[p].session_id
+            }
 
             return {
                 "processes_affected": len(descendants),
-                "sessions_affected": len(distinct_sessions),
-                "reversible": False,
+                "sessions_affected": len(session_ids),
+                "reversible": action_type == "suspend_process",
             }
 
-        if action == "isolate":
-            distinct_sessions = {p.session_id for p in all_procs if p.session_id is not None}
+        elif action_type == "isolate":
+            # Count active network connections
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+            stmt = (
+                select(Flow)
+                .where(Flow.agent_id == agent_id)
+                .where(Flow.start_time >= cutoff)
+                .where(Flow.end_time.is_(None))  # active
+            )
+            result = await session.execute(stmt)
+            active_flows = len(list(result.scalars().all()))
             return {
-                "processes_affected": len(all_procs),
-                "sessions_affected": len(distinct_sessions),
+                "processes_affected": 0,
+                "sessions_affected": active_flows,  # active connections ≈ sessions
                 "reversible": True,
             }
 
-        if action == "block_ip":
-            target_ip = params.get("ip")
-            matching_flows = [f for f in recent_flows if f.dst_ip == target_ip or f.src_ip == target_ip]
-            pids = {f.pid for f in matching_flows if f.pid}
+        elif action_type == "block_ip":
+            # Count flows to that IP
+            ip = params.get("ip")
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+            stmt = (
+                select(Flow)
+                .where(Flow.agent_id == agent_id)
+                .where(Flow.dst_ip == ip)
+                .where(Flow.start_time >= cutoff)
+            )
+            result = await session.execute(stmt)
+            affected = len(list(result.scalars().all()))
             return {
-                "processes_affected": len(pids) if pids else 1,
-                "sessions_affected": 0,
+                "processes_affected": 0,
+                "sessions_affected": affected,
                 "reversible": True,
             }
 
-        return {
-            "processes_affected": 1,
-            "sessions_affected": 0,
-            "reversible": False,
-        }
+        return {"processes_affected": 0, "sessions_affected": 0, "reversible": False}
 
     async def _get_processes(self, session: AsyncSession, agent_id: Optional[str]) -> tuple[List[ProcessInfo], List[ProcessInfo]]:
         if not agent_id:
