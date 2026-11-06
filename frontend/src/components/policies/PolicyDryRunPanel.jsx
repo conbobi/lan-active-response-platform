@@ -56,6 +56,10 @@ export default function PolicyDryRunPanel({
   const [liveExecuting, setLiveExecuting] = useState(false);
   const [liveSuccessMessage, setLiveSuccessMessage] = useState('');
 
+  const initialPolicyId = initialPolicy?.id || initialPolicy?.name || null;
+  const initialMinScore = initialPolicy?.min_score;
+  const initialMaxScore = initialPolicy?.max_score;
+
   // Initialize inputs on open
   useEffect(() => {
     if (!isOpen) return;
@@ -72,15 +76,24 @@ export default function PolicyDryRunPanel({
       setSelectedAgentId(agents[0]?.id || '');
     }
 
-
     // Initial score calculation
     if (initialPolicy) {
-      const mid = ((initialPolicy.min_score || 0) + (initialPolicy.max_score || 100)) / 2;
+      const minS = initialPolicy.min_score ?? 0;
+      const maxS = initialPolicy.max_score ?? 100;
+      const mid = (minS + maxS) / 2;
       setRiskScore(Number(mid.toFixed(1)));
     } else {
       setRiskScore(75.0);
     }
-  }, [isOpen, initialPolicy, initialAgentId, agents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, initialPolicyId, initialMinScore, initialMaxScore, initialAgentId]);
+
+  // Fallback: if no agent selected yet and agents list arrives, pick first agent
+  useEffect(() => {
+    if (isOpen && !selectedAgentId && agents.length > 0) {
+      setSelectedAgentId(agents[0]?.id || '');
+    }
+  }, [isOpen, selectedAgentId, agents]);
 
   // Fetch groups for selected agent
   useEffect(() => {

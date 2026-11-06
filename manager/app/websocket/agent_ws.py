@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.websocket.connection_manager import connection_manager
@@ -19,7 +20,10 @@ from app.models.flow import Flow
 from app.repositories.flow_repository import FlowRepository
 from app.models.event import Event
 from app.repositories.event_repository import EventRepository
-from app.schemas.enums import IncidentSeverity
+from app.models.agent import Agent
+from app.models.response_action import ResponseAction
+from app.schemas.enums import IncidentSeverity, AgentStatus, CommandStatus
+from app.services.common.audit_log_service import ActionAuditLogService
 from app.schemas.incident import IncidentCreate
 from app.services.incident.incident_service import IncidentService
 from app.models.auth_event import AuthEvent
@@ -346,8 +350,69 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
 
 
 async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
-    dto = CommandAckDTO(**data.get("payload", {}))
-    await command_dispatcher.verify_execution(dto, session)
+    payload = data.get("payload", {})
+    dto = CommandAckDTO(**payload)
+    cmd = await command_dispatcher.verify_execution(dto, session)
+    if not cmd:
+        logger.warning(f"Command ack received for unknown command '{dto.command_id}' on agent '{agent_id}'")
+        return {"status": "ack", "message": "Command ack recorded (command not found)"}
+
+    # Find associated ResponseAction
+    action = None
+    action_id = (cmd.payload or {}).get("action_id")
+    if action_id:
+        action = await session.get(ResponseAction, action_id)
+
+    if not action:
+        # Fallback: find latest pending ResponseAction for this agent with matching action_type
+        stmt = (
+            select(ResponseAction)
+            .where(
+                ResponseAction.agent_id == agent_id,
+                ResponseAction.action_type == cmd.action,
+                ResponseAction.status == "pending"
+            )
+            .order_by(ResponseAction.created_at.desc())
+            .limit(1)
+        )
+        res = await session.execute(stmt)
+        action = res.scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    agent = await session.get(Agent, agent_id)
+
+    if dto.status == CommandStatus.SUCCESS:
+        if action:
+            action.status = "applied"
+            action.applied_at = now
+            audit_svc = ActionAuditLogService(session)
+            await audit_svc.record_event(
+                action_id=action.id,
+                event="applied",
+                actor="agent",
+                reason=action.action_params.get("reason"),
+                metadata={"command_id": cmd.id, "action_type": action.action_type}
+            )
+            logger.info(f"ResponseAction '{action.id}' applied upon ACK success for command '{cmd.id}'.")
+
+        # Update Agent state ONLY when agent successfully confirms
+        if agent:
+            if cmd.action in ("isolate", "auto_isolate"):
+                agent.isolate()
+                logger.info(f"Agent '{agent_id}' confirmed isolation -> status=ISOLATED, is_isolated=True")
+            elif cmd.action == "unisolate":
+                agent.unisolate()
+                logger.info(f"Agent '{agent_id}' confirmed unisolation -> status=ACTIVE, is_isolated=False")
+            elif cmd.action == "quarantine":
+                agent.status = AgentStatus.QUARANTINE
+                logger.info(f"Agent '{agent_id}' confirmed quarantine -> status=QUARANTINE")
+    else:
+        # Command failed on agent
+        if action:
+            action.status = "failed"
+            logger.warning(f"ResponseAction '{action.id}' marked failed for command '{cmd.id}': {dto.error_message}")
+
+    await session.flush()
     return {"status": "ack", "message": "Command ack recorded"}
 
 

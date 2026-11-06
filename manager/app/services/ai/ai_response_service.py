@@ -157,14 +157,14 @@ class AIResponseService:
             raise ValueError(
                 f"Suggestion already applied by '{suggestion.applied_by_analyst}' "
                 f"at {suggestion.applied_at.isoformat() if suggestion.applied_at else 'N/A'}. "
-                f"To re-apply, analyst must regenerate AI suggestion first."
+                f"Regenerate AI suggestion to apply again."
             )
 
         if suggestion.dismissed_by_analyst:
             raise ValueError(
                 f"Suggestion was dismissed by '{suggestion.dismissed_by_analyst}' "
                 f"(reason: {suggestion.dismiss_reason or 'none'}). "
-                f"Cannot apply a dismissed suggestion — regenerate first."
+                f"Regenerate to apply."
             )
         # === END IDEMPOTENCY ===
 
@@ -195,6 +195,7 @@ class AIResponseService:
             result = await session.execute(stmt)
             proc = result.scalar_one_or_none()
             if not proc:
+                logger.warning(f"Rejecting AI suggestion {suggestion.id}: PID {pid_int} not in process_info for agent {incident.agent_id}")
                 raise ValueError(
                     f"PID {pid_int} not found in process_info for agent {incident.agent_id}. "
                     f"AI suggestion is stale or hallucinated — refusing to dispatch."
@@ -226,10 +227,7 @@ class AIResponseService:
             pass
 
         elif suggested == "no_action":
-            raise ValueError(
-                "Cannot apply 'no_action' — analyst should simply not act. "
-                "Dismiss the suggestion instead."
-            )
+            raise ValueError("Cannot apply 'no_action' — analyst should dismiss instead")
         else:
             raise ValueError(f"Unsupported suggested action '{suggested}'")
 
@@ -540,6 +538,9 @@ Trả về DUY NHẤT 1 JSON (không markdown ngoài JSON):
                     children = [p.pid for p in all_procs if p.parent_pid == parent]
                     descendants.extend(children)
                     frontier.extend(children)
+
+            # Dedup
+            descendants = list(set(descendants))
 
             # Count unique sessions in affected processes
             session_ids = {

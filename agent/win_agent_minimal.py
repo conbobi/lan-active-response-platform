@@ -24,61 +24,106 @@ import socket
 import re
 
 # ============ ISOLATION ============
-ISOLATE_RULE_PREFIX = "LARP_ISOLATE_"
+def handle_isolate(payload: dict) -> dict:
+    """Isolate host — block all outbound except manager."""
+    import subprocess
+    import platform
+    from urllib.parse import urlparse
+    import socket
 
-def get_manager_ip_port():
-    """Parse IP + port của Manager từ MANAGER_URL."""
+    system = platform.system()
     parsed = urlparse(MANAGER_URL)
-    host = parsed.hostname or "192.168.30.105"
-    port = parsed.port or 8005
+    manager_host = parsed.hostname or (MANAGER_URL.split("//")[1].split("/")[0].split(":")[0] if "//" in MANAGER_URL else "unknown")
     try:
-        ip = socket.gethostbyname(host)
+        manager_ip = socket.gethostbyname(manager_host)
     except Exception:
-        ip = host
-    return ip, port
+        manager_ip = manager_host
 
-
-def handle_isolate(payload):
-    """Selective isolation: block all except Manager IP:port."""
-    manager_ip, manager_port = get_manager_ip_port()
     try:
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule",
-                        f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT"], capture_output=True)
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule",
-                        f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_IN"], capture_output=True)
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT",
-            "dir=out", "action=allow",
-            f"remoteip={manager_ip}", f"remoteport={str(manager_port)}", "protocol=TCP"
-        ], check=True, capture_output=True)
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            f"name={ISOLATE_RULE_PREFIX}ALLOW_MGR_IN",
-            "dir=in", "action=allow",
-            f"remoteip={manager_ip}", "protocol=TCP"
-        ], check=True, capture_output=True)
-        subprocess.run(["netsh", "advfirewall", "set", "allprofiles",
-                        "firewallpolicy", "blockinbound,blockoutbound"],
-                       check=False, capture_output=True)
-        return {"status": "success",
-                "message": f"Isolated. Manager {manager_ip}:{manager_port} whitelisted",
-                "manager_ip": manager_ip, "manager_port": manager_port}
+        if system == "Windows":
+            # Clean up rule cũ (nếu có) — tránh duplicate
+            subprocess.run(
+                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_BLOCK_OUT"],
+                capture_output=True, timeout=5
+            )
+            subprocess.run(
+                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_ALLOW_MANAGER"],
+                capture_output=True, timeout=5
+            )
+
+            # Block all outbound
+            r1 = subprocess.run(
+                ["netsh", "advfirewall", "firewall", "add", "rule",
+                 "name=LARP_BLOCK_OUT", "dir=out", "action=block",
+                 "enable=yes", "profile=any"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r1.returncode != 0:
+                raise RuntimeError(f"Failed to add block rule: {r1.stderr}")
+
+            # Allow manager outbound (whitelist)
+            r2 = subprocess.run(
+                ["netsh", "advfirewall", "firewall", "add", "rule",
+                 "name=LARP_ALLOW_MANAGER", "dir=out", "action=allow",
+                 f"remoteip={manager_ip}", "enable=yes", "profile=any"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r2.returncode != 0:
+                raise RuntimeError(f"Failed to add allow rule: {r2.stderr}")
+
+            return {"status": "success", "message": f"Host isolated (manager={manager_ip} whitelisted)"}
+
+        elif system == "Linux":
+            # iptables cho container
+            subprocess.run(["iptables", "-F", "OUTPUT"], check=False)
+            subprocess.run(
+                ["iptables", "-A", "OUTPUT", "-d", manager_ip, "-j", "ACCEPT"],
+                check=True, timeout=10
+            )
+            subprocess.run(
+                ["iptables", "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
+                check=True, timeout=10
+            )
+            subprocess.run(
+                ["iptables", "-A", "OUTPUT", "-j", "DROP"],
+                check=True, timeout=10
+            )
+            return {"status": "success", "message": "Host isolated via iptables"}
+
+        else:
+            raise RuntimeError(f"Unsupported platform: {system}")
+
+    except subprocess.CalledProcessError as e:
+        return {"status": "failed", "message": f"Command failed: {e.stderr or e}"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "failed", "message": f"{type(e).__name__}: {e}"}
 
 
-def handle_unisolate(payload):
+def handle_unisolate(payload: dict) -> dict:
+    """Remove isolation rules."""
+    import subprocess
+    import platform
+
+    system = platform.system()
     try:
-        for rule_name in [f"{ISOLATE_RULE_PREFIX}ALLOW_MGR_OUT",
-                          f"{ISOLATE_RULE_PREFIX}ALLOW_MGR_IN"]:
-            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule",
-                            f"name={rule_name}"], capture_output=True)
-        subprocess.run(["netsh", "advfirewall", "set", "allprofiles",
-                        "firewallpolicy", "allowinbound,allowoutbound"], capture_output=True)
-        return {"status": "success", "message": "Network unisolated"}
+        if system == "Windows":
+            subprocess.run(
+                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_BLOCK_OUT"],
+                capture_output=True, timeout=5
+            )
+            subprocess.run(
+                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_ALLOW_MANAGER"],
+                capture_output=True, timeout=5
+            )
+            return {"status": "success", "message": "Host unisolated"}
+        elif system == "Linux":
+            subprocess.run(["iptables", "-F", "OUTPUT"], check=False)
+            subprocess.run(["iptables", "-P", "OUTPUT", "ACCEPT"], check=False)
+            return {"status": "success", "message": "Host unisolated"}
+        else:
+            raise RuntimeError(f"Unsupported platform: {system}")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "failed", "message": f"{type(e).__name__}: {e}"}
 
 
 # ============ KILL PROCESS ============
@@ -144,6 +189,7 @@ def handle_quarantine(payload):
 COMMAND_HANDLERS = {
     "isolate": handle_isolate,
     "unisolate": handle_unisolate,
+    "auto_isolate": handle_isolate,
     "kill": handle_kill_process,
     "kill_process": handle_kill_process,
     "kill_tree": handle_kill_process_tree,
@@ -233,18 +279,39 @@ def _log(msg: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 
+def _get_ip_address() -> str:
+    env_ip = os.getenv("AGENT_IP")
+    if env_ip:
+        return env_ip
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+
+
 async def send_telemetry(ws) -> None:
-    """Gửi heartbeat + telemetry mỗi INTERVAL giây."""
-    global _last_heartbeat_sent
+    """Gửi heartbeat + telemetry mỗi INTERVAL giây và xử lý pending_commands."""
+    global _last_heartbeat_sent, _last_message_time
     while True:
         try:
             now = time.time()
             _last_heartbeat_sent = now
-            
+
             cpu_val = float(psutil.cpu_percent(interval=None))
             ram_val = float(psutil.virtual_memory().percent)
             try:
-                disk_val = float(psutil.disk_usage('C:\\').percent if os.name == 'nt' else psutil.disk_usage('/').percent)
+                disk_val = float(
+                    psutil.disk_usage('C:\\').percent 
+                    if os.name == 'nt' 
+                    else psutil.disk_usage('/').percent
+                )
             except Exception:
                 disk_val = 0.0
 
@@ -252,15 +319,38 @@ async def send_telemetry(ws) -> None:
                 "type": "HEARTBEAT",
                 "payload": {
                     "agent_id": AGENT_ID,
-                    "hostname": os.environ.get("COMPUTERNAME", "WIN-DEMO-01"),
+                    "hostname": socket.gethostname(),
                     "platform": "windows",
-                    "ip_address": os.getenv("AGENT_IP", "192.168.30.106"),
+                    "ip_address": _get_ip_address(),
                     "cpu": cpu_val,
                     "ram": ram_val,
                     "disk": disk_val,
                 }
             }
             await ws.send(json.dumps(heartbeat))
+
+            # === FIX: Parse response và handle pending_commands ===
+            try:
+                response_raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                _last_message_time = time.time()
+                response = json.loads(response_raw)
+
+                pending = response.get("pending_commands", [])
+                if pending:
+                    _log(f"[AGENT] Received {len(pending)} pending commands from heartbeat")
+                    for cmd in pending:
+                        command_id = cmd.get("command_id") or cmd.get("id")
+                        action = cmd.get("action")
+                        params = cmd.get("payload") or cmd.get("params") or {}
+                        _log(f"[AGENT] Executing command {command_id}: {action}")
+                        await _execute_and_ack(ws, command_id, action, params)
+            except asyncio.TimeoutError:
+                _log("[AGENT] Heartbeat response timeout (5s)")
+            except json.JSONDecodeError as e:
+                _log(f"[AGENT] Failed to parse heartbeat response: {e}")
+                _log(f"[AGENT] Raw: {response_raw[:200]}")
+            except Exception as e:
+                _log(f"[AGENT] Error handling heartbeat response: {type(e).__name__}: {e}")
 
             procs = collect_processes()
             conns = collect_network()
@@ -277,69 +367,87 @@ async def send_telemetry(ws) -> None:
                     "agent_id": AGENT_ID, "platform": "windows",
                     "process_list": procs, "network_connections": conns,
                     "timestamp": now,
-                }
+                },
+                "wait_ack": False,
             }))
-            
+
             _log(f"[+] Sent HB + PROCESS_LIST ({len(procs)}) + telemetry ({len(conns)} conns)")
             await asyncio.sleep(INTERVAL)
-            
+
         except websockets.exceptions.ConnectionClosed as e:
-            _log(f"[!] Connection closed (send): code={e.code} — reconnect")
+            _log(f"[!] Connection closed in send_telemetry: code={e.code} — reconnect")
             raise
         except Exception as e:
-            _log(f"[!] Send error: {type(e).__name__}: {e}")
-            raise
+            _log(f"[!] send_telemetry error: {type(e).__name__}: {e}")
+            await asyncio.sleep(INTERVAL)
 
 
-async def _execute_and_ack(ws, command_id, action, params):
-    _log(f"[*] Received command: {action} (id={command_id})")
+async def _execute_and_ack(ws, command_id: str, action: str, params: dict) -> None:
+    """Execute command và gửi COMMAND_ACK với status thật."""
+    if not command_id:
+        _log(f"[AGENT] WARNING: missing command_id for action {action}")
+        return
+
     handler = COMMAND_HANDLERS.get(action)
-    result = handler(params) if handler else {"status": "error", "message": f"Unknown: {action}"}
-    status_str = "success" if result.get("status") == "success" else "failed"
-    ack = {
-        "type": "COMMAND_ACK",
-        "payload": {
-            "command_id": command_id, "status": status_str,
-            "error_message": result.get("message") if status_str == "failed" else None,
-            "result": result, "executed_at": time.time(),
+    if not handler:
+        _log(f"[AGENT] No handler for action: {action}")
+        ack = {
+            "type": "COMMAND_ACK",
+            "payload": {
+                "command_id": command_id,
+                "status": "failed",
+                "error_message": f"No handler registered for action '{action}'",
+            }
         }
-    }
-    await ws.send(json.dumps(ack))
-    _log(f"[+] ACK sent: {action} -> {result.get('status')}")
-
-
-async def receive_commands(ws) -> None:
-    """Nhận mọi message từ Manager — cập nhật _last_message_time mỗi lần."""
-    global _last_message_time
-    async for raw in ws:
-        _last_message_time = time.time()  # ← BẤT KỲ message nào = Manager còn sống
         try:
-            msg = json.loads(raw)
-            msg_type = msg.get("type")
-
-            if msg_type == "COMMAND":
-                payload = msg.get("payload", {})
-                await _execute_and_ack(
-                    ws,
-                    payload.get("command_id"),
-                    payload.get("action"),
-                    payload.get("params") or payload.get("payload") or {},
-                )
-            elif "pending_commands" in msg:
-                # Heartbeat response = ack (đã update _last_message_time ở trên)
-                for cmd in msg["pending_commands"]:
-                    await _execute_and_ack(
-                        ws,
-                        cmd.get("command_id"),
-                        cmd.get("action"),
-                        cmd.get("payload") or {},
-                    )
-            # else: heartbeat_ack, ping, etc → đã update time, không cần log
-        except websockets.exceptions.ConnectionClosed:
-            _log("[!] Connection closed (recv) — reconnect")
-            raise
+            await ws.send(json.dumps(ack))
         except Exception as e:
-            _log(f"[!] Recv error: {type(e).__name__}: {e}")
+            _log(f"[AGENT] Failed to send error ACK: {e}")
+        return
+
+    try:
+        result = await handler(params) if asyncio.iscoroutinefunction(handler) else handler(params)
+        # Handler trả dict {"status": "success"|"failed", "message": "..."}
+        # Hoặc trả None (legacy) -> coi như success
+        if result is None:
+            status = "success"
+            error = None
+        elif isinstance(result, dict):
+            status = result.get("status", "success")
+            error = result.get("message") if status == "failed" else None
+        else:
+            status = "success"
+            error = None
+
+        ack = {
+            "type": "COMMAND_ACK",
+            "payload": {
+                "command_id": command_id,
+                "status": status,
+                "executed_at": time.time(),
+            }
+        }
+        if error:
+            ack["payload"]["error_message"] = error
+
+        await ws.send(json.dumps(ack))
+        _log(f"[AGENT] Sent ACK for {command_id}: {status}" + (f" ({error})" if error else ""))
+
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        _log(f"[AGENT] Handler {action} raised exception: {error_msg}")
+        ack = {
+            "type": "COMMAND_ACK",
+            "payload": {
+                "command_id": command_id,
+                "status": "failed",
+                "error_message": error_msg,
+            }
+        }
+        try:
+            await ws.send(json.dumps(ack))
+        except Exception as send_err:
+            _log(f"[AGENT] Failed to send failure ACK: {send_err}")
 
 
 async def monitor_connection():
@@ -383,10 +491,9 @@ async def main() -> None:
                 global _last_message_time
                 _last_message_time = time.time()
                 
-                # Chạy SONG SONG: send + receive + watchdog
+                # Chạy SONG SONG: send_telemetry (pull commands + telemetry) + watchdog
                 await asyncio.gather(
                     send_telemetry(ws),
-                    receive_commands(ws),
                     monitor_connection(),
                 )
                 

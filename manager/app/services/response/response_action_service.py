@@ -108,8 +108,14 @@ class ResponseActionService:
             if cooldown_secs > 0:
                 cooldown_until = now + timedelta(seconds=cooldown_secs)
 
-        # 5. Tạo bản ghi ResponseAction
+        # 5. Tạo bản ghi ResponseAction (status="pending", chưa áp dụng cho đến khi có ACK)
         action_id = f"act_{uuid.uuid4().hex[:12]}"
+        cmd_id = f"cmd_{uuid.uuid4().hex[:12]}"
+
+        # Link command_id vào action_params
+        action_params = dict(action_params or {})
+        action_params["command_id"] = cmd_id
+
         action = ResponseAction(
             id=action_id,
             incident_id=incident_id,
@@ -125,55 +131,38 @@ class ResponseActionService:
         )
         await self.action_repo.add(action)
 
-
         # Ghi audit log tạo action
         await self.audit_service.record_event(
             action_id=action_id,
             event="created",
             actor=actor,
             reason=action_params.get("reason", f"Initiated {action_type} response"),
-            metadata={"action_type": action_type, "auto_rollback_at": auto_rollback_at.isoformat() if auto_rollback_at else None}
+            metadata={"action_type": action_type, "command_id": cmd_id, "auto_rollback_at": auto_rollback_at.isoformat() if auto_rollback_at else None}
         )
 
-        # 6. Dispatch command xuống agent & cập nhật agent state
+        # 6. Dispatch command xuống agent — KHÔNG cập nhật agent state ở đây (tránh optimistic DB bug)
         cmd_action = action_type
         if action_type == "auto_isolate":
             cmd_action = "isolate"
 
-        # Cập nhật state agent
-        if cmd_action == "isolate":
-            agent.isolate()
-        elif cmd_action == "quarantine":
-            agent.status = AgentStatus.QUARANTINE
+        cmd_payload = dict(action_params)
+        cmd_payload["action_id"] = action_id
 
-        cmd_id = f"cmd_{uuid.uuid4().hex[:12]}"
         cmd = Command(
             id=cmd_id,
             agent_id=agent_id,
             action=cmd_action,
-            payload=action_params,
+            payload=cmd_payload,
             status=CommandStatus.PENDING
         )
         await self.cmd_repo.add(cmd)
         await command_dispatcher.push_command(cmd.id, agent_id)
 
-        # 7. Đánh dấu status = applied
-        action.status = "applied"
-        action.applied_at = now
-        await self.session.flush()
-
-        # Ghi audit log applied
-        await self.audit_service.record_event(
-            action_id=action_id,
-            event="applied",
-            actor=actor,
-            reason=action_params.get("reason"),
-            metadata={"command_id": cmd_id, "action_type": action_type}
-        )
-
+        # KHÔNG set agent.isolate() hay action.status = "applied" ở đây
+        # Agent state và action.status sẽ được cập nhật trong _handle_command_ack khi nhận ACK thật
         await self.session.commit()
         await self.session.refresh(action)
-        logger.info(f"Successfully applied response action '{action_id}' ({action_type}) on agent '{agent_id}'.")
+        logger.info(f"Queued response action '{action_id}' ({action_type}) with command '{cmd_id}' for agent '{agent_id}' (status=pending).")
         return action
 
     async def get_action(self, action_id: str) -> Optional[ResponseAction]:

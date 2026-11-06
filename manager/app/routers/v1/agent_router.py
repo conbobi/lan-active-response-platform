@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 from fastapi import APIRouter, Depends, status, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.schemas.command import CommandOut
 from app.schemas.enums import CommandStatus, AgentStatus
 from app.models.command import Command
 from app.services.agent.agent_service import AgentService
+from app.services.response.response_action_service import ResponseActionService
 from app.services.core.command_dispatcher import command_dispatcher
 from app.repositories.agent_history_repository import AgentHistoryRepository
 from app.repositories.command_repository import CommandRepository
@@ -74,17 +75,41 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{agent_id}/isolate", response_model=AgentOut)
-async def isolate_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
+async def isolate_agent(
+    agent_id: str,
+    payload: Optional[Dict[str, Any]] = Body(default=None),
+    db: AsyncSession = Depends(get_db)
+):
     """Isolate an agent from network operations."""
+    reason = (payload or {}).get("reason", "Manual isolation requested")
+    action_service = ResponseActionService(db)
+    await action_service.create_and_apply_action(
+        agent_id=agent_id,
+        action_type="isolate",
+        action_params={"reason": reason},
+        actor="analyst"
+    )
     service = AgentService(db)
-    return await service.isolate_agent(agent_id)
+    return await service.get_agent(agent_id)
 
 
 @router.post("/{agent_id}/unisolate", response_model=AgentOut)
-async def unisolate_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
+async def unisolate_agent(
+    agent_id: str,
+    payload: Optional[Dict[str, Any]] = Body(default=None),
+    db: AsyncSession = Depends(get_db)
+):
     """Restore isolated agent to active network operations."""
+    reason = (payload or {}).get("reason", "Manual unisolation requested")
+    action_service = ResponseActionService(db)
+    await action_service.create_and_apply_action(
+        agent_id=agent_id,
+        action_type="unisolate",
+        action_params={"reason": reason},
+        actor="analyst"
+    )
     service = AgentService(db)
-    return await service.unisolate_agent(agent_id)
+    return await service.get_agent(agent_id)
 
 
 @router.post("/{agent_id}/update", response_model=CommandOut, status_code=status.HTTP_202_ACCEPTED)
