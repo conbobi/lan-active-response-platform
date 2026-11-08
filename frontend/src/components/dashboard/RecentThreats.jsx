@@ -86,7 +86,8 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
       const st = String(i.status || '').toLowerCase();
       const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
       if (score < 30 || isResolved) return false;
-      if (!aliveAgentIds.has(i.agent_id)) return false;
+      const agentId = i.agent_id || i.agentId;
+      if (!aliveAgentIds.has(agentId)) return false;
       const createdAt = new Date(i.created_at || i.createdAt || i.timestamp).getTime();
       if (!isNaN(createdAt) && (now - createdAt) > MAX_THREAT_AGE_MS) return false;
       return true;
@@ -159,7 +160,7 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                    {incident.agent_id} · {getTimeAgo(incident.created_at || incident.createdAt)}
+                    {incident.agent_id || incident.agentId || 'Unknown Host'} · {getTimeAgo(incident.created_at || incident.createdAt)}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem', 
                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

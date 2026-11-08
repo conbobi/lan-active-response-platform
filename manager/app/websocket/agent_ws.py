@@ -357,6 +357,8 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
         logger.warning(f"Command ack received for unknown command '{dto.command_id}' on agent '{agent_id}'")
         return {"status": "ack", "message": "Command ack recorded (command not found)"}
 
+    target_agent_id = cmd.agent_id or agent_id
+
     # Find associated ResponseAction
     action = None
     action_id = (cmd.payload or {}).get("action_id")
@@ -368,7 +370,7 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
         stmt = (
             select(ResponseAction)
             .where(
-                ResponseAction.agent_id == agent_id,
+                ResponseAction.agent_id == target_agent_id,
                 ResponseAction.action_type == cmd.action,
                 ResponseAction.status == "pending"
             )
@@ -379,7 +381,7 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
         action = res.scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
-    agent = await session.get(Agent, agent_id)
+    agent = await session.get(Agent, target_agent_id)
 
     if dto.status == CommandStatus.SUCCESS:
         if action:
@@ -399,13 +401,32 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
         if agent:
             if cmd.action in ("isolate", "auto_isolate"):
                 agent.isolate()
-                logger.info(f"Agent '{agent_id}' confirmed isolation -> status=ISOLATED, is_isolated=True")
+                logger.info(f"Agent '{target_agent_id}' confirmed isolation -> status=ISOLATED, is_isolated=True")
             elif cmd.action == "unisolate":
                 agent.unisolate()
-                logger.info(f"Agent '{agent_id}' confirmed unisolation -> status=ACTIVE, is_isolated=False")
+                logger.info(f"Agent '{target_agent_id}' confirmed unisolation -> status=ACTIVE, is_isolated=False")
+                from app.repositories.incident_repository import IncidentRepository
+                inc_repo = IncidentRepository(session)
+                resolved_incidents = await inc_repo.resolve_active_incidents_for_agent(
+                    target_agent_id,
+                    resolved_reason="Auto-resolved upon agent unisolation confirmed by agent"
+                )
+                if resolved_incidents:
+                    logger.info(f"Auto-resolved {len(resolved_incidents)} incidents for agent '{target_agent_id}' after unisolation")
+                    try:
+                        from app.websocket.dashboard_connection_manager import dashboard_manager
+                        await dashboard_manager.broadcast({
+                            "type": "INCIDENTS_RESOLVED",
+                            "event": "INCIDENTS_RESOLVED",
+                            "agent_id": target_agent_id,
+                            "incident_ids": [i.id for i in resolved_incidents],
+                            "action": "unisolate"
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to broadcast unisolation incident resolution to dashboard: {e}")
             elif cmd.action == "quarantine":
                 agent.status = AgentStatus.QUARANTINE
-                logger.info(f"Agent '{agent_id}' confirmed quarantine -> status=QUARANTINE")
+                logger.info(f"Agent '{target_agent_id}' confirmed quarantine -> status=QUARANTINE")
     else:
         # Command failed on agent
         if action:

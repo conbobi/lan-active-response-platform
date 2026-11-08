@@ -85,7 +85,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
   );
 
   const isIncidentOnLiveAgent = (incident) => {
-    const agentId = incident?.agent_id;
+    const agentId = incident?.agent_id || incident?.agentId;
     if (!agentId) return false;
     // Nếu không tìm thấy agent trong danh sách → coi như dead (stale data)
     if (!agentAliveMap.has(agentId)) return false;
@@ -228,7 +228,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
             </div>
             {unresolvedCritical.slice(0, 3).map(incident => {
               const score = getScore(incident);
-              const agentId = incident.agent_id;
+              const agentId = incident.agent_id || incident.agentId || 'Unknown Host';
               const attackType = extractAttackType(incident);
               const timeAgo = getTimeAgo(incident.created_at || incident.createdAt || incident.timestamp);
               const isIsolated = incident.status === 'contained' ||

@@ -1,7 +1,7 @@
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -170,6 +170,20 @@ class IncidentService(AbstractService[IncidentRepository]):
             msg = f"🔔 <b>INCIDENT STATUS CHANGED</b>\n<b>ID:</b> {incident_id}\n<b>New Status:</b> {status_val}"
             await self.notification_service.send_alert(msg)
 
+            # Broadcast to dashboard websocket
+            try:
+                from app.websocket.dashboard_connection_manager import dashboard_manager
+                evt_type = "INCIDENT_RESOLVED" if status_val in ("resolved", "closed", "false_positive") else "INCIDENT_STATUS_CHANGED"
+                await dashboard_manager.broadcast({
+                    "type": evt_type,
+                    "event": evt_type,
+                    "incident_id": incident_id,
+                    "agent_id": inc.agent_id,
+                    "status": status_val,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to broadcast incident status update to dashboard: {e}")
+
         return inc
 
     async def _enrich_incident(self, inc: Incident) -> Incident:
@@ -306,8 +320,14 @@ class IncidentService(AbstractService[IncidentRepository]):
         await self._enrich_incident(inc)
         return inc
 
-    async def list_incidents(self, skip: int = 0, limit: int = 200) -> List[Incident]:
-        items = await self.repository.list(skip=skip, limit=limit)
+    async def list_incidents(
+        self,
+        skip: int = 0,
+        limit: int = 200,
+        active_only: bool = False,
+        hours: Optional[int] = None
+    ) -> List[Incident]:
+        items = await self.repository.list(skip=skip, limit=limit, active_only=active_only, hours=hours)
         for inc in items:
             await self._enrich_incident(inc)
         return items
@@ -331,6 +351,19 @@ class IncidentService(AbstractService[IncidentRepository]):
         inc.resolve()
         await self.add_note(incident_id, f"Incident marked as RESOLVED by {user}.", user=user)
         await self.session.flush()
+
+        try:
+            from app.websocket.dashboard_connection_manager import dashboard_manager
+            await dashboard_manager.broadcast({
+                "type": "INCIDENT_RESOLVED",
+                "event": "INCIDENT_RESOLVED",
+                "incident_id": inc.id,
+                "agent_id": inc.agent_id,
+                "status": "resolved"
+            })
+        except Exception as e:
+            logger.warning(f"Failed to broadcast incident resolution to dashboard: {e}")
+
         return inc
 
     async def mark_false_positive(self, incident_id: str, user: str = "admin") -> Incident:
@@ -338,6 +371,19 @@ class IncidentService(AbstractService[IncidentRepository]):
         inc.mark_false_positive()
         await self.add_note(incident_id, f"Incident flagged as FALSE_POSITIVE by {user}.", user=user)
         await self.session.flush()
+
+        try:
+            from app.websocket.dashboard_connection_manager import dashboard_manager
+            await dashboard_manager.broadcast({
+                "type": "INCIDENT_RESOLVED",
+                "event": "INCIDENT_RESOLVED",
+                "incident_id": inc.id,
+                "agent_id": inc.agent_id,
+                "status": "false_positive"
+            })
+        except Exception as e:
+            logger.warning(f"Failed to broadcast false positive to dashboard: {e}")
+
         return inc
 
     async def close_incident(self, incident_id: str, user: str = "admin") -> Incident:
@@ -347,6 +393,19 @@ class IncidentService(AbstractService[IncidentRepository]):
         inc.status = IncidentStatus.CLOSED
         await self.add_note(incident_id, f"Incident CLOSED by {user}.", user=user)
         await self.session.flush()
+
+        try:
+            from app.websocket.dashboard_connection_manager import dashboard_manager
+            await dashboard_manager.broadcast({
+                "type": "INCIDENT_RESOLVED",
+                "event": "INCIDENT_RESOLVED",
+                "incident_id": inc.id,
+                "agent_id": inc.agent_id,
+                "status": "closed"
+            })
+        except Exception as e:
+            logger.warning(f"Failed to broadcast incident close to dashboard: {e}")
+
         return inc
 
     async def execute_action(

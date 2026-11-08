@@ -116,20 +116,46 @@ export default function Dashboard() {
 
     const handleSocketMessage = useCallback((msg) => {
         const evt = msg.event || msg.type;
-        if (evt === 'heartbeat' || evt === 'dead_agent' || evt === 'TELEMETRY_RISK' || evt === 'INCIDENT_CREATED') {
+        if (
+            evt === 'heartbeat' ||
+            evt === 'dead_agent' ||
+            evt === 'TELEMETRY_RISK' ||
+            evt === 'INCIDENT_CREATED' ||
+            evt === 'INCIDENT_RESOLVED' ||
+            evt === 'INCIDENTS_RESOLVED' ||
+            evt === 'AGENT_UNISOLATED' ||
+            evt === 'INCIDENT_STATUS_CHANGED'
+        ) {
             loadData();
         }
     }, [loadData]);
 
     const { isConnected } = useDashboardSocket(handleSocketMessage);
 
-    // Urgent active incident for top banner triage
+    // Urgent active incident for top banner triage (only un-resolved, high/critical, within 24h)
     const criticalActiveIncident = useMemo(() => {
-        return incidents.find(
-            (i) =>
-                (i.status === 'open' || i.status === 'investigating' || i.status === 'new') &&
-                ((i.risk_score || 0) >= 70 || i.severity === 'critical' || i.severity === 'high')
-        );
+        const now = Date.now();
+        const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+        return incidents.find((i) => {
+            const st = String(i.status || '').toLowerCase();
+            const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
+            if (isResolved) return false;
+
+            const isActive = ['open', 'investigating', 'contained', 'new'].includes(st);
+            if (!isActive) return false;
+
+            const score = Number(i.risk_score ?? i.riskScore ?? 0);
+            const isCriticalRisk = score >= 70 || i.severity === 'critical' || i.severity === 'high';
+            if (!isCriticalRisk) return false;
+
+            // Only consider incidents within 24 hours
+            const createdAt = new Date(i.created_at || i.createdAt || 0).getTime();
+            if (!isNaN(createdAt) && (now - createdAt) > MAX_AGE_MS) {
+                return false;
+            }
+
+            return true;
+        });
     }, [incidents]);
 
     const handleQuickIsolate = async (agentId) => {
@@ -163,14 +189,17 @@ export default function Dashboard() {
     const alertsToday = events.filter((e) => new Date(e.timestamp).toDateString() === new Date().toDateString()).length;
     const blockedIps = events.filter((e) => e.type === 'block_ip').length;
     const isolatedAgents = agents.filter((a) => a.status === 'isolated' || a.is_isolated).length;
-    const unresolvedIncidents = incidents.filter((i) => i.status !== 'resolved' && i.status !== 'closed').length;
+    const unresolvedIncidents = incidents.filter((i) => {
+        const st = String(i.status || '').toLowerCase();
+        return !['resolved', 'closed', 'false_positive'].includes(st);
+    }).length;
 
     return (
         <div>
             <FalsePositiveBanner />
 
-            {/* Zone 0: Urgent Critical Threat Banner (if active critical threat exists) */}
-            {criticalActiveIncident && (
+            {/* Zone 0: Urgent Critical Threat Banner OR All Clear Banner */}
+            {criticalActiveIncident ? (
                 <div
                     style={{
                         background: 'linear-gradient(90deg, rgba(239, 68, 68, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)',
@@ -216,13 +245,13 @@ export default function Dashboard() {
                                     background: 'var(--error)',
                                     color: '#fff',
                                 }}>
-                                    SCORE {Math.round(criticalActiveIncident.risk_score || 100)}/100
+                                    SCORE {Math.round(criticalActiveIncident.risk_score ?? criticalActiveIncident.riskScore ?? 100)}/100
                                 </span>
                             </div>
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                                Target Host: <strong style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname || 'WIN-DEMO-01'}</strong>
-                                {criticalActiveIncident.culprit_process?.name && (
-                                    <span> • Culprit: <code style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.culprit_process.name}</code> (PID {criticalActiveIncident.culprit_process.pid || '—'})</span>
+                                Target Host: <strong style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.agent_id || criticalActiveIncident.agentId || 'Unknown Host'}</strong>
+                                {(criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name) && (
+                                    <span> • Culprit: <code style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name}</code> (PID {criticalActiveIncident.culprit_process?.pid || criticalActiveIncident.culpritProcess?.pid || '—'})</span>
                                 )}
                             </div>
                         </div>
@@ -233,18 +262,18 @@ export default function Dashboard() {
                             variant="primary"
                             size="sm"
                             iconLeft={<FiShield size={14} />}
-                            disabled={isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname)}
-                            onClick={() => handleQuickIsolate(criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname)}
+                            disabled={isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
+                            onClick={() => handleQuickIsolate(criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
                             style={{ background: 'var(--error)', borderColor: 'var(--error)', fontWeight: 700 }}
                         >
-                            {isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname) ? 'Isolating...' : '1-Click Isolate Host'}
+                            {isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId) ? 'Isolating...' : '1-Click Isolate Host'}
                         </Button>
                         <Button
                             variant="outline"
                             size="sm"
                             onClick={() => {
-                                const targetAgent = criticalActiveIncident.agent_id || criticalActiveIncident.agent_hostname || '';
-                                const pid = criticalActiveIncident.culprit_process?.pid || '';
+                                const targetAgent = criticalActiveIncident.agent_id || criticalActiveIncident.agentId || '';
+                                const pid = criticalActiveIncident.culprit_process?.pid || criticalActiveIncident.culpritProcess?.pid || '';
                                 navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid ? `&pid=${pid}` : ''}`);
                             }}
                         >
@@ -259,6 +288,51 @@ export default function Dashboard() {
                             Triage Storyline
                         </Button>
                     </div>
+                </div>
+            ) : (
+                <div
+                    style={{
+                        background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.12) 0%, rgba(17, 24, 39, 0.7) 100%)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        borderLeft: '5px solid var(--success)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.85rem 1.25rem',
+                        marginBottom: '1.25rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                        flexWrap: 'wrap',
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div
+                            style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: '50%',
+                                background: 'rgba(16, 185, 129, 0.2)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'var(--success)',
+                                flexShrink: 0,
+                            }}
+                        >
+                            <FiShield size={18} />
+                        </div>
+                        <div>
+                            <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: '0.9rem' }}>
+                                🟢 All Systems Operational — No Active Threats (Last 24h)
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                Endpoint posture normal. Protection active across {totalOnline} connected {totalOnline === 1 ? 'agent' : 'agents'}.
+                            </div>
+                        </div>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={loadData} iconLeft={<FiRotateCw size={13} />}>
+                        Sync Status
+                    </Button>
                 </div>
             )}
 

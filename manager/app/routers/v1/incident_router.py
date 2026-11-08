@@ -34,10 +34,16 @@ async def create_incident(dto: IncidentCreate, db: AsyncSession = Depends(get_db
 
 @router.get("", response_model=List[IncidentOut], include_in_schema=False)
 @router.get("/", response_model=List[IncidentOut])
-async def list_incidents(skip: int = 0, limit: int = 200, db: AsyncSession = Depends(get_db)):
-    """List security incidents."""
+async def list_incidents(
+    skip: int = 0,
+    limit: int = 200,
+    active_only: bool = False,
+    hours: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """List security incidents with optional active_only and hours filters."""
     service = IncidentService(db)
-    return await service.list_incidents(skip=skip, limit=limit)
+    return await service.list_incidents(skip=skip, limit=limit, active_only=active_only, hours=hours)
 
 
 @router.get("/{incident_id}/timeline", response_model=Dict[str, Any])

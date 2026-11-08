@@ -3,27 +3,54 @@ import api from './api';
 
 export const mapIncident = (inc) => {
   if (!inc) return null;
+  const agentId = inc.agent_id || inc.agentId || 'N/A';
+  const riskScore = inc.risk_score !== undefined ? inc.risk_score : (inc.riskScore !== undefined ? inc.riskScore : 0);
+  const assignedTo = inc.assigned_to || inc.assignedTo || 'Unassigned';
+  const resolvedAt = inc.resolved_at || inc.resolvedAt || null;
+  const labelReason = inc.label_reason || inc.labelReason || '';
+  const labeledBy = inc.labeled_by || inc.labeledBy || '';
+  const labeledAt = inc.labeled_at || inc.labeledAt || null;
+  const createdAt = inc.created_at || inc.createdAt || new Date().toISOString();
+  const updatedAt = inc.updated_at || inc.updatedAt || new Date().toISOString();
+  const culpritProcess = inc.culprit_process || inc.culpritProcess || null;
+  const parentProcess = inc.parent_process || inc.parentProcess || null;
+  const networkIndicators = Array.isArray(inc.network_indicators) ? inc.network_indicators : (Array.isArray(inc.networkIndicators) ? inc.networkIndicators : []);
+  const factorsBreakdown = Array.isArray(inc.factors_breakdown) ? inc.factors_breakdown : (Array.isArray(inc.factorsBreakdown) ? inc.factorsBreakdown : []);
+
   return {
     id: inc.id,
     title: inc.title || inc.name || `Incident #${inc.id}`,
     description: inc.description || 'No detailed description provided.',
     severity: inc.severity ? inc.severity.toLowerCase() : 'medium',
     status: inc.status ? inc.status.toLowerCase() : 'open',
-    assignedTo: inc.assigned_to || inc.assignedTo || 'Unassigned',
-    agentId: inc.agent_id || inc.agentId || 'N/A',
-    riskScore: inc.risk_score !== undefined ? inc.risk_score : (inc.riskScore || 0),
+    assignedTo,
+    assigned_to: assignedTo,
+    agentId,
+    agent_id: agentId,
+    riskScore,
+    risk_score: riskScore,
     notes: inc.notes || '',
-    resolvedAt: inc.resolved_at || inc.resolvedAt || null,
+    resolvedAt,
+    resolved_at: resolvedAt,
     label: inc.label || null,
-    labelReason: inc.label_reason || inc.labelReason || '',
-    labeledBy: inc.labeled_by || inc.labeledBy || '',
-    labeledAt: inc.labeled_at || inc.labeledAt || null,
-    createdAt: inc.created_at || inc.createdAt || new Date().toISOString(),
-    updatedAt: inc.updated_at || inc.updatedAt || new Date().toISOString(),
-    culpritProcess: inc.culprit_process || null,
-    parentProcess: inc.parent_process || null,
-    networkIndicators: Array.isArray(inc.network_indicators) ? inc.network_indicators : [],
-    factorsBreakdown: Array.isArray(inc.factors_breakdown) ? inc.factors_breakdown : [],
+    labelReason,
+    label_reason: labelReason,
+    labeledBy,
+    labeled_by: labeledBy,
+    labeledAt,
+    labeled_at: labeledAt,
+    createdAt,
+    created_at: createdAt,
+    updatedAt,
+    updated_at: updatedAt,
+    culpritProcess,
+    culprit_process: culpritProcess,
+    parentProcess,
+    parent_process: parentProcess,
+    networkIndicators,
+    network_indicators: networkIndicators,
+    factorsBreakdown,
+    factors_breakdown: factorsBreakdown,
   };
 };
 

@@ -25,56 +25,101 @@ import re
 
 # ============ ISOLATION ============
 def handle_isolate(payload: dict) -> dict:
-    """Isolate host — block all outbound except manager."""
+    """Isolate host — bật firewall, block outbound + inbound, whitelist manager, kill active sessions."""
     import subprocess
     import platform
     from urllib.parse import urlparse
     import socket
-
+    
     system = platform.system()
     parsed = urlparse(MANAGER_URL)
-    manager_host = parsed.hostname or (MANAGER_URL.split("//")[1].split("/")[0].split(":")[0] if "//" in MANAGER_URL else "unknown")
+    manager_host = parsed.hostname or (
+        MANAGER_URL.split("//")[1].split("/")[0].split(":")[0] 
+        if "//" in MANAGER_URL else "unknown"
+    )
     try:
         manager_ip = socket.gethostbyname(manager_host)
     except Exception:
         manager_ip = manager_host
-
+    
     try:
         if system == "Windows":
-            # Clean up rule cũ (nếu có) — tránh duplicate
-            subprocess.run(
-                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_BLOCK_OUT"],
-                capture_output=True, timeout=5
+            # ─── BƯỚC 1: Bật firewall state ON trước ───
+            enable_fw = subprocess.run(
+                ["netsh", "advfirewall", "set", "allprofiles", "state", "on"],
+                capture_output=True, text=True, timeout=15
             )
-            subprocess.run(
-                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_ALLOW_MANAGER"],
-                capture_output=True, timeout=5
-            )
-
-            # Block all outbound
-            r1 = subprocess.run(
-                ["netsh", "advfirewall", "firewall", "add", "rule",
-                 "name=LARP_BLOCK_OUT", "dir=out", "action=block",
-                 "enable=yes", "profile=any"],
-                capture_output=True, text=True, timeout=10
-            )
-            if r1.returncode != 0:
-                raise RuntimeError(f"Failed to add block rule: {r1.stderr}")
-
-            # Allow manager outbound (whitelist)
-            r2 = subprocess.run(
-                ["netsh", "advfirewall", "firewall", "add", "rule",
-                 "name=LARP_ALLOW_MANAGER", "dir=out", "action=allow",
-                 f"remoteip={manager_ip}", "enable=yes", "profile=any"],
-                capture_output=True, text=True, timeout=10
-            )
-            if r2.returncode != 0:
-                raise RuntimeError(f"Failed to add allow rule: {r2.stderr}")
-
-            return {"status": "success", "message": f"Host isolated (manager={manager_ip} whitelisted)"}
-
+            if enable_fw.returncode != 0:
+                return {"status": "failed", 
+                        "message": f"Enable firewall failed: {enable_fw.stderr or enable_fw.stdout}"}
+            print(f"[AGENT] Firewall state enabled ON")
+            
+            # ─── BƯỚC 2: Clean rules cũ (idempotent) ───
+            for rule_name in ("LARP_ALLOW_MANAGER", "LARP_BLOCK_OUT", "LARP_BLOCK_IN"):
+                subprocess.run(
+                    ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"],
+                    capture_output=True, timeout=5
+                )
+            
+            # ─── BƯỚC 3: Allow manager TRƯỚC (tránh lockout) ───
+            r_allow = subprocess.run([
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                "name=LARP_ALLOW_MANAGER", "dir=out", "action=allow",
+                f"remoteip={manager_ip}", "enable=yes", "profile=any"
+            ], capture_output=True, text=True, timeout=10)
+            if r_allow.returncode != 0:
+                return {"status": "failed", 
+                        "message": f"Allow manager rule failed: {r_allow.stderr}"}
+            print(f"[AGENT] Allowed manager {manager_ip}")
+            
+            # ─── BƯỚC 4: Block outbound ───
+            r_block_out = subprocess.run([
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                "name=LARP_BLOCK_OUT", "dir=out", "action=block",
+                "enable=yes", "profile=any"
+            ], capture_output=True, text=True, timeout=10)
+            if r_block_out.returncode != 0:
+                return {"status": "failed", 
+                        "message": f"Block outbound failed: {r_block_out.stderr}"}
+            print(f"[AGENT] Block outbound enabled")
+            
+            # ─── BƯỚC 5: Block inbound ───
+            subprocess.run([
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                "name=LARP_BLOCK_IN", "dir=in", "action=block",
+                "enable=yes", "profile=any"
+            ], capture_output=True, timeout=10)
+            print(f"[AGENT] Block inbound enabled")
+            
+            # ─── BƯỚC 6: Kill established TCP sessions (trừ manager + localhost) ───
+            ps_script = f"""
+$excluded = @('127.0.0.1', '::1', '{manager_ip}')
+Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | 
+    Where-Object {{ $excluded -notcontains $_.RemoteAddress }} | 
+    ForEach-Object {{ 
+        try {{ 
+            Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue 
+        }} catch {{ }} 
+    }}
+"""
+            try:
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_script],
+                    capture_output=True, timeout=20
+                )
+                print(f"[AGENT] Killed established sessions (except manager {manager_ip})")
+            except subprocess.TimeoutExpired:
+                print(f"[AGENT] WARNING: kill sessions timeout — continuing anyway")
+            except Exception as e:
+                print(f"[AGENT] WARNING: kill sessions failed: {e} — continuing anyway")
+            
+            return {
+                "status": "success",
+                "message": f"Host isolated (firewall ON, manager={manager_ip} whitelisted)"
+            }
+        
         elif system == "Linux":
-            # iptables cho container
+            # Giữ nguyên logic iptables hiện tại (không đổi)
             subprocess.run(["iptables", "-F", "OUTPUT"], check=False)
             subprocess.run(
                 ["iptables", "-A", "OUTPUT", "-d", manager_ip, "-j", "ACCEPT"],
@@ -89,39 +134,42 @@ def handle_isolate(payload: dict) -> dict:
                 check=True, timeout=10
             )
             return {"status": "success", "message": "Host isolated via iptables"}
-
+        
         else:
-            raise RuntimeError(f"Unsupported platform: {system}")
-
-    except subprocess.CalledProcessError as e:
-        return {"status": "failed", "message": f"Command failed: {e.stderr or e}"}
+            return {"status": "failed", "message": f"Unsupported platform: {system}"}
+    
+    except subprocess.TimeoutExpired as e:
+        return {"status": "failed", "message": f"Command timeout: {e}"}
     except Exception as e:
         return {"status": "failed", "message": f"{type(e).__name__}: {e}"}
 
 
 def handle_unisolate(payload: dict) -> dict:
-    """Remove isolation rules."""
+    """Remove isolation rules. KHÔNG tắt firewall state (giữ ON cho bảo mật)."""
     import subprocess
     import platform
-
+    
     system = platform.system()
     try:
         if system == "Windows":
-            subprocess.run(
-                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_BLOCK_OUT"],
-                capture_output=True, timeout=5
-            )
-            subprocess.run(
-                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_ALLOW_MANAGER"],
-                capture_output=True, timeout=5
-            )
-            return {"status": "success", "message": "Host unisolated"}
+            # Chỉ xóa 3 rules LARP
+            for rule_name in ("LARP_BLOCK_OUT", "LARP_BLOCK_IN", "LARP_ALLOW_MANAGER"):
+                subprocess.run(
+                    ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"],
+                    capture_output=True, timeout=5
+                )
+            # KHÔNG chạy: netsh advfirewall set allprofiles state off
+            # Lý do: firewall OFF làm giảm bảo mật toàn hệ thống
+            return {"status": "success", 
+                    "message": "Host unisolated (rules removed, firewall still ON)"}
+        
         elif system == "Linux":
             subprocess.run(["iptables", "-F", "OUTPUT"], check=False)
             subprocess.run(["iptables", "-P", "OUTPUT", "ACCEPT"], check=False)
             return {"status": "success", "message": "Host unisolated"}
+        
         else:
-            raise RuntimeError(f"Unsupported platform: {system}")
+            return {"status": "failed", "message": f"Unsupported platform: {system}"}
     except Exception as e:
         return {"status": "failed", "message": f"{type(e).__name__}: {e}"}
 
@@ -511,3 +559,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
