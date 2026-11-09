@@ -16,6 +16,7 @@ export const mapIncident = (inc) => {
   const parentProcess = inc.parent_process || inc.parentProcess || null;
   const networkIndicators = Array.isArray(inc.network_indicators) ? inc.network_indicators : (Array.isArray(inc.networkIndicators) ? inc.networkIndicators : []);
   const factorsBreakdown = Array.isArray(inc.factors_breakdown) ? inc.factors_breakdown : (Array.isArray(inc.factorsBreakdown) ? inc.factorsBreakdown : []);
+  const story = inc.story || inc.storyline || '';
 
   return {
     id: inc.id,
@@ -51,6 +52,7 @@ export const mapIncident = (inc) => {
     network_indicators: networkIndicators,
     factorsBreakdown,
     factors_breakdown: factorsBreakdown,
+    story,
   };
 };
 

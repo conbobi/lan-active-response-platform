@@ -26,28 +26,57 @@ export default function HeroBanner({
   const navigate = useNavigate();
   if (!incident) return null;
 
-  const culprit = incident.culpritProcess || {
-    name: 'suspicious_process',
-    pid: 4128,
-    exe_path: 'C:\\Users\\AppData\\Local\\Temp\\key_test.exe',
-  };
-  const parent = incident.parentProcess || { name: 'cmd.exe', pid: 3500 };
+  const culprit = incident.culpritProcess || incident.culprit_process || null;
+  const parent = incident.parentProcess || incident.parent_process || null;
 
   // Generate natural language human narrative
   const generateNarrative = () => {
-    const pName = culprit.name || 'key_test.exe';
-    const pid = culprit.pid || 'N/A';
-    const parentName = parent.name || 'cmd.exe';
-    const score = incident.riskScore || 50;
-
-    let text = `Tiến trình \`${pName}\` (PID ${pid}) được khởi chạy bởi \`${parentName}\`, hoạt động từ thư mục bất thường (Temp). `;
-    text += `Hệ thống phân tích rủi ro kích hoạt điểm đe dọa ${score}/100. `;
-    if (isIsolated) {
-      text += `Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId} để ngăn chặn lây lan.`;
-    } else {
-      text += `Khuyến nghị cô lập máy trạm ${incident.agentId} hoặc tiêu diệt cây tiến trình ngay lập tức.`;
+    // If backend already generated a factual story, prioritize it
+    if (incident.story) {
+      let text = incident.story;
+      if (isIsolated) {
+        text += ` Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId || incident.agent_id} để ngăn chặn lây lan.`;
+      }
+      return text;
     }
-    return text;
+
+    const score = incident.riskScore || incident.risk_score || 50;
+
+    if (!culprit) {
+      let text = `Hệ thống phân tích rủi ro kích hoạt điểm đe dọa ${score}/100 trên máy trạm ${incident.agentId || incident.agent_id || 'N/A'}. `;
+      if (isIsolated) {
+        text += `Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId || incident.agent_id} để ngăn chặn lây lan.`;
+      }
+      return text;
+    }
+
+    const pName = culprit.name || 'tiến trình không xác định';
+    const pid = culprit.pid !== undefined && culprit.pid !== null ? culprit.pid : 'N/A';
+    const parts = [`Tiến trình \`${pName}\` (PID ${pid})`];
+
+    // Parent handling: strictly factual, avoid hallucinated 'bash'
+    if (parent && parent.name && parent.name !== 'bash') {
+      const parentPidStr = parent.pid !== undefined && parent.pid !== null ? ` (PID ${parent.pid})` : '';
+      parts.push(`được khởi chạy bởi \`${parent.name}\`${parentPidStr}`);
+    } else if (culprit.parent_pid !== undefined && culprit.parent_pid !== null && culprit.parent_pid !== 0 && culprit.parent_pid !== 1000) {
+      parts.push(`có parent PID ${culprit.parent_pid} (không xác định tên)`);
+    }
+
+    // Exe path: strictly factual, do not invent /tmp/ or Temp
+    const exe = culprit.exe_path || culprit.exe || culprit.path;
+    if (exe && !exe.includes('/tmp/System Idle') && !exe.includes('C:\\Temp\\System Idle')) {
+      parts.push(`hoạt động từ \`${exe}\``);
+    }
+
+    parts.push(`Hệ thống phân tích rủi ro kích hoạt điểm đe dọa ${score}/100.`);
+
+    if (isIsolated) {
+      parts.push(`Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId || incident.agent_id} để ngăn chặn lây lan.`);
+    } else if (score >= 70) {
+      parts.push(`Khuyến nghị cô lập máy trạm ${incident.agentId || incident.agent_id} hoặc tiêu diệt cây tiến trình ngay lập tức.`);
+    }
+
+    return parts.join(' ');
   };
 
   const severityColor =

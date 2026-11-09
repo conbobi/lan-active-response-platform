@@ -248,38 +248,27 @@ class IncidentService(AbstractService[IncidentRepository]):
                 culprit_dict = {
                     "pid": culprit_proc.pid,
                     "name": culprit_proc.name,
-                    "exe_path": culprit_proc.exe_path or culprit_proc.exe or f"C:\\Temp\\{culprit_proc.name}",
-                    "cmdline": culprit_proc.cmdline or culprit_proc.name,
-                    "sha256": culprit_proc.hash or "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    "exe_path": culprit_proc.exe_path or culprit_proc.exe or "",
+                    "cmdline": culprit_proc.cmdline or "",
+                    "sha256": culprit_proc.hash or "",
                     "cpu_percent": culprit_proc.cpu_percent,
                     "memory_percent": culprit_proc.memory_percent,
                     "is_suspicious": culprit_proc.is_suspicious
                 }
-                if culprit_proc.parent_pid:
+                if culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid:
                     parent_proc = next((p for p in procs if p.pid == culprit_proc.parent_pid), None)
-                    parent_dict = {
-                        "pid": culprit_proc.parent_pid,
-                        "name": parent_proc.name if parent_proc else ("cmd.exe" if "windows" in desc_lower else "bash"),
-                        "exe_path": parent_proc.exe_path if parent_proc else ("C:\\Windows\\System32\\cmd.exe" if "windows" in desc_lower else "/bin/bash")
-                    }
-
-        if not culprit_dict:
-            culprit_name = "key_test.exe" if "key" in (inc.title + desc_lower) else "suspicious_process"
-            culprit_dict = {
-                "pid": 4128,
-                "name": culprit_name,
-                "exe_path": f"C:\\Users\\AppData\\Local\\Temp\\{culprit_name}",
-                "cmdline": f"{culprit_name} --hidden",
-                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "cpu_percent": 12.5,
-                "memory_percent": 4.2,
-                "is_suspicious": True
-            }
-            parent_dict = {
-                "pid": 3500,
-                "name": "cmd.exe",
-                "exe_path": "C:\\Windows\\System32\\cmd.exe"
-            }
+                    if parent_proc:
+                        parent_dict = {
+                            "pid": parent_proc.pid,
+                            "name": parent_proc.name,
+                            "exe_path": parent_proc.exe_path or parent_proc.exe or ""
+                        }
+                    else:
+                        parent_dict = {
+                            "pid": culprit_proc.parent_pid,
+                            "name": None,
+                            "exe_path": None
+                        }
 
         # 3. Network indicators
         network_indicators: List[Dict[str, Any]] = []
@@ -297,21 +286,49 @@ class IncidentService(AbstractService[IncidentRepository]):
                     "process_name": culprit_dict["name"] if culprit_dict else "unknown"
                 })
 
-        if not network_indicators and ("c2" in desc_lower or "network" in desc_lower or "port" in desc_lower):
-            network_indicators.append({
-                "dst_ip": "192.168.10.55",
-                "dst_port": 4444,
-                "protocol": "TCP",
-                "bytes_sent": 1024,
-                "packets_sent": 12,
-                "process_name": culprit_dict["name"] if culprit_dict else "key_test.exe"
-            })
-
         inc.culprit_process = culprit_dict
         inc.parent_process = parent_dict
         inc.network_indicators = network_indicators
         inc.factors_breakdown = factors_breakdown
+        inc.story = self.generate_story(inc, culprit_dict, parent_dict)
         return inc
+
+    def generate_story(
+        self,
+        incident: Incident,
+        culprit: Optional[Dict[str, Any]],
+        parent: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate factual narrative story for an incident without hallucinating missing fields."""
+        score_val = int(incident.risk_score) if incident.risk_score is not None else 0
+        if not culprit:
+            return f"Hệ thống phân tích rủi ro kích hoạt điểm đe dọa {score_val}/100 trên máy trạm {incident.agent_id}."
+
+        c_name = culprit.get("name") or "tiến trình không xác định"
+        c_pid = culprit.get("pid")
+        pid_str = f" (PID {c_pid})" if c_pid is not None else ""
+        parts = [f"Tiến trình `{c_name}`{pid_str}"]
+
+        parent_name = parent.get("name") if parent else None
+        parent_pid = parent.get("pid") if parent else None
+        if parent_pid == 0 or (c_pid is not None and parent_pid == c_pid):
+            parent_pid = None
+            if parent_name == c_name:
+                parent_name = None
+
+        if parent_name and parent_pid:
+            parts.append(f"được khởi chạy bởi `{parent_name}` (PID {parent_pid})")
+        elif parent_name:
+            parts.append(f"được khởi chạy bởi `{parent_name}`")
+        elif parent_pid:
+            parts.append(f"có parent PID {parent_pid} (không xác định tên)")
+
+        c_exe = culprit.get("exe_path") or culprit.get("exe")
+        if c_exe:
+            parts.append(f"hoạt động từ `{c_exe}`")
+
+        parts.append(f"Hệ thống phân tích rủi ro kích hoạt điểm đe dọa {score_val}/100.")
+        return " ".join(parts)
 
     async def get_incident(self, incident_id: str) -> Incident:
         inc = await self.repository.get(incident_id)

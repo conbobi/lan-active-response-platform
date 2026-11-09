@@ -80,6 +80,7 @@ class IncidentOut(ORMBaseModel):
     parent_process: Optional[dict] = None
     network_indicators: Optional[list] = None
     factors_breakdown: Optional[list] = None
+    story: Optional[str] = None
 
 
 class AIAnalysisOut(ORMBaseModel):

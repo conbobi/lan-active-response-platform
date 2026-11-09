@@ -202,7 +202,12 @@ ALLOWED MITRE IDs:
 
 INSTRUCTIONS:
 - Analyze what attack happened using the processes and alert above.
-- "summary": write 2-4 sentences in Vietnamese describing the actual incident. Do NOT repeat example text.
+- STRICT RULES:
+  * ONLY use data from the PROVIDED FIELDS above.
+  * If a field is empty, missing, or unknown, state "không xác định" or omit it. DO NOT invent or hallucinate.
+  * DO NOT mention file paths not present in the data (e.g. do NOT invent /tmp/, C:\Temp).
+  * DO NOT mention parent process names not in the data (e.g. do NOT invent bash, cmd.exe).
+- "summary": write 2-4 sentences in Vietnamese describing the actual incident grounded strictly in the evidence.
 - "mitre_techniques": list mapped techniques chosen strictly from the allowed MITRE IDs above with evidence.
 - "root_cause": 1-2 sentences in Vietnamese identifying the root cause.
 - "confidence": float 0.0 to 1.0.
@@ -224,10 +229,12 @@ JSON FORMAT:
         lines = []
         for p in procs[:8]:
             tag = " [SUSPICIOUS]" if p.is_suspicious else ""
-            cmd = p.cmdline.strip() if p.cmdline else p.name
+            cmd = p.cmdline.strip() if p.cmdline else "(none)"
             if len(cmd) > 70:
                 cmd = cmd[:67] + "..."
-            lines.append(f"PID {p.pid} ({p.name}, cmd: {cmd}){tag}")
+            exe = p.exe_path or p.exe or "(none/kernel)"
+            parent = f"parent PID: {p.parent_pid}" if p.parent_pid is not None else "parent: unknown"
+            lines.append(f"PID {p.pid} ({p.name}, exe: {exe}, cmd: {cmd}, {parent}){tag}")
         return "\n".join(lines)
 
     def _format_flows(self, flows: List[Flow]) -> str:

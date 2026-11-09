@@ -63,7 +63,7 @@ class IncidentTimelineService:
             raise NotFoundError(f"Incident '{incident_id}' not found.")
 
         agent_id = incident.agent_id
-        inc_time = incident.created_at
+        inc_time = incident.created_at or datetime.now(timezone.utc)
         timeline: List[Dict[str, Any]] = []
 
         # ------------------------------------------------------------------
@@ -104,42 +104,39 @@ class IncidentTimelineService:
                 p_time = culprit_proc.created_at or inc_time
                 if p_time > inc_time:
                     p_time = inc_time - timedelta(seconds=7)
-                parent_name = parent_proc.name if parent_proc else ("explorer.exe" if "windows" in desc_lower else "bash")
+
+                parent_info = None
+                if parent_proc and parent_proc.name:
+                    parent_info = {
+                        "pid": parent_proc.pid,
+                        "name": parent_proc.name
+                    }
+                    title = f"{parent_proc.name} spawned {culprit_proc.name}"
+                elif culprit_proc.parent_pid is not None and culprit_proc.parent_pid != 0:
+                    parent_info = {
+                        "pid": culprit_proc.parent_pid,
+                        "name": None
+                    }
+                    title = f"Process {culprit_proc.name} (PID {culprit_proc.pid}) spawned by PID {culprit_proc.parent_pid}"
+                else:
+                    title = f"Process {culprit_proc.name} (PID {culprit_proc.pid}) active"
+
+                details = {
+                    "pid": culprit_proc.pid,
+                    "name": culprit_proc.name,
+                    "path": culprit_proc.exe_path or culprit_proc.exe or "",
+                    "cmdline": culprit_proc.cmdline or "",
+                }
+                if parent_info:
+                    details["parent"] = parent_info
+
                 timeline.append({
                     "time": p_time.isoformat() if hasattr(p_time, "isoformat") else str(p_time),
                     "type": "process_spawn",
                     "severity": "critical" if culprit_proc.is_suspicious else "warning",
-                    "title": f"{parent_name} spawned {culprit_proc.name}",
-                    "details": {
-                        "pid": culprit_proc.pid,
-                        "name": culprit_proc.name,
-                        "path": culprit_proc.exe_path or culprit_proc.exe or f"/tmp/{culprit_proc.name}",
-                        "cmdline": culprit_proc.cmdline or f"{culprit_proc.name}",
-                        "parent": {
-                            "pid": culprit_proc.parent_pid or (parent_proc.pid if parent_proc else 1000),
-                            "name": parent_name
-                        }
-                    }
+                    "title": title,
+                    "details": details
                 })
-
-        # Fallback process_spawn if no process in DB
-        if not any(item["type"] == "process_spawn" for item in timeline):
-            # Extract process name from incident title / description
-            extracted_name = "key_test.exe" if "key" in (incident.title + incident.description).lower() else "suspicious_process"
-            t_spawn = inc_time - timedelta(seconds=8)
-            timeline.append({
-                "time": t_spawn.isoformat() if hasattr(t_spawn, "isoformat") else str(t_spawn),
-                "type": "process_spawn",
-                "severity": "critical",
-                "title": f"cmd.exe spawned {extracted_name}",
-                "details": {
-                    "pid": 4128,
-                    "name": extracted_name,
-                    "path": f"C:\\Users\\AppData\\Local\\Temp\\{extracted_name}",
-                    "cmdline": f"{extracted_name} --hidden",
-                    "parent": {"pid": 3500, "name": "cmd.exe"}
-                }
-            })
 
         # ------------------------------------------------------------------
         # 2. NETWORK CONNECTIONS & FLOWS

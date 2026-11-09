@@ -246,9 +246,9 @@ export default function StoryTimeline({
                             <strong>Commandline:</strong> <code style={{ color: 'var(--warning)' }}>{item.details.cmdline}</code>
                           </div>
                         )}
-                        {item.details.parent && (
+                        {item.details.parent && (item.details.parent.name || item.details.parent.pid !== undefined) && (
                           <div>
-                            <strong>Parent:</strong> {item.details.parent.name} (PID: {item.details.parent.pid})
+                            <strong>Parent:</strong> {item.details.parent.name || 'Unknown'} {item.details.parent.pid !== undefined && item.details.parent.pid !== null ? `(PID: ${item.details.parent.pid})` : ''}
                           </div>
                         )}
                         <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
