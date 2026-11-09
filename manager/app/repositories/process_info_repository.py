@@ -10,9 +10,19 @@ class ProcessInfoRepository(SqlAlchemyRepository[ProcessInfo]):
         super().__init__(session, ProcessInfo)
 
     async def find_by_agent(self, agent_id: str) -> List[ProcessInfo]:
+        import inspect
         stmt = select(ProcessInfo).where(ProcessInfo.agent_id == agent_id)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        if hasattr(result, "scalars"):
+            sc = result.scalars()
+            if inspect.isawaitable(sc):
+                sc = await sc
+            if hasattr(sc, "all"):
+                items = sc.all()
+                if inspect.isawaitable(items):
+                    items = await items
+                return list(items)
+        return []
 
     async def find_suspicious(self) -> List[ProcessInfo]:
         stmt = select(ProcessInfo).where(ProcessInfo.is_suspicious == True)  # noqa: E712

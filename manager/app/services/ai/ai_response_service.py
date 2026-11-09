@@ -201,6 +201,17 @@ class AIResponseService:
                     f"AI suggestion is stale or hallucinated — refusing to dispatch."
                 )
 
+            # Check agent self-protection
+            from app.services.common.agent_protection import check_agent_kill_protection
+            stmt_all = select(ProcessInfo).where(ProcessInfo.agent_id == incident.agent_id)
+            all_agent_procs = list((await session.execute(stmt_all)).scalars().all())
+            allowed, block_reason = check_agent_kill_protection(all_agent_procs, pid_int)
+            if not allowed:
+                logger.warning(f"Rejecting AI suggestion {suggestion.id}: PID {pid_int} is protected: {block_reason}")
+                raise ValueError(
+                    f"PID {pid_int} cannot be terminated: {block_reason}. Refusing to dispatch."
+                )
+
         elif suggested == "block_ip":
             ip = params.get("ip")
             if not ip:
@@ -471,6 +482,16 @@ Trả về DUY NHẤT 1 JSON (không markdown ngoài JSON):
                     "no_action",
                     {},
                     f"PID {pid_int} được đề xuất không tồn tại trên máy trạm (hallucinated PID). Đã chặn và chuyển sang no_action. Lý do: {reasoning}",
+                )
+
+            # Check agent protection
+            from app.services.common.agent_protection import check_agent_kill_protection
+            allowed, block_reason = check_agent_kill_protection(all_procs, pid_int)
+            if not allowed:
+                return (
+                    "no_action",
+                    {},
+                    f"PID {pid_int} ({existing_proc.name}) được bảo vệ (LARP Agent / legitimate process: {block_reason}). Đã chặn hành động kill và chuyển sang no_action. Lý do: {reasoning}",
                 )
 
             params["pid"] = pid_int

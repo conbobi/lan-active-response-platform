@@ -3,10 +3,16 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent
+from app.models.process_info import ProcessInfo
 from app.repositories.agent_repository import AgentRepository
+from app.repositories.process_info_repository import ProcessInfoRepository
 from app.services.response.response_policy_service import ResponsePolicyService
 from app.services.agent.agent_group_service import AgentGroupService
 from app.services.response.response_action_service import ResponseActionService
+from app.services.common.agent_protection import (
+    is_agent_process,
+    check_agent_kill_protection,
+)
 from app.schemas.response_policy import (
     PolicyEvaluateResponse,
     ResponsePolicyResponse,
@@ -58,6 +64,108 @@ class PolicyEngineService:
         self.policy_service = ResponsePolicyService(session)
         self.group_service = AgentGroupService(session)
         self.action_service = ResponseActionService(session)
+        self.proc_repo = ProcessInfoRepository(session)
+
+    def _is_agent_process(self, process: Any) -> bool:
+        """Check nếu process là LARP agent hoặc legitimate child."""
+        return is_agent_process(process)
+
+    async def _get_process_tree(self, agent_id: str) -> List[ProcessInfo]:
+        """Lấy toàn bộ process tree của agent từ process_info."""
+        import inspect
+        try:
+            res = self.proc_repo.find_by_agent(agent_id)
+            if inspect.isawaitable(res):
+                res = await res
+            return list(res)
+        except Exception as e:
+            logger.debug(f"Could not load process tree for agent '{agent_id}': {e}")
+            return []
+
+    def _trace_ancestors(self, process_tree: List[ProcessInfo], target_pid: int) -> List[ProcessInfo]:
+        """Lấy danh sách các ancestor processes của target_pid."""
+        pid_map = {p.pid: p for p in process_tree}
+        ancestors = []
+        curr = pid_map.get(target_pid)
+        visited = set()
+        while curr and curr.parent_pid and curr.parent_pid not in visited:
+            visited.add(curr.parent_pid)
+            parent = pid_map.get(curr.parent_pid)
+            if parent:
+                ancestors.append(parent)
+                curr = parent
+            else:
+                break
+        return ancestors
+
+    def _trace_descendants(self, process_tree: List[ProcessInfo], target_pid: int) -> List[ProcessInfo]:
+        """Lấy danh sách các descendant processes của target_pid."""
+        children_map: Dict[int, List[ProcessInfo]] = {}
+        for p in process_tree:
+            if p.parent_pid:
+                children_map.setdefault(p.parent_pid, []).append(p)
+        descendants = []
+        queue = list(children_map.get(target_pid, []))
+        visited = set()
+        while queue:
+            child = queue.pop(0)
+            if child.pid in visited:
+                continue
+            visited.add(child.pid)
+            descendants.append(child)
+            queue.extend(children_map.get(child.pid, []))
+        return descendants
+
+    async def _dispatch_action(
+        self,
+        agent_id: str,
+        action_type: str,
+        target_pid: Optional[int] = None,
+        action_params: Optional[Dict[str, Any]] = None,
+        incident_id: Optional[str] = None,
+        auto_rollback_seconds: Optional[int] = None,
+        actor: str = "policy_engine"
+    ) -> Dict[str, Any]:
+        """Dispatch action với self-protection check — không kill/isolate agent process."""
+        action_params = dict(action_params or {})
+
+        # Resolve target_pid if not directly passed
+        if target_pid is None:
+            raw_pid = action_params.get("pid") or action_params.get("target_pid")
+            if raw_pid is not None:
+                try:
+                    target_pid = int(raw_pid)
+                except (ValueError, TypeError):
+                    target_pid = None
+
+        if action_type in ("kill", "kill_process", "kill_process_tree") and target_pid is not None:
+            process_tree = await self._get_process_tree(agent_id)
+            allowed, block_reason = check_agent_kill_protection(process_tree, target_pid)
+            if not allowed:
+                logger.warning(
+                    f"BLOCKED: kill action '{action_type}' targeting PID {target_pid} on agent '{agent_id}': {block_reason}"
+                )
+                return {
+                    "agent_id": agent_id,
+                    "status": "rejected",
+                    "reason": block_reason,
+                    "action_type": action_type,
+                    "target_pid": target_pid
+                }
+
+        try:
+            act = await self.action_service.create_and_apply_action(
+                agent_id=agent_id,
+                action_type=action_type,
+                action_params=action_params,
+                incident_id=incident_id,
+                actor=actor,
+                auto_rollback_seconds=auto_rollback_seconds
+            )
+            return {"action_id": act.id, "agent_id": agent_id, "status": "applied"}
+        except Exception as e:
+            logger.error(f"Policy engine failed to execute '{action_type}' on agent '{agent_id}': {e}", exc_info=True)
+            return {"agent_id": agent_id, "status": "failed", "error": str(e)}
 
     async def evaluate_and_execute(
         self,
@@ -200,19 +308,19 @@ class PolicyEngineService:
             effective_incident_id = context.get("incident_id")
 
         if scope == "agent":
-            try:
-                act = await self.action_service.create_and_apply_action(
-                    agent_id=agent_id,
-                    action_type=matched_policy.action_type,
-                    action_params=action_params,
-                    incident_id=effective_incident_id,
-                    actor="policy_engine",
-                    auto_rollback_seconds=matched_policy.auto_rollback_seconds
-                )
-                executed_actions.append({"action_id": act.id, "agent_id": agent_id, "status": "applied"})
-            except Exception as e:
-                logger.error(f"Policy engine failed to execute on agent '{agent_id}': {e}", exc_info=True)
-                executed_actions.append({"agent_id": agent_id, "status": "failed", "error": str(e)})
+            target_pid = action_params.get("pid") or action_params.get("target_pid")
+            if not target_pid and context and isinstance(context, dict):
+                target_pid = context.get("pid")
+            res = await self._dispatch_action(
+                agent_id=agent_id,
+                action_type=matched_policy.action_type,
+                target_pid=int(target_pid) if target_pid is not None else None,
+                action_params=action_params,
+                incident_id=effective_incident_id,
+                auto_rollback_seconds=matched_policy.auto_rollback_seconds,
+                actor="policy_engine"
+            )
+            executed_actions.append(res)
 
         elif scope == "group":
             for g in affected_groups:
@@ -429,19 +537,17 @@ class PolicyEngineService:
                 action_params["process_name"] = context["process_name"]
 
         executed_actions = []
-        try:
-            act = await self.action_service.create_and_apply_action(
-                agent_id=agent.id,
-                action_type=action,
-                action_params=action_params,
-                incident_id=effective_incident_id,
-                actor="policy_engine",
-                auto_rollback_seconds=rollback_window
-            )
-            executed_actions.append({"action_id": act.id, "agent_id": agent.id, "status": "applied"})
-        except Exception as e:
-            logger.error(f"Policy engine graduated execution failed on agent '{agent.id}': {e}", exc_info=True)
-            executed_actions.append({"agent_id": agent.id, "status": "failed", "error": str(e)})
+        target_pid = action_params.get("pid") or action_params.get("target_pid")
+        res = await self._dispatch_action(
+            agent_id=agent.id,
+            action_type=action,
+            target_pid=int(target_pid) if target_pid is not None else None,
+            action_params=action_params,
+            incident_id=effective_incident_id,
+            auto_rollback_seconds=rollback_window,
+            actor="policy_engine"
+        )
+        executed_actions.append(res)
 
         return PolicyEvaluateResponse(
             dry_run=False,

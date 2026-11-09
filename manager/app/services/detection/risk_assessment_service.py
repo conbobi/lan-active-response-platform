@@ -19,8 +19,24 @@ from app.services.common.setting_service import SettingService
 from app.services.detection.detection_rule_service import DetectionRuleService
 from app.services.detection.risk_rules import create_default_registry, RiskRuleRegistry
 from app.services.core.command_dispatcher import command_dispatcher
+from app.services.common.agent_protection import is_agent_process
 
 logger = logging.getLogger(__name__)
+
+# Whitelist patterns - KHÔNG BAO GIỜ flag các process này
+AGENT_WHITELIST = {
+    # LARP agent itself
+    "win_agent_minimal.py",
+    "win_agent_minimal.exe",
+    "larp_agent.exe",
+    "win_agent_service.py",
+    "watchdog.py",
+    "agent.py",
+    # Agent's legitimate children
+    "cmd.exe /c netsh advfirewall",
+    "cmd.exe /c taskkill",
+    "powershell -Command Get-NetTCPConnection",
+}
 
 
 # ===== EMA (Exponential Moving Average) =====
@@ -134,6 +150,10 @@ class RiskAssessmentService:
         self.detection_rule_service = DetectionRuleService(session)
         self.registry = registry if registry is not None else create_default_registry()
 
+    def _is_agent_process(self, process: Union[dict, Any]) -> bool:
+        """Check if process is LARP agent or its legitimate child."""
+        return is_agent_process(process)
+
     async def evaluate(
         self, agent_id: str, data: Union[RiskAssessmentDTO, Dict[str, Any]]
     ) -> Tuple[float, Dict[str, Any]]:
@@ -153,10 +173,19 @@ class RiskAssessmentService:
         else:
             telemetry = getattr(data, "__dict__", {})
 
+        # Whitelist filtering: Filter out LARP agent processes and legitimate children
+        # so detection rules (e.g. process_chain, living_off_land, suspicious_process)
+        # never falsely flag the agent or its child commands
+        raw_process_list = telemetry.get("process_list", [])
+        if raw_process_list:
+            telemetry["process_list"] = [
+                p for p in raw_process_list if not self._is_agent_process(p)
+            ]
+
         # Log telemetry trước khi evaluate
         logger.info(f"[EVALUATE] Agent {agent_id} - CPU: {telemetry.get('cpu_usage')}, "
                     f"RAM: {telemetry.get('ram_usage')}, "
-                    f"processes: {len(telemetry.get('process_list', []))}, "
+                    f"processes: {len(telemetry.get('process_list', []))} (filtered), "
                     f"file_changes: {telemetry.get('file_changes_count', 0)}")
 
         # Try to sync rule configurations from database
@@ -329,6 +358,8 @@ class RiskAssessmentService:
             
             for proc in processes:
                 p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
+                if self._is_agent_process(p_dict):
+                    continue
                 is_susp = p_dict.get("is_suspicious", False)
                 name = str(p_dict.get("name", "")).strip().lower()
                 cmdline = str(p_dict.get("cmdline", "")).strip().lower()

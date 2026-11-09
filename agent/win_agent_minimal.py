@@ -30,6 +30,7 @@ def handle_isolate(payload: dict) -> dict:
     import platform
     from urllib.parse import urlparse
     import socket
+    import time
     
     system = platform.system()
     parsed = urlparse(MANAGER_URL)
@@ -37,10 +38,25 @@ def handle_isolate(payload: dict) -> dict:
         MANAGER_URL.split("//")[1].split("/")[0].split(":")[0] 
         if "//" in MANAGER_URL else "unknown"
     )
+
+    # ─── BƯỚC 0: Verify manager IP resolve được & hợp lệ ───
     try:
         manager_ip = socket.gethostbyname(manager_host)
-    except Exception:
-        manager_ip = manager_host
+        if manager_ip in ("127.0.0.1", "0.0.0.0", "localhost"):
+            return {
+                "status": "failed",
+                "message": f"Invalid manager IP resolved: {manager_ip}"
+            }
+    except socket.gaierror:
+        return {
+            "status": "failed",
+            "message": f"Cannot resolve manager host: {manager_host}"
+        }
+    except Exception as e:
+        return {
+            "status": "failed",
+            "message": f"Manager host resolution error: {e}"
+        }
     
     try:
         if system == "Windows":
@@ -113,9 +129,47 @@ Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue |
             except Exception as e:
                 print(f"[AGENT] WARNING: kill sessions failed: {e} — continuing anyway")
             
+            # ─── BƯỚC 7: Verify manager reachability sau isolate (Auto-Rollback nếu mất kết nối) ───
+            time.sleep(2)
+            reachable = False
+            try:
+                ping_res = subprocess.run(
+                    ["ping", "-n", "1", "-w", "2000", manager_ip],
+                    capture_output=True, timeout=5
+                )
+                if ping_res.returncode == 0:
+                    reachable = True
+            except Exception:
+                pass
+
+            if not reachable:
+                # Fallback TCP socket connection check
+                manager_port = parsed.port or (443 if parsed.scheme == "wss" else 8005 if parsed.scheme == "ws" else 80)
+                try:
+                    with socket.create_connection((manager_ip, manager_port), timeout=3):
+                        reachable = True
+                        print(f"[AGENT] TCP reachability to manager {manager_ip}:{manager_port} verified")
+                except Exception:
+                    reachable = False
+
+            if not reachable:
+                print(f"[AGENT] ROLLBACK: Cannot reach manager {manager_ip} after isolation! Rolling back rules...")
+                subprocess.run(
+                    ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_BLOCK_OUT"],
+                    capture_output=True, timeout=5
+                )
+                subprocess.run(
+                    ["netsh", "advfirewall", "firewall", "delete", "rule", "name=LARP_BLOCK_IN"],
+                    capture_output=True, timeout=5
+                )
+                return {
+                    "status": "failed",
+                    "message": f"Isolation rollback: cannot reach manager {manager_ip}"
+                }
+
             return {
                 "status": "success",
-                "message": f"Host isolated (firewall ON, manager={manager_ip} whitelisted)"
+                "message": f"Host isolated (firewall ON, manager={manager_ip} whitelisted & reachable)"
             }
         
         elif system == "Linux":

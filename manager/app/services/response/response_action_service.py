@@ -64,6 +64,24 @@ class ResponseActionService:
         if not agent:
             raise NotFoundError(f"Agent with ID '{agent_id}' was not found.")
 
+        # 1.1 Self-Protection: Không bao giờ kill LARP agent hoặc con/ancestor của nó
+        if action_type in ("kill", "kill_process", "kill_process_tree"):
+            raw_pid = action_params.get("pid") or action_params.get("target_pid")
+            if raw_pid is not None:
+                try:
+                    pid_int = int(raw_pid)
+                    from app.repositories.process_info_repository import ProcessInfoRepository
+                    from app.services.common.agent_protection import check_agent_kill_protection
+                    procs = await ProcessInfoRepository(self.session).find_by_agent(agent_id)
+                    allowed, block_reason = check_agent_kill_protection(procs, pid_int)
+                    if not allowed:
+                        logger.warning(
+                            f"Action blocked by Agent Protection: cannot kill PID {pid_int} on agent '{agent_id}': {block_reason}"
+                        )
+                        raise BadRequestError(f"Action rejected: {block_reason}")
+                except (ValueError, TypeError):
+                    pass
+
         # 2. Kiểm tra Anti-Flapping Cooldown
         # Chỉ check cooldown cho stateful actions
         # Kill/block_ip là one-shot → không cần flapping protection
