@@ -10,9 +10,19 @@ class SystemSettingRepository(SqlAlchemyRepository[SystemSetting]):
         super().__init__(session, SystemSetting)
 
     async def get_by_key(self, key: str) -> Optional[SystemSetting]:
+        import inspect
         stmt = select(SystemSetting).where(SystemSetting.key == key)
         result = await self.session.execute(stmt)
-        return result.scalars().first()
+        if hasattr(result, "scalars"):
+            sc = result.scalars()
+            if inspect.isawaitable(sc):
+                sc = await sc
+            if hasattr(sc, "first"):
+                item = sc.first()
+                if inspect.isawaitable(item):
+                    item = await item
+                return item
+        return None
 
     async def set_key(self, key: str, value: Any) -> SystemSetting:
         existing = await self.get_by_key(key)

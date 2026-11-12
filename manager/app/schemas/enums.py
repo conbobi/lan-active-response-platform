@@ -40,9 +40,15 @@ class IncidentStatus(str, Enum):
 
 class ResponseActionType(str, Enum):
     ISOLATE = "isolate"
+    UNISOLATE = "unisolate"
     KILL = "kill"
+    KILL_PROCESS = "kill_process"
+    KILL_PROCESS_TREE = "kill_process_tree"
     BLOCK_IP = "block_ip"
     QUARANTINE = "quarantine"
+    REMOVE_REGISTRY = "remove_registry"
+    RESTORE_FILE = "restore_file"
+    RESTORE_REGISTRY = "restore_registry"
 
 
 class ResponseActionStatus(str, Enum):

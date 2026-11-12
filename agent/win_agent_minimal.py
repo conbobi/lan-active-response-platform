@@ -288,6 +288,86 @@ def handle_quarantine(payload):
         return {"status": "error", "message": str(e)}
 
 
+# ============ REGISTRY & FILE RESTORE HANDLERS ============
+REGISTRY_BACKUP_DIR = r"C:\ProgramData\LARP\registry_backups"
+
+def handle_remove_registry(payload: dict) -> dict:
+    """Remove registry key/value with backup."""
+    key_path = payload.get("key_path")
+    value_name = payload.get("value_name")  # None = xóa cả key
+
+    if not key_path:
+        return {"status": "failed", "message": "missing key_path"}
+
+    os.makedirs(REGISTRY_BACKUP_DIR, exist_ok=True)
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', str(key_path))[-30:]
+    backup_file = os.path.join(REGISTRY_BACKUP_DIR, f"{int(time.time())}_{safe_name}.reg")
+
+    try:
+        # Export registry key trước khi xóa
+        export_cmd = f'reg export "{key_path}" "{backup_file}" /y'
+        subprocess.run(export_cmd, shell=True, capture_output=True, timeout=10)
+
+        # Xóa key hoặc value
+        if value_name:
+            cmd = f'reg delete "{key_path}" /v "{value_name}" /f'
+        else:
+            cmd = f'reg delete "{key_path}" /f'
+
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": f"Registry removed: {key_path}",
+                "backup_file": backup_file,
+            }
+        else:
+            return {"status": "failed", "message": result.stderr or result.stdout, "backup_file": backup_file}
+    except Exception as e:
+        return {"status": "failed", "message": str(e)}
+
+
+def handle_restore_file(payload: dict) -> dict:
+    """Restore file from quarantine or snapshot backup."""
+    source_path = payload.get("source_path")
+    target_path = payload.get("target_path")
+
+    if not source_path or not target_path:
+        return {"status": "failed", "message": "missing source_path or target_path"}
+
+    if not os.path.exists(source_path):
+        return {"status": "failed", "message": f"source_path not found: {source_path}"}
+
+    try:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        shutil.copy2(source_path, target_path)
+        return {
+            "status": "success",
+            "message": f"File restored to {target_path}",
+        }
+    except Exception as e:
+        return {"status": "failed", "message": str(e)}
+
+
+def handle_restore_registry(payload: dict) -> dict:
+    """Restore registry from backup .reg file."""
+    backup_file = payload.get("backup_file")
+    if not backup_file or not os.path.exists(backup_file):
+        return {"status": "failed", "message": f"backup file not found: {backup_file}"}
+
+    try:
+        result = subprocess.run(
+            f'reg import "{backup_file}"',
+            shell=True, capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return {"status": "success", "message": f"Registry restored from {backup_file}"}
+        return {"status": "failed", "message": result.stderr or result.stdout}
+    except Exception as e:
+        return {"status": "failed", "message": str(e)}
+
+
 COMMAND_HANDLERS = {
     "isolate": handle_isolate,
     "unisolate": handle_unisolate,
@@ -297,6 +377,9 @@ COMMAND_HANDLERS = {
     "kill_tree": handle_kill_process_tree,
     "kill_process_tree": handle_kill_process_tree,
     "quarantine": handle_quarantine,
+    "remove_registry": handle_remove_registry,
+    "restore_file": handle_restore_file,
+    "restore_registry": handle_restore_registry,
 }
 
 
@@ -398,6 +481,75 @@ def _get_ip_address() -> str:
             return "127.0.0.1"
 
 
+DEMO_RANSOMWARE_DIR = os.getenv("DEMO_RANSOMWARE_DIR", r"C:\Users\Public\demo_ransomware")
+
+
+def collect_file_changes() -> List[Dict[str, Any]]:
+    """Scan watch folder for modified / created / ransomware files."""
+    changes = []
+    if not os.path.exists(DEMO_RANSOMWARE_DIR):
+        return changes
+    try:
+        now = time.time()
+        for root, _, files in os.walk(DEMO_RANSOMWARE_DIR):
+            for file in files:
+                fpath = os.path.join(root, file)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    # Include files modified in last 60 seconds
+                    if now - mtime <= 60:
+                        changes.append({
+                            "path": fpath,
+                            "name": file,
+                            "timestamp": mtime,
+                            "action": "modified"
+                        })
+                except Exception:
+                    continue
+    except Exception as e:
+        pass
+    return changes
+
+
+def collect_auth_events() -> List[Dict[str, Any]]:
+    """Query recent failed logon events (Event ID 4625) from Windows Security log."""
+    events = []
+    import platform
+    if platform.system() != "Windows":
+        return events
+    try:
+        cmd = 'wevtutil qe Security /q:"*[System[(EventID=4625) and TimeCreated[timediff(@SystemTime) <= 300000]]]" /f:xml /c:20'
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0 and res.stdout.strip():
+            xml_str = f"<Events>{res.stdout}</Events>"
+            import xml.etree.ElementTree as ET
+            try:
+                root = ET.fromstring(xml_str)
+                for event_node in root.findall(".//Event"):
+                    target_user = "unknown"
+                    ip_address = "unknown"
+                    for data_node in event_node.findall(".//Data"):
+                        name = data_node.get("Name")
+                        if name == "TargetUserName":
+                            target_user = data_node.text or "unknown"
+                        elif name == "IpAddress":
+                            ip_address = data_node.text or "unknown"
+                    if ip_address and ip_address not in ("-", "127.0.0.1", "::1"):
+                        events.append({
+                            "username": target_user,
+                            "source_ip": ip_address,
+                            "status": "failed",
+                            "success": False,
+                            "service": "rdp",
+                            "count": 1
+                        })
+            except Exception:
+                pass
+    except Exception as e:
+        pass
+    return events
+
+
 async def send_telemetry(ws) -> None:
     """Gửi heartbeat + telemetry mỗi INTERVAL giây và xử lý pending_commands."""
     global _last_heartbeat_sent, _last_message_time
@@ -456,6 +608,8 @@ async def send_telemetry(ws) -> None:
 
             procs = collect_processes()
             conns = collect_network()
+            f_changes = collect_file_changes()
+            a_events = collect_auth_events()
 
             await ws.send(json.dumps({
                 "type": "PROCESS_LIST",
@@ -463,17 +617,35 @@ async def send_telemetry(ws) -> None:
                 "wait_ack": False,
             }))
 
+            telemetry_payload = {
+                "agent_id": AGENT_ID, "platform": "windows",
+                "process_list": procs, "network_connections": conns,
+                "timestamp": now,
+            }
+            if f_changes:
+                telemetry_payload["file_changes"] = f_changes
+                telemetry_payload["file_changes_count"] = len(f_changes)
+
             await ws.send(json.dumps({
                 "type": "TELEMETRY_RISK",
-                "payload": {
-                    "agent_id": AGENT_ID, "platform": "windows",
-                    "process_list": procs, "network_connections": conns,
-                    "timestamp": now,
-                },
+                "payload": telemetry_payload,
                 "wait_ack": False,
             }))
 
-            _log(f"[+] Sent HB + PROCESS_LIST ({len(procs)}) + telemetry ({len(conns)} conns)")
+            if a_events:
+                await ws.send(json.dumps({
+                    "type": "AUTH_EVENT",
+                    "payload": {
+                        "agent_id": AGENT_ID,
+                        "events": a_events,
+                        "timestamp": now
+                    },
+                    "wait_ack": False,
+                }))
+
+            fc_msg = f", {len(f_changes)} file changes" if f_changes else ""
+            auth_msg = f", {len(a_events)} auth events" if a_events else ""
+            _log(f"[+] Sent HB + PROCESS_LIST ({len(procs)}) + telemetry ({len(conns)} conns{fc_msg}{auth_msg})")
             await asyncio.sleep(INTERVAL)
 
         except websockets.exceptions.ConnectionClosed as e:

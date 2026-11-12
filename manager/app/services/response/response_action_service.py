@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ===== ACTION CLASSIFICATION =====
 # Stateful actions — cần cooldown + auto-rollback (có thể toggle qua lại)
-COOLDOWN_ACTIONS = {"isolate", "unisolate", "quarantine"}
+COOLDOWN_ACTIONS = {"isolate", "unisolate", "quarantine", "remove_registry"}
 
 # One-shot actions — KHÔNG cooldown, KHÔNG auto-rollback (không thể undo)
 NO_ROLLBACK_ACTIONS = {"kill_process", "kill_process_tree", "block_ip"}

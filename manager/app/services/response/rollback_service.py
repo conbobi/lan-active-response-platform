@@ -74,6 +74,10 @@ class RollbackService:
             raise BadRequestError(
                 f"Cannot undo action in status '{action.status}'. Only 'applied' actions can be undone."
             )
+        if action.action_type in UNROLLBACKABLE_ACTIONS:
+            raise BadRequestError(
+                f"Action type '{action.action_type}' is irreversible (terminated process cannot be restored)."
+            )
 
         # 3. Đánh dấu status = reverting
         action.status = "reverting"

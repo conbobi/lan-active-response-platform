@@ -95,3 +95,23 @@ async def test_policy_engine_graduated_evaluation_flow():
     call_args_iso = engine.action_service.create_and_apply_action.call_args[1]
     assert call_args_iso["action_type"] == "isolate"
     assert call_args_iso["auto_rollback_seconds"] == 300
+
+
+@pytest.mark.asyncio
+async def test_monitor_mode_skips_dispatch():
+    """Verify that when auto_response_enabled is False (Monitor Mode), actions are skipped."""
+    mock_db = AsyncMock()
+    engine = PolicyEngineService(mock_db)
+
+    agent = Agent(id="WIN-DEMO-01", hostname="WIN-DEMO-01", ip_address="192.168.1.100", status=AgentStatus.ACTIVE)
+    engine.agent_repo.get = AsyncMock(return_value=agent)
+    engine.group_service.list_groups_for_agent = AsyncMock(return_value=[])
+    engine.policy_service.match_policy = AsyncMock(return_value=None)
+    engine.action_service.create_and_apply_action = AsyncMock()
+    engine.audit_service.record_event = AsyncMock()
+    engine.setting_service.get_setting = AsyncMock(return_value=False)
+
+    res = await engine.evaluate_and_execute(agent_id="WIN-DEMO-01", risk_score=95, dry_run=False)
+    engine.action_service.create_and_apply_action.assert_not_called()
+    engine.audit_service.record_event.assert_awaited()
+

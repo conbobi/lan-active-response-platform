@@ -9,6 +9,8 @@ from app.repositories.process_info_repository import ProcessInfoRepository
 from app.services.response.response_policy_service import ResponsePolicyService
 from app.services.agent.agent_group_service import AgentGroupService
 from app.services.response.response_action_service import ResponseActionService
+from app.services.common.audit_log_service import ActionAuditLogService
+from app.services.common.setting_service import SettingService
 from app.services.common.agent_protection import (
     is_agent_process,
     check_agent_kill_protection,
@@ -65,6 +67,8 @@ class PolicyEngineService:
         self.group_service = AgentGroupService(session)
         self.action_service = ResponseActionService(session)
         self.proc_repo = ProcessInfoRepository(session)
+        self.audit_service = ActionAuditLogService(session)
+        self.setting_service = SettingService(session)
 
     def _is_agent_process(self, process: Any) -> bool:
         """Check nếu process là LARP agent hoặc legitimate child."""
@@ -128,6 +132,34 @@ class PolicyEngineService:
     ) -> Dict[str, Any]:
         """Dispatch action với self-protection check — không kill/isolate agent process."""
         action_params = dict(action_params or {})
+
+        # Check global auto-response flag (Monitor Mode check)
+        setting = await self.setting_service.get_setting("auto_response_enabled", default=True)
+        if isinstance(setting, dict):
+            auto_enabled = setting.get("value", setting.get("data", True))
+        elif setting is not None:
+            auto_enabled = bool(setting)
+        else:
+            auto_enabled = True
+
+        if not auto_enabled:
+            logger.info(f"[MONITOR MODE] Would dispatch {action_type} for {agent_id} — skipped")
+            try:
+                await self.audit_service.record_event(
+                    action_id=None,
+                    event="would_dispatch",
+                    actor=actor,
+                    reason=f"Auto response disabled (Monitor Mode) — {action_type} skipped",
+                    metadata={"action_type": action_type, "agent_id": agent_id, "params": action_params},
+                )
+            except Exception as audit_err:
+                logger.debug(f"Audit log for would_dispatch skipped: {audit_err}")
+            return {
+                "agent_id": agent_id,
+                "status": "monitor_only",
+                "would_execute": action_type,
+                "action_type": action_type
+            }
 
         # Resolve target_pid if not directly passed
         if target_pid is None:

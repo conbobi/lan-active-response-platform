@@ -334,6 +334,15 @@ class RiskAssessmentService:
         incident_creation_th = thresholds.get("incident_creation_threshold", 50.0)
         auto_kill_th = thresholds.get("auto_kill_threshold", 85.0)
 
+        # Global auto-response check (Monitor Mode)
+        auto_resp_setting = await self.setting_service.get_setting("auto_response_enabled", default=True)
+        if isinstance(auto_resp_setting, dict):
+            auto_response_enabled = auto_resp_setting.get("value", auto_resp_setting.get("data", True))
+        elif auto_resp_setting is not None:
+            auto_response_enabled = bool(auto_resp_setting)
+        else:
+            auto_response_enabled = True
+
         # 1. Automated Incident Creation if smoothed >= incident_creation_threshold
         inc = None
         if smoothed >= incident_creation_th:
@@ -342,7 +351,7 @@ class RiskAssessmentService:
             logger.info(f"Automated incident '{inc.id}' evaluated for agent '{agent_id}' (score: {smoothed} >= threshold: {incident_creation_th})")
 
         # 2. Automated Process Tree Termination if smoothed >= auto_kill_threshold
-        if smoothed >= auto_kill_th and not is_whitelisted:
+        if smoothed >= auto_kill_th and not is_whitelisted and auto_response_enabled:
             logger.warning(
                 f"High risk score ({smoothed} >= {auto_kill_th}) for agent '{agent_id}'. "
                 f"Triggering Automated Process Tree Termination!"
@@ -436,8 +445,8 @@ class RiskAssessmentService:
         except Exception as pe_exc:
             logger.error(f"Error in PolicyEngine execution for agent '{agent_id}': {pe_exc}", exc_info=True)
 
-        # 4. Fallback legacy action trigger if no policy was executed
-        if not policy_executed:
+        # 4. Fallback legacy action trigger if no policy was executed (only when auto_response_enabled)
+        if not policy_executed and auto_response_enabled:
             if action == "auto_isolate":
                 logger.warning(f"Critical risk score ({smoothed}) for agent '{agent_id}'. Triggering fallback auto-isolation!")
                 from app.services.response.response_action_service import ResponseActionService

@@ -387,6 +387,29 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
         if action:
             action.status = "applied"
             action.applied_at = now
+
+            # Merge live ACK results into snapshot (e.g., exported .reg path, quarantine destination)
+            backup_file = payload.get("backup_file")
+            quarantine_path = payload.get("quarantine_path")
+            sha256 = payload.get("sha256")
+            if backup_file or quarantine_path or sha256:
+                snap = dict(action.snapshot or {})
+                if backup_file:
+                    snap["backup_file"] = backup_file
+                    reg = dict(snap.get("registry") or {})
+                    reg["backup_file"] = backup_file
+                    snap["registry"] = reg
+                if quarantine_path or sha256:
+                    if quarantine_path:
+                        snap["quarantine_path"] = quarantine_path
+                    f_info = dict(snap.get("file") or {})
+                    if quarantine_path:
+                        f_info["quarantine_path"] = quarantine_path
+                    if sha256:
+                        f_info["hash_sha256"] = sha256
+                    snap["file"] = f_info
+                action.snapshot = snap
+
             audit_svc = ActionAuditLogService(session)
             await audit_svc.record_event(
                 action_id=action.id,
