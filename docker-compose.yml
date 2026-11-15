@@ -30,6 +30,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU
       - OLLAMA_URL=http://ollama:11434
+      - AI_MODEL=sec-q6
     depends_on:
       db:
         condition: service_healthy
@@ -89,24 +90,23 @@ services:
       - frontend
     networks:
       - larp-net
-
-  client1:
-    build: ./agent
-    hostname: client1
-    restart: unless-stopped
-    environment:
-      - MANAGER_URL=ws://manager:8000/ws/agent
-      - AGENT_ID=client1
-      - BASH_ENV=/etc/bash_env
-    networks:
-      - larp-net
-    depends_on:
-      manager:
-        condition: service_healthy
-    cap_add:
-      - NET_ADMIN
-    mem_limit: 2g
-    mem_reservation: 512m
+  # client1:
+  #   build: ./agent
+  #   hostname: client1
+  #   restart: unless-stopped
+  #   environment:
+  #     - MANAGER_URL=ws://manager:8000/ws/agent
+  #     - AGENT_ID=client1
+  #     - BASH_ENV=/etc/bash_env
+  #   networks:
+  #     - larp-net
+  #   depends_on:
+  #     manager:
+  #       condition: service_healthy
+  #   cap_add:
+  #     - NET_ADMIN
+  #   mem_limit: 2g
+  #   mem_reservation: 512m
 
 networks:
   larp-net:

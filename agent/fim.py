@@ -6,6 +6,17 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 
+MONITORED_PATHS = [
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/sudoers",
+    "/etc/cron.d/",
+    "/var/spool/cron/",
+    "/etc/hosts",
+    "/etc/ssh/sshd_config",
+]
+
+
 class FileIntegrityMonitor:
     """
     File Integrity Monitoring (FIM) for detecting unauthorized changes to critical system files.
@@ -15,9 +26,13 @@ class FileIntegrityMonitor:
     DEFAULT_WATCHED_FILES = [
         "/etc/passwd",
         "/etc/shadow",
+        "/etc/sudoers",
         "/etc/hosts",
+        "/etc/ssh/sshd_config",
     ]
     DEFAULT_WATCHED_DIRS = [
+        "/etc/cron.d",
+        "/var/spool/cron",
         "/tmp/malware_sim",
     ]
 

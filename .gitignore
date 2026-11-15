@@ -40,3 +40,5 @@ dist/
 *.egg-info/
 models/foundation-sec-8b-reasoning-q4_k_m.gguf
 models/Modelfile
+models/Foundation-Sec-8B-Reasoning.Q6_K.gguf
+models/Modelfile.q6

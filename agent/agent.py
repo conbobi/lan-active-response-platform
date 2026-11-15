@@ -15,7 +15,30 @@ from auth_monitor import global_auth_monitor
 from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
 
-MANAGER_URL = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
+
+def _resolve_manager_url() -> str:
+    """Ưu tiên LAN nếu reachable, fallback public wss."""
+    explicit = os.getenv("MANAGER_URL")
+    if explicit:
+        return explicit
+
+    lan_url = os.getenv("LAN_MANAGER_URL")
+    if lan_url:
+        import socket
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(lan_url.replace("ws://", "http://").replace("wss://", "https://"))
+            sock = socket.create_connection((parsed.hostname, parsed.port or 80), timeout=1.5)
+            sock.close()
+            print(f"[BOOTSTRAP] LAN manager reachable at {lan_url}", flush=True)
+            return lan_url
+        except Exception:
+            print("[BOOTSTRAP] LAN unreachable, fallback public wss", flush=True)
+
+    return "wss://edr.alwayready.id.vn/ws/agent"
+
+MANAGER_URL = os.getenv("MANAGER_URL", "wss://edr.alwayready.id.vn/ws/agent")
+
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
 
 ws_request_lock = asyncio.Lock()
@@ -24,64 +47,8 @@ last_heartbeat_ack_time = time.time()
 _prev_net_io = None
 _prev_net_time = None
 def get_container_cpu_percent():
-    """
-    Tính CPU % sử dụng của container dựa trên cgroup v1/v2.
-    Hỗ trợ cả cgroup v1 và v2.
-    """
-    try:
-        # Thử cgroup v1 trước
-        with open('/sys/fs/cgroup/cpu/cpuacct.usage', 'r') as f:
-            usage = int(f.read().strip())
-        with open('/sys/fs/cgroup/cpu/cpu.cfs_period_us', 'r') as f:
-            period = int(f.read().strip())
-        with open('/sys/fs/cgroup/cpu/cpu.cfs_quota_us', 'r') as f:
-            quota = int(f.read().strip())
-        if quota <= 0:  # Không giới hạn
-            return psutil.cpu_percent(interval=0.1)
-    except FileNotFoundError:
-        # Thử cgroup v2
-        try:
-            with open('/sys/fs/cgroup/cpu.max', 'r') as f:
-                line = f.read().strip()
-                parts = line.split()
-                if len(parts) == 2:
-                    quota = parts[0]
-                    period = parts[1]
-                    if quota == "max":
-                        return psutil.cpu_percent(interval=0.1)
-                    quota = int(quota)
-                    period = int(period)
-                    # Đọc cpuacct.usage trong cgroup v2
-                    with open('/sys/fs/cgroup/cpu.stat', 'r') as f2:
-                        for line2 in f2:
-                            if line2.startswith('usage_usec'):
-                                usage_usec = int(line2.split()[1])
-                                usage = usage_usec * 1000  # chuyển sang nanoseconds
-                                break
-        except Exception:
-            return psutil.cpu_percent(interval=0.1)
-
-    # Lần đầu, lưu giá trị
-    now = time.time()
-    if not hasattr(get_container_cpu_percent, 'prev_usage'):
-        get_container_cpu_percent.prev_usage = usage
-        get_container_cpu_percent.prev_time = now
-        return 0.0
-
-    prev_usage = get_container_cpu_percent.prev_usage
-    prev_time = get_container_cpu_percent.prev_time
-    delta_usage = usage - prev_usage
-    delta_time = now - prev_time
-    if delta_time <= 0:
-        return 0.0
-
-    # Tính số cores = quota / period
-    cores = quota / period
-    # CPU % = (delta_usage / 1e9) / (delta_time * cores) * 100
-    cpu_percent = (delta_usage / 1e9) / (delta_time * cores) * 100
-    get_container_cpu_percent.prev_usage = usage
-    get_container_cpu_percent.prev_time = now
-    return cpu_percent
+    """Trên Linux host, chỉ dùng psutil là đủ. Không đọc cgroup."""
+    return psutil.cpu_percent(interval=0.1)
 
 def get_container_memory_percent():
     """Lấy % RAM sử dụng của container từ cgroup v1/v2."""
@@ -110,25 +77,49 @@ def get_container_memory_percent():
     return psutil.virtual_memory().percent
 
 def get_container_disk_percent():
-    """Lấy % disk sử dụng của container (dựa trên thư mục /app)."""
-    try:
-        usage = psutil.disk_usage('/app')
-        return usage.percent
-    except Exception:
-        return psutil.disk_usage('/').percent
+    """Lấy % disk sử dụng, ưu tiên /app (Docker) rồi fallback /."""
+    for path in ('/app', '/'):
+        try:
+            return psutil.disk_usage(path).percent
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+    return 0.0
 
 def get_ip_address():
+    """Lấy IP LAN thật, không dùng gethostbyname (trả 127.0.1.1 trên Mint)."""
     try:
-        return socket.gethostbyname(socket.gethostname())
-    except:
+        # Trick: connect UDP tới Google DNS (không gửi packet thật) để lấy IP outbound
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # Fallback: dùng psutil lấy IP của interface đầu tiên không phải loopback
+        try:
+            import psutil
+            for iface, addrs in psutil.net_if_addrs().items():
+                for addr in addrs:
+                    if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                        return addr.address
+        except Exception:
+            pass
         return "0.0.0.0"
 
 def get_mac_address():
+    """Lấy MAC của interface đầu tiên (không phải loopback)."""
     try:
-        with open('/sys/class/net/eth0/address', 'r') as f:
-            return f.read().strip()
-    except:
-        return "00:00:00:00:00:00"
+        import psutil
+        for iface, addrs in psutil.net_if_addrs().items():
+            if iface == "lo":
+                continue
+            for addr in addrs:
+                if addr.family == psutil.AF_LINK:
+                    return addr.address
+    except Exception:
+        pass
+    return "00:00:00:00:00:00"
 
 def collect_stats():
     return {
@@ -142,41 +133,24 @@ def collect_stats():
     }
 
 SUSPICIOUS_PATTERNS = [
-    # Tool tấn công cụ thể — match full word/pattern
+    # Credential access — không ai cài hợp pháp
     r"\bmimikatz\b",
-    r"\bmeterpreter\b",
-    r"\bcobaltstrike\b",
-    r"\blazagne\b",
-    r"\bprocdump(?:\.exe)?\b.*\blsass\b",
     r"\bcomsvcs\.dll\b.*MiniDump",
     r"\bsekurlsa::",
     r"\blsadump::",
-    r"\bkerberos::golden",
-    r"\bkey_test\b",
-    r"\bransomware_sim\b",
-    r"\bbackdoor_sim\b",
-    r"\bpsexec\b",
-    r"\bchisel\b",
-    r"\bvssadmin\b",
+    r"\bprocdump(?:\.exe)?\b.*\blsass\b",
 
-    # Reverse shell patterns
+    # Reverse shell — không có use case legit
     r"\bnc(?:\.exe)?\b.*-e\b.*(?:cmd|powershell|sh|bash)",
     r"\bnc(?:\.exe)?\b\s+-[a-zA-Z0-9]*[e|l]",
-    r"\bncat\b.*-e\b",
     r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",
-    r"\bpowershell\b.*-w(?:indowstyle)?\s+hidden",
 
-    # MSBuild inline exec
-    r"\bmsbuild(?:\.exe)?\b.*/t:Run",
+    # Ransomware indicators
+    r"\bvssadmin\b.*delete\s+shadows",
+    r"\bwbadmin\b.*delete\s+catalog",
 
-    # Certificate abuse
+    # Certutil download with suspicious flags (rất hiếm legit)
     r"\bcertutil\b.*-urlcache.*-split.*-f\s+http",
-    r"\bcertutil\b.*-decodehex",
-
-    # Suspicious paths
-    r"\\users\\public\\.*\.(?:exe|dll|ps1|vbs|js)",
-    r"\\appdata\\local\\temp\\.*\.(?:exe|dll|ps1|vbs|js)",
-    r"(?:/tmp/|/dev/shm/|/var/tmp/).+\.(?:sh|py|elf|bin)",
 ]
 
 

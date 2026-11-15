@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 import logging
@@ -9,6 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.websocket.connection_manager import connection_manager
+from app.websocket.dashboard_connection_manager import dashboard_manager
+from app.services.rule_engine import rule_engine
+from app.services.ai.ai_triage_service import AITriageService
 from app.schemas.heartbeat import HeartbeatDTO
 from app.schemas.command_ack import CommandAckDTO
 from app.services.agent.agent_service import AgentService
@@ -155,12 +159,49 @@ async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) ->
     return response_payload, active_agent_id
 
 
+async def _run_ai_triage(incident_id: str):
+    """Background task: chạy AI triage không block WebSocket."""
+    try:
+        async with AsyncSessionLocal() as session:
+            service = AITriageService()
+            await service.analyze_incident(incident_id, session)
+            await session.commit()
+            logger.info(f"AI triage completed successfully for incident {incident_id}")
+    except Exception as e:
+        logger.error(f"AI triage background task failed for {incident_id}: {e}", exc_info=True)
+
+
 async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
     procs_data = payload.get("processes", [])
     saved_count = await _save_process_list(session, target_agent_id, procs_data)
     logger.info(f"Saved {saved_count} processes for agent '{target_agent_id}' via PROCESS_LIST")
+
+    # Rule Engine: Evaluate active Sigma rules against process list
+    try:
+        incidents = await rule_engine.evaluate(payload, session)
+        for incident in incidents:
+            asyncio.create_task(_run_ai_triage(incident.id))
+
+        if incidents:
+            await dashboard_manager.broadcast({
+                "type": "INCIDENT_NEW",
+                "data": [
+                    {
+                        "id": str(i.id),
+                        "title": i.title,
+                        "severity": i.severity.value if hasattr(i.severity, "value") else str(i.severity),
+                        "risk_score": i.risk_score,
+                        "agent_id": target_agent_id
+                    }
+                    for i in incidents
+                ]
+            })
+            logger.info(f"rule_engine: {len(incidents)} incident(s) created for agent '{target_agent_id}' from PROCESS_LIST")
+    except Exception as e:
+        logger.error(f"rule_engine hook failed on PROCESS_LIST for agent '{target_agent_id}': {e}", exc_info=True)
+
     if data.get("wait_ack", True):
         return {
             "status": "ack",
@@ -205,6 +246,30 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
                     await flow_repo.add(conn_flow)
         except Exception as e:
             logger.warning(f"Failed to record network connections from telemetry: {e}")
+
+    # Rule Engine: Evaluate active Sigma rules against telemetry
+    try:
+        incidents = await rule_engine.evaluate(payload, session)
+        for incident in incidents:
+            asyncio.create_task(_run_ai_triage(incident.id))
+
+        if incidents:
+            await dashboard_manager.broadcast({
+                "type": "INCIDENT_NEW",
+                "data": [
+                    {
+                        "id": str(i.id),
+                        "title": i.title,
+                        "severity": i.severity.value if hasattr(i.severity, "value") else str(i.severity),
+                        "risk_score": i.risk_score,
+                        "agent_id": target_agent_id
+                    }
+                    for i in incidents
+                ]
+            })
+            logger.info(f"rule_engine: {len(incidents)} incident(s) created for agent '{target_agent_id}'")
+    except Exception as e:
+        logger.error(f"rule_engine hook failed for agent '{target_agent_id}': {e}", exc_info=True)
 
     risk_service = RiskAssessmentService(session)
     record = await risk_service.process_risk(

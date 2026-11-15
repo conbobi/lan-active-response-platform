@@ -1,0 +1,289 @@
+/* ============================================================================
+   AI DASHBOARD ROBUST CSS SAFETY NET (LARP SOC DARK THEME)
+   Guarantees 100% correct layout, grid alignment, chart rendering, and table styling
+   regardless of whether Tailwind CSS is compiled or stripped.
+   ============================================================================ */
+
+/* Root Layout Container */
+.ai-dashboard-root {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1.5rem !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  padding-bottom: 3rem !important;
+}
+
+.ai-dashboard-root * {
+  box-sizing: border-box !important;
+}
+
+/* Header Area */
+.ai-dashboard-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+/* ── KPI Cards Grid (4 Columns) ── */
+.ai-kpi-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 1rem !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+@media (max-width: 1200px) {
+  .ai-kpi-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .ai-kpi-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Individual KPI Metric Card */
+.ai-metric-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  background: #11161d;
+  padding: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: all 0.2s ease;
+  min-width: 0;
+}
+
+.ai-metric-card:hover {
+  border-color: rgba(88, 166, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.ai-metric-card.variant-purple {
+  border-color: rgba(168, 85, 247, 0.3);
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.06) 0%, #11161d 100%);
+}
+
+.ai-metric-card.variant-green {
+  border-color: rgba(16, 185, 129, 0.3);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.06) 0%, #11161d 100%);
+}
+
+.ai-metric-card.variant-yellow {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.06) 0%, #11161d 100%);
+}
+
+.ai-metric-card.variant-blue {
+  border-color: rgba(59, 130, 246, 0.3);
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.06) 0%, #11161d 100%);
+}
+
+/* ── Charts Row (Line Chart + MITRE Bar Chart) ── */
+.ai-charts-grid {
+  display: grid !important;
+  grid-template-columns: 7fr 5fr !important;
+  gap: 1.5rem !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+@media (max-width: 1024px) {
+  .ai-charts-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.ai-chart-card {
+  border-radius: 0.75rem;
+  border: 1px solid #2d3644;
+  background: #11161d;
+  padding: 1.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  min-width: 0 !important;
+  overflow: hidden;
+}
+
+.ai-chart-container {
+  height: 260px !important;
+  min-height: 260px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  position: relative;
+}
+
+/* ── Main Rules Table Card & Wrapper ── */
+.ai-table-card {
+  border-radius: 0.75rem;
+  border: 1px solid #2d3644;
+  background: #11161d;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  width: 100%;
+  min-width: 0;
+}
+
+.ai-dashboard-table-wrapper {
+  overflow-x: auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-dashboard-table-wrapper table {
+  width: 100% !important;
+  min-width: 1200px !important;
+  border-collapse: collapse !important;
+  text-align: left;
+  font-size: 0.75rem;
+}
+
+.ai-dashboard-table-wrapper th {
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #a8b3bf;
+  background: #0d1319;
+  border-bottom: 1px solid #2d3644;
+  white-space: nowrap;
+}
+
+.ai-dashboard-table-wrapper th.sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.ai-dashboard-table-wrapper td {
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid rgba(45, 54, 68, 0.6);
+  vertical-align: middle;
+  color: #e6edf3;
+}
+
+.ai-dashboard-table-wrapper tr:hover td {
+  background: #171d26;
+  cursor: pointer;
+}
+
+/* Filter Controls Bar */
+.ai-filter-bar {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #2d3644;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: rgba(13, 19, 25, 0.4);
+}
+
+.ai-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.75rem;
+}
+
+.ai-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ai-filter-btn {
+  padding: 0.25rem 0.65rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: rgba(45, 54, 68, 0.5);
+  color: #a8b3bf;
+  transition: all 0.15s ease;
+}
+
+.ai-filter-btn:hover {
+  background: #2d3644;
+  color: #ffffff;
+}
+
+.ai-filter-btn.active {
+  background: #a855f7;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ai-filter-btn.active-blue {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.ai-filter-btn.active-amber {
+  background: #d97706;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* Action Buttons inside Table */
+.ai-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.375rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap !important;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+}
+
+.ai-action-btn-validate {
+  background: rgba(59, 130, 246, 0.8);
+  color: #ffffff;
+}
+.ai-action-btn-validate:hover {
+  background: #2563eb;
+}
+
+.ai-action-btn-activate {
+  background: rgba(16, 185, 129, 0.8);
+  color: #ffffff;
+}
+.ai-action-btn-activate:hover {
+  background: #059669;
+}
+
+.ai-action-btn-reject {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fda4af;
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+.ai-action-btn-reject:hover {
+  background: rgba(244, 63, 94, 0.3);
+}
+
+.ai-action-btn-disable {
+  background: #27272a;
+  color: #d4d4d8;
+  border: 1px solid #3f3f46;
+}
+.ai-action-btn-disable:hover {
+  background: #3f3f46;
+}
+

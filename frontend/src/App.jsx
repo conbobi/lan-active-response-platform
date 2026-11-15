@@ -9,6 +9,9 @@ import Policies from './pages/Policies';
 import DetectionRules from './pages/DetectionRules';
 import Settings from './pages/Settings';
 import Investigate from './pages/Investigate';
+import AIDashboard from './pages/AIDashboard';
+import RuleDetail from './pages/RuleDetail';
+import AIHarvestPlayground from './pages/AIHarvestPlayground';
 
 export default function App() {
   return (
@@ -19,6 +22,11 @@ export default function App() {
         <Route path="/incidents" element={<Incidents />} />
         <Route path="/incidents/:id" element={<Incidents />} />
         <Route path="/investigate" element={<Investigate />} />
+
+        {/* AI SOC Studio (Agent A & B) */}
+        <Route path="/ai-dashboard" element={<AIDashboard />} />
+        <Route path="/ai-dashboard/harvest" element={<AIHarvestPlayground />} />
+        <Route path="/ai-dashboard/rules/:id" element={<RuleDetail />} />
 
         {/* Response Actions & Automation */}
         <Route path="/actions" element={<ActionsHistory />} />

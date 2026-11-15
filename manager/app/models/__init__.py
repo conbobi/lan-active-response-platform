@@ -26,6 +26,8 @@ from app.models.action_audit_log import ActionAuditLog
 from app.models.agent_group import AgentGroup, AgentGroupMember
 from app.models.response_policy import ResponsePolicy
 from app.models.ai_analysis import AIAnalysis
+from app.models.rule_candidate import RuleCandidate
+from app.models.rule_version import RuleVersion
 
 __all__ = [
     "Base",
@@ -59,4 +61,6 @@ __all__ = [
     "AgentGroupMember",
     "ResponsePolicy",
     "AIAnalysis",
+    "RuleCandidate",
+    "RuleVersion",
 ]

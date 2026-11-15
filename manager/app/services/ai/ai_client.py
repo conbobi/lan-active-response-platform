@@ -5,7 +5,7 @@ import re
 from typing import Optional
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-DEFAULT_MODEL = os.getenv("AI_MODEL", "foundation-sec")
+DEFAULT_MODEL = os.getenv("AI_MODEL", "sec-q6")
 
 
 class AIClient:
@@ -26,7 +26,7 @@ class AIClient:
             "messages": messages,
             "stream": False,
             "format": "json",
-            "keep_alive": "24h",
+            "keep_alive": "5m",
             "options": {
                 "temperature": 0.2,
                 "num_predict": 1000,

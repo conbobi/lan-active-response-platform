@@ -98,7 +98,15 @@ async def app_exception_handler(request: Request, exc: AppException):
     )
 
 # Routers
+from app.api.routes.rules import router as ai_rules_router
+from app.api.routes.dashboard import router as ai_dashboard_router
+
+app.include_router(ai_rules_router, prefix="/api/rules", tags=["AI Rules"])
+app.include_router(ai_rules_router, prefix="/api/v1/rules", tags=["AI Rules"])
+app.include_router(ai_dashboard_router, prefix="/api/dashboard", tags=["AI Dashboard"])
+app.include_router(ai_dashboard_router, prefix="/api/v1/dashboard", tags=["AI Dashboard"])
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
 app.add_api_websocket_route("/ws/agent", agent_websocket_endpoint)
 app.include_router(dashboard_ws_router)
 
