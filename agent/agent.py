@@ -144,6 +144,14 @@ SUSPICIOUS_PATTERNS = [
     r"\bnc(?:\.exe)?\b.*-e\b.*(?:cmd|powershell|sh|bash)",
     r"\bnc(?:\.exe)?\b\s+-[a-zA-Z0-9]*[e|l]",
     r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",
+    r"/dev/tcp/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+",
+    r"\bbash\s+-[a-zA-Z]*i",
+    r"\bsh\s+-[a-zA-Z]*i",
+    r"\bpty\.spawn\b",
+    r"\bsocket\.socket.*\.connect\b",
+    r"\bmkfifo\b.*\|\s*(?:/bin/)?(?:sh|bash)",
+    r"\bsocat\b.*exec:",
+    r"(?:curl|wget)\b.*\|\s*(?:/bin/)?(?:sh|bash)",
 
     # Ransomware indicators
     r"\bvssadmin\b.*delete\s+shadows",
@@ -168,10 +176,18 @@ def is_process_suspicious(name: str, cmdline: str, exe: str = "") -> bool:
     return False
 
 
+KERNEL_SYSTEM_EXCLUSIONS = {
+    "kthreadd", "kworker", "systemd", "migration", "rcu_sched",
+    "ksoftirqd", "psimon", "swapper", "init", "cpuhp", "kdevtmpfs",
+    "kauditd", "khungtaskd", "oom_reaper", "kblockd"
+}
+
+
 def collect_process_info():
     """
     Thu thập thông tin toàn bộ tiến trình đang chạy trên host agent.
     Bao gồm PID, parent PID (ppid), name, exe, cmdline, cpu/memory %, và đánh dấu is_suspicious.
+    Lọc bỏ các tiến trình nhân (kernel threads) như kthreadd, kworker.
     """
     processes = []
     try:
@@ -187,6 +203,14 @@ def collect_process_info():
                 exe = str(info.get('exe') or "")
                 cmdline_list = info.get('cmdline') or []
                 cmdline = " ".join(cmdline_list) if isinstance(cmdline_list, list) else str(cmdline_list)
+                
+                # Bỏ qua kernel threads (PID <= 2 hoặc không có cmdline/exe và tên thuộc kernel threads)
+                name_lower = name.lower()
+                if pid is not None and (pid <= 2 or (pid < 100 and not cmdline and not exe)):
+                    continue
+                if any(k in name_lower for k in KERNEL_SYSTEM_EXCLUSIONS) and not cmdline:
+                    continue
+
                 cpu_pct = float(info.get('cpu_percent') or 0.0)
                 mem_pct = float(info.get('memory_percent') or 0.0)
 
@@ -238,9 +262,14 @@ def get_network_connections():
     """Lấy các kết nối mạng đang mở, đánh dấu suspicious nếu cổng đích/nguồn nằm trong danh sách lạ."""
     suspicious_ports = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
     connections = []
+    my_pid = os.getpid()
     try:
         for conn in psutil.net_connections(kind='inet'):
             if conn.status in ('ESTABLISHED', 'LISTEN'):
+                # Bỏ qua socket của chính LARP Agent (tránh self-detection loop)
+                if conn.pid == my_pid:
+                    continue
+
                 laddr = conn.laddr
                 raddr = conn.raddr
                 src_ip = laddr.ip if laddr else "0.0.0.0"
@@ -250,8 +279,17 @@ def get_network_connections():
 
                 is_susp = (dst_port in suspicious_ports or src_port in suspicious_ports)
 
+                proc_name = ""
+                if conn.pid:
+                    try:
+                        proc_name = psutil.Process(conn.pid).name()
+                    except Exception:
+                        pass
+
                 connections.append({
                     "pid": conn.pid,
+                    "process_name": proc_name,
+                    "process": proc_name,
                     "src_ip": src_ip,
                     "src_port": src_port,
                     "dst_ip": dst_ip,

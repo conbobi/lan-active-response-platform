@@ -82,18 +82,53 @@ class IncidentTimelineService:
             proc_res = await self.session.execute(proc_stmt)
             procs = list(proc_res.scalars().all())
 
-            # Find culprit process (prefer suspicious, or matching name in incident description)
+            # Find culprit process (prefer suspicious non-kernel, or matching name in incident description)
             desc_lower = (incident.description or "").lower()
+            kernel_exclusions = {
+                "kthreadd", "kworker", "rcu", "swapper",
+                "migration", "ksoftirqd", "psimon", "cpuhp", "kdevtmpfs", "kauditd",
+                "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd"
+            }
+            def _is_eligible(proc):
+                if not proc or proc.pid is None:
+                    return False
+                if proc.pid == 2:
+                    return False
+                return not any(k in (proc.name or "").lower() for k in kernel_exclusions)
+
+            # 1. Suspicious userland process
             for p in procs:
-                p_name = (p.name or "").lower()
-                if p.is_suspicious or (p_name and p_name in desc_lower):
+                if p.is_suspicious and _is_eligible(p):
                     culprit_proc = p
                     break
 
-            if not culprit_proc and procs:
-                culprit_proc = procs[0]
+            # 2. Process mentioned in description
+            if not culprit_proc:
+                for p in procs:
+                    p_name = (p.name or "").lower()
+                    if p_name and p_name in desc_lower and _is_eligible(p):
+                        culprit_proc = p
+                        break
 
-            if culprit_proc and culprit_proc.parent_pid:
+            # 3. Known shell / attack binaries
+            if not culprit_proc:
+                common_attack_names = {
+                    "bash", "sh", "python", "python3", "nc", "ncat", "netcat",
+                    "socat", "curl", "wget", "flask", "node", "php"
+                }
+                for p in procs:
+                    if (p.name or "").lower() in common_attack_names and _is_eligible(p):
+                        culprit_proc = p
+                        break
+
+            # 4. Fallback: most recent valid userland process (NEVER kernel)
+            if not culprit_proc:
+                for p in procs:
+                    if _is_eligible(p):
+                        culprit_proc = p
+                        break
+
+            if culprit_proc and culprit_proc.parent_pid and culprit_proc.parent_pid > 2:
                 # Find parent process
                 for p in procs:
                     if p.pid == culprit_proc.parent_pid:

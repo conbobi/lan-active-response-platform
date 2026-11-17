@@ -160,15 +160,38 @@ async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) ->
 
 
 async def _run_ai_triage(incident_id: str):
-    """Background task: chạy AI triage không block WebSocket."""
-    try:
-        async with AsyncSessionLocal() as session:
-            service = AITriageService()
-            await service.analyze_incident(incident_id, session)
-            await session.commit()
-            logger.info(f"AI triage completed successfully for incident {incident_id}")
-    except Exception as e:
-        logger.error(f"AI triage background task failed for {incident_id}: {e}", exc_info=True)
+    """Background task: Chạy AI triage an toàn không block WebSocket, có sleep và retry loop để đảm bảo commit."""
+    logger.info(f"Triggering AI Triage for incident {incident_id}")
+    await asyncio.sleep(0.8)
+
+    for attempt in range(1, 4):
+        try:
+            async with AsyncSessionLocal() as session:
+                inc = await session.get(Incident, incident_id)
+                if not inc:
+                    if attempt < 3:
+                        logger.warning(
+                            f"Incident {incident_id} not found in DB yet (attempt {attempt}/3), retrying in 1.0s..."
+                        )
+                        await asyncio.sleep(1.0)
+                        continue
+                    else:
+                        logger.error(
+                            f"Incident {incident_id} not found after 3 attempts. Aborting AI triage."
+                        )
+                        return
+
+                service = AITriageService()
+                analysis = await service.analyze_incident(incident_id, session)
+                if analysis:
+                    logger.info(f"AI triage completed successfully for incident {incident_id}")
+                else:
+                    logger.warning(f"AI triage returned no analysis for incident {incident_id}")
+                return
+        except Exception as e:
+            logger.error(f"AI triage attempt {attempt} failed for {incident_id}: {e}", exc_info=True)
+            if attempt < 3:
+                await asyncio.sleep(1.0)
 
 
 async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:

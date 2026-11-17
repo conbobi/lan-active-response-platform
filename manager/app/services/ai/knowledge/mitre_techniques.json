@@ -11,6 +11,10 @@
     "name": "Windows Command Shell",
     "tactic": "execution"
   },
+  "T1059.004": {
+    "name": "Unix Shell",
+    "tactic": "execution"
+  },
   "T1059.005": {
     "name": "Visual Basic",
     "tactic": "execution"

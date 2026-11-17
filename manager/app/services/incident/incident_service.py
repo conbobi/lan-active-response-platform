@@ -23,6 +23,67 @@ from app.services.common.notification_service import NotificationService
 logger = logging.getLogger(__name__)
 
 
+SYSTEM_AND_KERNEL_EXCLUSIONS = {
+    "kthreadd", "kworker", "rcu", "swapper",
+    "migration", "ksoftirqd", "psimon", "cpuhp", "kdevtmpfs", "kauditd",
+    "khungtaskd", "oom_reaper", "kblockd",
+    # Desktop environment daemons (tránh attribution sai và DoS desktop)
+    "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd"
+}
+
+
+def is_eligible_culprit(proc: Optional[ProcessInfo]) -> bool:
+    """Xác thực process có đủ điều kiện làm culprit không — loại trừ kernel threads và system desktop daemons."""
+    if not proc or proc.pid is None:
+        return False
+    if proc.pid == 2:
+        return False
+    p_name = (proc.name or "").lower()
+    if any(k in p_name for k in SYSTEM_AND_KERNEL_EXCLUSIONS):
+        return False
+    return True
+
+
+async def _safe_trigger_ai_triage(incident_id: str):
+    """Background task: Chạy AI triage an toàn với sleep 0.8s và retry loop để đảm bảo transaction đã commit."""
+    import asyncio
+    from app.core.database import AsyncSessionLocal
+    from app.models.incident import Incident
+    from app.services.ai.ai_triage_service import AITriageService
+
+    logger.info(f"Triggering AI Triage for incident {incident_id}")
+    await asyncio.sleep(0.8)
+
+    for attempt in range(1, 4):
+        try:
+            async with AsyncSessionLocal() as session:
+                inc = await session.get(Incident, incident_id)
+                if not inc:
+                    if attempt < 3:
+                        logger.warning(
+                            f"Incident {incident_id} not found in DB yet (attempt {attempt}/3), retrying in 1.0s..."
+                        )
+                        await asyncio.sleep(1.0)
+                        continue
+                    else:
+                        logger.error(
+                            f"Incident {incident_id} not found after 3 attempts. Aborting AI triage."
+                        )
+                        return
+
+                service = AITriageService()
+                analysis = await service.analyze_incident(incident_id, session)
+                if analysis:
+                    logger.info(f"AI triage completed successfully for incident {incident_id}")
+                else:
+                    logger.warning(f"AI triage returned no analysis for incident {incident_id}")
+                return
+        except Exception as e:
+            logger.error(f"AI triage attempt {attempt} failed for incident {incident_id}: {e}", exc_info=True)
+            if attempt < 3:
+                await asyncio.sleep(1.0)
+
+
 class IncidentService(AbstractService[IncidentRepository]):
     def __init__(self, session: AsyncSession):
         repo = IncidentRepository(session)
@@ -47,9 +108,7 @@ class IncidentService(AbstractService[IncidentRepository]):
         # Fire-and-forget AI triage (không block incident creation)
         try:
             import asyncio
-            from app.services.ai.ai_triage_service import AITriageService
-            from app.core.database import AsyncSessionLocal
-            asyncio.create_task(AITriageService().analyze_incident(created.id, AsyncSessionLocal()))
+            asyncio.create_task(_safe_trigger_ai_triage(created.id))
         except Exception as e:
             logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
 
@@ -110,9 +169,7 @@ class IncidentService(AbstractService[IncidentRepository]):
         # Fire-and-forget AI triage (không block incident creation)
         try:
             import asyncio
-            from app.services.ai.ai_triage_service import AITriageService
-            from app.core.database import AsyncSessionLocal
-            asyncio.create_task(AITriageService().analyze_incident(created.id, AsyncSessionLocal()))
+            asyncio.create_task(_safe_trigger_ai_triage(created.id))
         except Exception as e:
             logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
 
@@ -236,13 +293,38 @@ class IncidentService(AbstractService[IncidentRepository]):
             procs = list(proc_res.scalars().all())
 
             culprit_proc = None
+            # 1. First priority: suspicious non-kernel process
             for p in procs:
-                p_name = (p.name or "").lower()
-                if p.is_suspicious or (p_name and p_name in desc_lower):
+                if p.is_suspicious and is_eligible_culprit(p):
                     culprit_proc = p
                     break
-            if not culprit_proc and procs:
-                culprit_proc = procs[0]
+
+            # 2. Second priority: process mentioned in incident description
+            if not culprit_proc:
+                for p in procs:
+                    p_name = (p.name or "").lower()
+                    if p_name and p_name in desc_lower and is_eligible_culprit(p):
+                        culprit_proc = p
+                        break
+
+            # 3. Third priority: common attack / shell / interpreter binaries
+            if not culprit_proc:
+                common_attack_names = {
+                    "bash", "sh", "python", "python3", "nc", "ncat", "netcat",
+                    "socat", "curl", "wget", "flask", "node", "php", "perl", "ruby"
+                }
+                for p in procs:
+                    p_name = (p.name or "").lower()
+                    if p_name in common_attack_names and is_eligible_culprit(p):
+                        culprit_proc = p
+                        break
+
+            # 4. Fallback: most recent valid userland process (NEVER kernel process)
+            if not culprit_proc:
+                for p in procs:
+                    if is_eligible_culprit(p):
+                        culprit_proc = p
+                        break
 
             if culprit_proc:
                 culprit_dict = {
@@ -255,7 +337,7 @@ class IncidentService(AbstractService[IncidentRepository]):
                     "memory_percent": culprit_proc.memory_percent,
                     "is_suspicious": culprit_proc.is_suspicious
                 }
-                if culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid:
+                if culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid and culprit_proc.parent_pid > 2:
                     parent_proc = next((p for p in procs if p.pid == culprit_proc.parent_pid), None)
                     if parent_proc:
                         parent_dict = {

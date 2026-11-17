@@ -31,6 +31,14 @@ class SuspiciousProcessRule(RiskRule):
         r"\bncat\b.*-e\b",
         r"\bpowershell\b.*-enc\b.*[A-Za-z0-9+/=]{50,}",
         r"\bpowershell\b.*-w(?:indowstyle)?\s+hidden",
+        r"/dev/tcp/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+",
+        r"\bbash\s+-[a-zA-Z]*i",
+        r"\bsh\s+-[a-zA-Z]*i",
+        r"\bpty\.spawn\b",
+        r"\bsocket\.socket.*\.connect\b",
+        r"\bmkfifo\b.*\|\s*(?:/bin/)?(?:sh|bash)",
+        r"\bsocat\b.*exec:",
+        r"(?:curl|wget)\b.*\|\s*(?:/bin/)?(?:sh|bash)",
 
         # MSBuild inline exec
         r"\bmsbuild(?:\.exe)?\b.*/t:Run",
@@ -60,6 +68,12 @@ class SuspiciousProcessRule(RiskRule):
         r"\bprocdump(?:\.exe)?\b.*\blsass\b",
         r"\bcomsvcs\.dll\b.*MiniDump",
         r"\bpowershell\b.*-enc\b",
+        r"/dev/tcp/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+",
+        r"\bbash\s+-[a-zA-Z]*i",
+        r"\bsh\s+-[a-zA-Z]*i",
+        r"\bpty\.spawn\b",
+        r"\bsocket\.socket.*\.connect\b",
+        r"\bmkfifo\b.*\|\s*(?:/bin/)?(?:sh|bash)",
     ]
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:

@@ -22,6 +22,13 @@ class KillProcessTreeCommand(BaseCommand):
         if pid:
             try:
                 target_pid = int(pid)
+                if target_pid <= 2 or target_pid == os.getpid():
+                    logger.warning(f"Refusing to kill critical system/agent PID {target_pid}")
+                    return {
+                        "status": "error",
+                        "message": f"Refusing to kill critical system/agent PID {target_pid}",
+                        "killed_pids": [],
+                    }
                 if psutil.pid_exists(target_pid):
                     parent = psutil.Process(target_pid)
                     children = parent.children(recursive=True)

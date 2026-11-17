@@ -335,7 +335,12 @@ class RiskAssessmentService:
         auto_kill_th = thresholds.get("auto_kill_threshold", 85.0)
 
         # Global auto-response check (Monitor Mode)
-        auto_resp_setting = await self.setting_service.get_setting("auto_response_enabled", default=True)
+        import inspect
+        auto_resp_call = self.setting_service.get_setting("auto_response_enabled", default=True)
+        if inspect.isawaitable(auto_resp_call):
+            auto_resp_setting = await auto_resp_call
+        else:
+            auto_resp_setting = auto_resp_call
         if isinstance(auto_resp_setting, dict):
             auto_response_enabled = auto_resp_setting.get("value", auto_resp_setting.get("data", True))
         elif auto_resp_setting is not None:
@@ -369,8 +374,13 @@ class RiskAssessmentService:
                 p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
                 if self._is_agent_process(p_dict):
                     continue
-                is_susp = p_dict.get("is_suspicious", False)
+                p_pid = int(p_dict.get("pid") or 0)
+                if p_pid <= 2 or p_pid < 100:
+                    continue
                 name = str(p_dict.get("name", "")).strip().lower()
+                if any(k in name for k in ("kthreadd", "kworker", "systemd", "rcu", "swapper", "init")):
+                    continue
+                is_susp = p_dict.get("is_suspicious", False)
                 cmdline = str(p_dict.get("cmdline", "")).strip().lower()
                 full_str = f"{name} {cmdline}"
                 

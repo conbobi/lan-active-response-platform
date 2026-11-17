@@ -33,6 +33,22 @@ def _get_ignored_ips() -> Set[str]:
     except Exception:
         pass
 
+    # Tự động loại trừ domain của EDR Manager (tránh Agent tự báo động chính mình)
+    known_manager_domains = [
+        "edr.alwayready.id.vn",
+        os.getenv("MANAGER_DOMAIN", ""),
+        os.getenv("MANAGER_HOST", "")
+    ]
+    for dom in known_manager_domains:
+        dom = dom.strip()
+        if dom:
+            try:
+                resolved_ips = socket.gethostbyname_ex(dom)[2]
+                for ip in resolved_ips:
+                    ignored.add(ip)
+            except Exception:
+                pass
+
     return ignored
 
 

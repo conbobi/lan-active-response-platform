@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from sqlalchemy import select, desc
@@ -5,6 +6,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.incident import Incident
 from app.schemas.enums import IncidentStatus
 from app.repositories.base import SqlAlchemyRepository
+
+logger = logging.getLogger("larp.repositories.incident")
+
+ACTIVE_STATUSES = [
+    IncidentStatus.OPEN,
+    IncidentStatus.INVESTIGATING,
+    IncidentStatus.CONTAINED,
+    "OPEN",
+    "INVESTIGATING",
+    "CONTAINED",
+    "open",
+    "investigating",
+    "contained",
+]
 
 
 class IncidentRepository(SqlAlchemyRepository[Incident]):
@@ -30,19 +45,15 @@ class IncidentRepository(SqlAlchemyRepository[Incident]):
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         stmt = (
             select(Incident)
-            .where(
-                Incident.status.in_([
-                    IncidentStatus.OPEN,
-                    IncidentStatus.INVESTIGATING,
-                    IncidentStatus.CONTAINED,
-                ])
-            )
+            .where(Incident.status.in_(ACTIVE_STATUSES))
             .where(Incident.created_at >= cutoff)
             .order_by(desc(Incident.risk_score), desc(Incident.created_at))
             .limit(limit)
         )
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        logger.info(f"Found {len(items)} incidents for dashboard (limit={limit}, hours={hours})")
+        return items
 
     async def resolve_active_incidents_for_agent(
         self, agent_id: str, resolved_reason: str = "Auto-resolved after agent unisolated"
@@ -82,17 +93,13 @@ class IncidentRepository(SqlAlchemyRepository[Incident]):
     ) -> List[Incident]:
         stmt = select(Incident)
         if active_only:
-            stmt = stmt.where(
-                Incident.status.in_([
-                    IncidentStatus.OPEN,
-                    IncidentStatus.INVESTIGATING,
-                    IncidentStatus.CONTAINED,
-                ])
-            )
+            stmt = stmt.where(Incident.status.in_(ACTIVE_STATUSES))
         if hours is not None and hours > 0:
             cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
             stmt = stmt.where(Incident.created_at >= cutoff)
 
         stmt = stmt.order_by(desc(Incident.created_at)).offset(skip).limit(limit)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        logger.info(f"IncidentRepository.list returned {len(items)} incidents (skip={skip}, limit={limit}, active_only={active_only})")
+        return items

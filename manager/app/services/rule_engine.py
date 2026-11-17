@@ -27,6 +27,23 @@ class RuleMatch:
     detail: str
 
 
+def is_reverse_shell_match(m: RuleMatch) -> bool:
+    """Kiểm tra match có phải là Reverse Shell / Command Interpreter không (T1059)."""
+    shell_techniques = {"T1059", "T1059.004", "T1059.001", "T1059.003"}
+    if any(t in shell_techniques for t in m.mitre_techniques):
+        return True
+    r_name = m.rule_name.lower()
+    return any(k in r_name for k in ("reverse shell", "unix shell", "command execution", "shell spawned", "interactive shell"))
+
+
+def is_generic_network_match(m: RuleMatch) -> bool:
+    """Kiểm tra match có phải là generic network abnormal / beaconing (T1071) không."""
+    if any(str(t).startswith("T1071") for t in m.mitre_techniques):
+        return True
+    r_name = m.rule_name.lower()
+    return any(k in r_name for k in ("beaconing", "application layer", "network abnormal"))
+
+
 class RuleEngine:
     """
     Evaluate active Sigma rules against telemetry from agent.
@@ -67,6 +84,29 @@ class RuleEngine:
 
         if not matches:
             return []
+
+        # Ưu tiên Reverse Shell (T1059 / T1059.004) lên đầu
+        matches.sort(
+            key=lambda m: (
+                1 if is_reverse_shell_match(m) else 0,
+                self._severity_to_score(m.severity)
+            ),
+            reverse=True
+        )
+
+        # Nếu trong batch đã có Reverse Shell match, loại bỏ các generic network match (T1071)
+        has_reverse_shell = any(is_reverse_shell_match(m) for m in matches)
+        if has_reverse_shell:
+            filtered_matches = []
+            for m in matches:
+                if is_generic_network_match(m):
+                    logger.info(
+                        f"rule_engine: suppressed T1071 generic network match '{m.rule_name}' "
+                        f"in favor of T1059 Reverse Shell for agent={agent_id}"
+                    )
+                    continue
+                filtered_matches.append(m)
+            matches = filtered_matches
 
         incidents = await self._create_incidents(matches, telemetry, agent_id, session)
         if incidents:
@@ -320,11 +360,29 @@ class RuleEngine:
             "critical": IncidentSeverity.CRITICAL,
         }
 
+        # Kiểm tra xem agent đã có incident Reverse Shell (T1059) nào trong 5 phút qua không
+        has_recent_shell_incident = any(
+            (
+                "T1059" in (inc.description or "")
+                or "reverse shell" in (inc.title or "").lower()
+                or "shell" in (inc.title or "").lower()
+            )
+            for inc in recent
+        )
+
         created = []
         for m in matches:
             # Dedup check
             if any(self._is_same_rule_incident(inc, m) for inc in recent):
                 logger.debug(f"rule_engine: dedup skip rule={m.rule_name} agent={agent_id}")
+                continue
+
+            # Nếu đã có Reverse Shell incident gần đây, không sinh thêm generic network incident (T1071)
+            if has_recent_shell_incident and is_generic_network_match(m):
+                logger.info(
+                    f"rule_engine: suppressed T1071 rule '{m.rule_name}' for agent={agent_id} "
+                    f"due to active T1059 reverse shell in last 5m"
+                )
                 continue
 
             inc_id = f"inc_{uuid.uuid4().hex[:12]}"

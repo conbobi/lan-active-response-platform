@@ -132,7 +132,7 @@ export default function Dashboard() {
 
     const { isConnected } = useDashboardSocket(handleSocketMessage);
 
-    // Urgent active incident for top banner triage (only un-resolved, high/critical, within 24h)
+    // Urgent active incident for top banner triage (only un-resolved, active threats within 24h)
     const criticalActiveIncident = useMemo(() => {
         const now = Date.now();
         const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -145,8 +145,9 @@ export default function Dashboard() {
             if (!isActive) return false;
 
             const score = Number(i.risk_score ?? i.riskScore ?? 0);
-            const isCriticalRisk = score >= 70 || i.severity === 'critical' || i.severity === 'high';
-            if (!isCriticalRisk) return false;
+            const sev = String(i.severity || '').toLowerCase();
+            const isThreat = score >= 50 || ['medium', 'high', 'critical'].includes(sev);
+            if (!isThreat) return false;
 
             // Only consider incidents within 24 hours
             const createdAt = new Date(i.created_at || i.createdAt || 0).getTime();
@@ -157,6 +158,13 @@ export default function Dashboard() {
             return true;
         });
     }, [incidents]);
+
+    const isHighOrCriticalThreat = useMemo(() => {
+        if (!criticalActiveIncident) return false;
+        const score = Number(criticalActiveIncident.risk_score ?? criticalActiveIncident.riskScore ?? 0);
+        const sev = String(criticalActiveIncident.severity || '').toLowerCase();
+        return score >= 70 || ['high', 'critical'].includes(sev);
+    }, [criticalActiveIncident]);
 
     const handleQuickIsolate = async (agentId) => {
         if (!agentId) return;
@@ -202,9 +210,11 @@ export default function Dashboard() {
             {criticalActiveIncident ? (
                 <div
                     style={{
-                        background: 'linear-gradient(90deg, rgba(239, 68, 68, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)',
-                        border: '1px solid var(--error)',
-                        borderLeft: '5px solid var(--error)',
+                        background: isHighOrCriticalThreat
+                            ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)'
+                            : 'linear-gradient(90deg, rgba(245, 158, 11, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)',
+                        border: isHighOrCriticalThreat ? '1px solid var(--error)' : '1px solid var(--warning)',
+                        borderLeft: isHighOrCriticalThreat ? '5px solid var(--error)' : '5px solid var(--warning)',
                         borderRadius: 'var(--radius-sm)',
                         padding: '1rem 1.25rem',
                         marginBottom: '1.25rem',
@@ -213,7 +223,7 @@ export default function Dashboard() {
                         justifyContent: 'space-between',
                         gap: '1rem',
                         flexWrap: 'wrap',
-                        boxShadow: '0 0 16px rgba(239, 68, 68, 0.25)',
+                        boxShadow: isHighOrCriticalThreat ? '0 0 16px rgba(239, 68, 68, 0.25)' : '0 0 16px rgba(245, 158, 11, 0.25)',
                     }}
                 >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
@@ -222,11 +232,11 @@ export default function Dashboard() {
                                 width: 36,
                                 height: 36,
                                 borderRadius: '50%',
-                                background: 'rgba(239, 68, 68, 0.2)',
+                                background: isHighOrCriticalThreat ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                color: 'var(--error)',
+                                color: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
                                 flexShrink: 0,
                             }}
                         >
@@ -234,16 +244,17 @@ export default function Dashboard() {
                         </div>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontWeight: 800, color: 'var(--error)', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
-                                    🔴 CRITICAL THREAT ACTIVE: {criticalActiveIncident.title || 'LOLBin Reverse Shell / C2'}
+                                <span style={{ fontWeight: 800, color: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
+                                    {isHighOrCriticalThreat ? '🔴 CRITICAL THREAT ACTIVE: ' : '🟠 ACTIVE THREAT DETECTED: '}
+                                    {criticalActiveIncident.title || 'LOLBin Reverse Shell / C2'}
                                 </span>
                                 <span style={{
                                     fontSize: '0.75rem',
                                     fontWeight: 700,
                                     padding: '0.1rem 0.5rem',
                                     borderRadius: '999px',
-                                    background: 'var(--error)',
-                                    color: '#fff',
+                                    background: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
+                                    color: isHighOrCriticalThreat ? '#fff' : '#000',
                                 }}>
                                     SCORE {Math.round(criticalActiveIncident.risk_score ?? criticalActiveIncident.riskScore ?? 100)}/100
                                 </span>
@@ -264,7 +275,12 @@ export default function Dashboard() {
                             iconLeft={<FiShield size={14} />}
                             disabled={isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
                             onClick={() => handleQuickIsolate(criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
-                            style={{ background: 'var(--error)', borderColor: 'var(--error)', fontWeight: 700 }}
+                            style={{
+                                background: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
+                                borderColor: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
+                                color: isHighOrCriticalThreat ? '#fff' : '#000',
+                                fontWeight: 700
+                            }}
                         >
                             {isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId) ? 'Isolating...' : '1-Click Isolate Host'}
                         </Button>
@@ -288,6 +304,51 @@ export default function Dashboard() {
                             Triage Storyline
                         </Button>
                     </div>
+                </div>
+            ) : unresolvedIncidents > 0 ? (
+                <div
+                    style={{
+                        background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(17, 24, 39, 0.7) 100%)',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderLeft: '5px solid var(--warning)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.85rem 1.25rem',
+                        marginBottom: '1.25rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                        flexWrap: 'wrap',
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div
+                            style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: '50%',
+                                background: 'rgba(245, 158, 11, 0.2)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'var(--warning)',
+                                flexShrink: 0,
+                            }}
+                        >
+                            <FiAlertTriangle size={18} />
+                        </div>
+                        <div>
+                            <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: '0.9rem' }}>
+                                ⚠️ {unresolvedIncidents} Unresolved Security {unresolvedIncidents === 1 ? 'Incident' : 'Incidents'} Require Review
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                Security anomalies detected on monitored hosts.
+                            </div>
+                        </div>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => navigate('/incidents')}>
+                        View Incidents
+                    </Button>
                 </div>
             ) : (
                 <div
