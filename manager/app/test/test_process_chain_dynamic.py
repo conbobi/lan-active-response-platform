@@ -192,3 +192,19 @@ async def test_process_chain_parent_pid_resolution_and_block_score():
     assert score_fp == 0.0
     assert reason_fp == ""
 
+
+async def test_python3_spawns_sh_web_rce():
+    """Verify python3 web worker spawning /bin/sh triggers ProcessChainRule via fallback and SUSPICIOUS_CHAINS."""
+    RiskProcessChainRule.invalidate_cache()
+    rule = RiskProcessChainRule()
+    telemetry = {
+        "process_list": [
+            {"pid": 1017, "parent_pid": 1, "name": "python3", "cmdline": "/home/webuser/vulnerable_web/venv/bin/python3 app.py"},
+            {"pid": 2045, "parent_pid": 1017, "name": "sh", "cmdline": "/bin/sh -c id"}
+        ]
+    }
+    score, reason = await rule.evaluate(telemetry, {})
+    assert score >= 60.0
+    assert "'python3' spawned 'sh'" in reason
+
+

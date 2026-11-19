@@ -42,6 +42,30 @@ class ProcessChainRule(RiskRule):
         ("msbuild.exe", "powershell.exe"): 40.0,
         ("msbuild.exe", "cmd.exe"): 40.0,
         ("msbuild.exe", "csc.exe"): 5.0,
+
+        # Linux / Web Application Server → Shell (Command Injection / Web RCE - T1059.004)
+        ("python", "sh"): 70.0,
+        ("python3", "sh"): 70.0,
+        ("python", "bash"): 70.0,
+        ("python3", "bash"): 70.0,
+        ("python", "dash"): 70.0,
+        ("python3", "dash"): 70.0,
+        ("python", "id"): 60.0,
+        ("python3", "id"): 60.0,
+        ("python", "whoami"): 60.0,
+        ("python3", "whoami"): 60.0,
+        ("uwsgi", "sh"): 70.0,
+        ("uwsgi", "bash"): 70.0,
+        ("gunicorn", "sh"): 70.0,
+        ("gunicorn", "bash"): 70.0,
+        ("nginx", "sh"): 70.0,
+        ("nginx", "bash"): 70.0,
+        ("apache2", "sh"): 70.0,
+        ("apache2", "bash"): 70.0,
+        ("httpd", "sh"): 70.0,
+        ("httpd", "bash"): 70.0,
+        ("node", "sh"): 70.0,
+        ("node", "bash"): 70.0,
     }
 
     # In-memory rule cache
@@ -73,6 +97,13 @@ class ProcessChainRule(RiskRule):
                 "action": "alert",
                 "parent_patterns": ("electron.exe", "chrome.exe", "msedge.exe", "firefox.exe"),
                 "child_patterns": ("msbuild.exe", "csc.exe", "vbc.exe", "cmd.exe", "powershell.exe"),
+            },
+            {
+                "id": "fallback_web_shell",
+                "name": "Web Server Spawning Shell (T1059.004)",
+                "action": "block",
+                "parent_patterns": ("python", "python3", "python.exe", "python3.exe", "uwsgi", "gunicorn", "nginx", "apache2", "httpd", "node"),
+                "child_patterns": ("sh", "bash", "dash", "zsh", "cmd.exe", "powershell.exe", "nc", "ncat", "netcat", "socat", "id", "whoami"),
             }
         ]
 

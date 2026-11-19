@@ -596,6 +596,9 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
         agent_id=target_agent_id,
         data={"auth_events": events_list, "agent_id": target_agent_id}
     )
+    if hasattr(rec, "incident") and rec.incident:
+        logger.info(f"Hook: Triggering AI Triage for auth incident {rec.incident.id}")
+        asyncio.create_task(_run_ai_triage(rec.incident.id))
     logger.info(f"Recorded AUTH_EVENT for agent '{target_agent_id}' (risk: {rec.score})")
     if data.get("wait_ack", True):
         return {"status": "ack", "message": "Auth event processed", "score": rec.score}

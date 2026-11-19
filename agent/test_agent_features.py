@@ -128,3 +128,44 @@ async def test_send_ws_json_and_wait_receives_response():
     mock_ws.send.assert_awaited_once_with(json.dumps(msg))
     mock_ws.recv.assert_awaited_once()
     assert res == {"status": "ack", "message": "Heartbeat processed"}
+
+
+def test_auth_monitor_web_and_ssh_events():
+    from auth_monitor import AuthMonitor
+    with tempfile.NamedTemporaryFile("w+", delete=False) as f:
+        log_path = f.name
+        f.write("# Initial existing content\n")
+        f.flush()
+
+    try:
+        monitor = AuthMonitor(agent_id="test-agent")
+        monitor.LOG_PATHS = [log_path]
+        monitor.file_positions[log_path] = os.path.getsize(log_path)
+
+        # Append events
+        with open(log_path, "a") as f:
+            f.write("[WEB_AUTH] status=failed username=admin ip=172.67.204.217 service=flask_web\n")
+            f.write('{"service": "flask_web", "username": "victim", "source_ip": "1.2.3.4", "status": "failed"}\n')
+            f.write("Failed password for invalid user root from 192.168.1.100 port 2222 ssh2\n")
+            f.write("[WEB_AUTH] status=success username=admin ip=172.67.204.217 service=flask_web\n")
+
+        events = monitor.get_new_events()
+        assert len(events) == 4
+        assert events[0]["service"] == "flask_web"
+        assert events[0]["username"] == "admin"
+        assert events[0]["status"] == "failed"
+        assert events[0]["source_ip"] == "172.67.204.217"
+
+        assert events[1]["username"] == "victim"
+        assert events[1]["status"] == "failed"
+
+        assert events[2]["service"] == "ssh"
+        assert events[2]["username"] == "root"
+        assert events[2]["status"] == "failed"
+
+        assert events[3]["username"] == "admin"
+        assert events[3]["status"] == "success"
+    finally:
+        if os.path.exists(log_path):
+            os.remove(log_path)
+

@@ -35,11 +35,20 @@ class ConnectionTracker:
                         continue
 
                     conn_key = (src_ip, src_port, dst_ip, dst_port)
+                    proc_name = ""
+                    if conn.pid:
+                        try:
+                            proc_name = psutil.Process(conn.pid).name()
+                        except Exception:
+                            pass
+
                     item = {
                         "src_ip": src_ip,
                         "src_port": src_port,
                         "dst_ip": dst_ip,
                         "dst_port": dst_port,
+                        "pid": conn.pid,
+                        "process_name": proc_name,
                         "status": "ESTABLISHED",
                         "timestamp": now_iso
                     }

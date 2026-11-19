@@ -34,6 +34,9 @@ class FileIntegrityMonitor:
         "/etc/cron.d",
         "/var/spool/cron",
         "/tmp/malware_sim",
+        "/home/webuser/vulnerable_web/uploads",
+        "/var/www/uploads",
+        "/var/www/html",
     ]
 
     def __init__(self, agent_id: str = "agent", watched_files: Optional[List[str]] = None, watched_dirs: Optional[List[str]] = None):
