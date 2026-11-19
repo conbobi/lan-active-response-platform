@@ -27,6 +27,44 @@ class RuleMatch:
     detail: str
 
 
+SAFE_PROCESSES = ['python3', 'python', 'node', 'bash', 'sh', 'xfwm4', 'systemd', 'dbus-daemon', 'xfce4-panel']
+SUSPICIOUS_DIRS = ('/tmp', '/dev/shm', '/var/tmp')
+
+
+def is_safe_process(event: Dict[str, Any]) -> bool:
+    """
+    Kiểm tra nếu tiến trình nằm trong SAFE_PROCESSES và không nằm trong thư mục tạm.
+    Nếu đúng, trả về True để bỏ qua hoàn toàn, không tạo Incident, không chấm điểm.
+    """
+    if not isinstance(event, dict):
+        return False
+
+    proc_name = str(
+        event.get("process_name")
+        or event.get("name")
+        or event.get("process")
+        or event.get("Image")
+        or ""
+    ).strip().lower()
+    base_name = proc_name.replace("\\", "/").split("/")[-1]
+
+    safe_set = {p.lower() for p in SAFE_PROCESSES}
+    if base_name in safe_set or proc_name in safe_set:
+        exe_path = str(
+            event.get("exe")
+            or event.get("exe_path")
+            or event.get("path")
+            or event.get("Image")
+            or ""
+        ).strip().lower()
+        # Nếu nằm trong thư mục tạm /tmp, /dev/shm, /var/tmp -> không an toàn (có thể là mã độc mạo danh)
+        in_temp = any(exe_path.startswith(d) or f"{d}/" in exe_path for d in SUSPICIOUS_DIRS)
+        if not in_temp:
+            return True
+
+    return False
+
+
 def is_reverse_shell_match(m: RuleMatch) -> bool:
     """Kiểm tra match có phải là Reverse Shell / Command Interpreter không (T1059)."""
     shell_techniques = {"T1059", "T1059.004", "T1059.001", "T1059.003"}
@@ -42,6 +80,27 @@ def is_generic_network_match(m: RuleMatch) -> bool:
         return True
     r_name = m.rule_name.lower()
     return any(k in r_name for k in ("beaconing", "application layer", "network abnormal"))
+
+
+def is_suspicious_for_t1071(event: Dict[str, Any]) -> bool:
+    """
+    Chỉ gán nhãn T1071 (Application Layer Protocol) nếu tiến trình ĐÃ BỊ COI LÀ ĐÁNG NGỜ:
+    - is_suspicious == True
+    - hoặc exe nằm trong thư mục nguy hiểm (/tmp, /dev/shm, /var/tmp)
+    - hoặc CommandLine chứa /dev/tcp, nc -e, ncat, pty.spawn, socket.socket, curl | sh, wget | sh
+    - Không được tự động gán T1071 chỉ vì tiến trình hệ thống / bình thường có kết nối mạng.
+    """
+    if not isinstance(event, dict):
+        return False
+    if event.get("is_suspicious"):
+        return True
+    cmdline = str(event.get("cmdline") or "").lower()
+    if any(p in cmdline for p in ("/dev/tcp/", "nc -e", "ncat -e", "pty.spawn", "socket.socket", "curl |", "wget |")):
+        return True
+    exe_path = str(event.get("exe") or event.get("exe_path") or event.get("path") or event.get("Image") or "").lower()
+    if any(exe_path.startswith(d) or f"{d}/" in exe_path for d in SUSPICIOUS_DIRS):
+        return True
+    return False
 
 
 class RuleEngine:
@@ -81,6 +140,50 @@ class RuleEngine:
             except Exception as e:
                 logger.error(f"rule_engine: rule '{rule.get('rule_name')}' eval failed: {e}")
                 continue
+
+        if not matches:
+            return []
+
+        # Lọc bỏ matches nếu process_name hoặc Image nằm trong SAFE_PROCESSES và không ở /tmp, /dev/shm, /var/tmp
+        filtered_matches = []
+        for m in matches:
+            event = m.matched_event
+            if is_safe_process(event):
+                # Ngoại lệ: chỉ giữ lại nếu match là reverse shell thực sự với payload độc hại trên cmdline
+                if is_reverse_shell_match(m) and any(
+                    re.search(pat, str(event.get("cmdline") or ""), re.IGNORECASE)
+                    for pat in (r"/dev/tcp/", r"\bbash\s+-[a-zA-Z]*i", r"\bsh\s+-[a-zA-Z]*i", r"\bpty\.spawn", r"\bsocket\.socket")
+                ):
+                    filtered_matches.append(m)
+                    continue
+
+                logger.info(
+                    f"rule_engine: suppressed safe process '{event.get('name') or event.get('process_name') or event.get('Image')}' "
+                    f"(rule '{m.rule_name}') - not in suspicious dirs (/tmp, /dev/shm, /var/tmp)"
+                )
+                continue
+            filtered_matches.append(m)
+        matches = filtered_matches
+
+        if not matches:
+            return []
+
+        # Lọc bỏ generic network match (T1071) nếu tiến trình không bị coi là đáng ngờ
+        # (Chỉ gán T1071 nếu tiến trình đáng ngờ / reverse shell / path độc hại)
+        filtered_matches = []
+        for m in matches:
+            event = m.matched_event
+            if is_generic_network_match(m) and not is_suspicious_for_t1071(event):
+                logger.info(
+                    f"rule_engine: suppressed T1071 rule '{m.rule_name}' for non-suspicious process "
+                    f"'{event.get('name') or event.get('process_name') or event.get('Image')}'"
+                )
+                continue
+            # Nếu match có chứa tag T1071 nhưng tiến trình không đáng ngờ, loại bỏ tag T1071 khỏi mitre_techniques
+            if not is_suspicious_for_t1071(event):
+                m.mitre_techniques = [t for t in m.mitre_techniques if not str(t).startswith("T1071")]
+            filtered_matches.append(m)
+        matches = filtered_matches
 
         if not matches:
             return []
@@ -186,6 +289,11 @@ class RuleEngine:
         candidates = self._get_candidates(telemetry, category)
 
         for event in candidates:
+            # Bỏ qua nếu là tiến trình trong SAFE_PROCESSES và không ở thư mục tạm
+            if is_safe_process(event):
+                cmdline = str(event.get("cmdline") or "")
+                if not any(pat in cmdline for pat in ("/dev/tcp/", "-i", "pty.spawn", "socket.socket")):
+                    continue
             try:
                 if self._match_selection(selection, event):
                     matches.append(RuleMatch(
@@ -280,6 +388,19 @@ class RuleEngine:
         # Fallback cho parent: nếu parent_exe rỗng, thử parent_name hoặc parent
         if actual_value is None and actual_key == "parent_exe":
             actual_value = event.get("parent_exe") or event.get("parent_name") or event.get("parent")
+
+        # Logic trace parent: nếu không tìm thấy parent (None, 0, rỗng, unknown), không được tự động match hay cộng rủi ro
+        # Không trace process nếu parent_pid < 100 (ngoại trừ nếu rule tìm đích danh PID 1 hoặc systemd)
+        if actual_key in ("parent_pid", "parent_exe"):
+            if actual_value is None or str(actual_value).strip().lower() in ("", "0", "none", "null", "unknown", "-1"):
+                return False
+            if actual_key == "parent_pid":
+                try:
+                    val_int = int(actual_value)
+                    if val_int < 100 and val_int != 1 and str(expected).strip() not in (str(val_int), "systemd"):
+                        return False
+                except (ValueError, TypeError):
+                    pass
 
         if actual_value is None:
             return False

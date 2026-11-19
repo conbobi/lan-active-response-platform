@@ -76,6 +76,9 @@ class SuspiciousProcessRule(RiskRule):
         r"\bmkfifo\b.*\|\s*(?:/bin/)?(?:sh|bash)",
     ]
 
+    SUSPICIOUS_DIRS = ('/tmp', '/dev/shm', '/var/tmp')
+    SAFE_PROCESSES = {'python3', 'python', 'node', 'bash', 'sh', 'xfwm4', 'systemd', 'dbus-daemon', 'xfce4-panel'}
+
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         processes = telemetry.get("process_list", [])
         if not processes:
@@ -101,6 +104,13 @@ class SuspiciousProcessRule(RiskRule):
             # Skip the LARP agent process itself
             if "agent.py" in cmdline or name == "agent.py":
                 continue
+
+            # Skip safe processes if not in suspicious directories (/tmp, /dev/shm, /var/tmp)
+            base_name = name.replace("\\", "/").split("/")[-1]
+            if base_name in self.SAFE_PROCESSES or name in self.SAFE_PROCESSES:
+                if not any(exe.startswith(d) or f"{d}/" in exe for d in self.SUSPICIOUS_DIRS):
+                    if not any(re.search(hp, cmdline, re.IGNORECASE) for hp in self.HIGH_SEVERITY_PATTERNS):
+                        continue
 
             # Check whitelist first if available
             if whitelist_service:

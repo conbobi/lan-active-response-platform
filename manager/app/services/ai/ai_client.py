@@ -29,7 +29,7 @@ class AIClient:
             "keep_alive": "5m",
             "options": {
                 "temperature": 0.2,
-                "num_predict": 1000,
+                "num_predict": 2048,
                 "top_p": 0.9,
                 "num_ctx": 8192,
             },

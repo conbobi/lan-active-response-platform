@@ -162,36 +162,52 @@ async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) ->
 
 async def _run_ai_triage(incident_id: str):
     """Background task: Chạy AI triage an toàn không block WebSocket, có sleep và retry loop để đảm bảo commit."""
-    logger.info(f"Triggering AI Triage for incident {incident_id}")
+    logger.info(f"Hook: Triggering AI Triage for {incident_id}")
     await asyncio.sleep(0.8)
 
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         try:
             async with AsyncSessionLocal() as session:
                 inc = await session.get(Incident, incident_id)
                 if not inc:
-                    if attempt < 3:
+                    if attempt < 5:
                         logger.warning(
-                            f"Incident {incident_id} not found in DB yet (attempt {attempt}/3), retrying in 1.0s..."
+                            f"Incident {incident_id} not found in DB yet (attempt {attempt}/5), retrying in 1.0s..."
                         )
                         await asyncio.sleep(1.0)
                         continue
                     else:
                         logger.error(
-                            f"Incident {incident_id} not found after 3 attempts. Aborting AI triage."
+                            f"Incident {incident_id} not found after 5 attempts. Aborting AI triage."
                         )
                         return
 
                 service = AITriageService()
+                logger.info(f"Executing analyze_incident for {incident_id}...")
                 analysis = await service.analyze_incident(incident_id, session)
                 if analysis:
                     logger.info(f"AI triage completed successfully for incident {incident_id}")
+                    try:
+                        await dashboard_manager.broadcast({
+                            "type": "AI_ANALYSIS_COMPLETED",
+                            "event": "AI_ANALYSIS_COMPLETED",
+                            "incident_id": incident_id,
+                            "data": {
+                                "id": analysis.id,
+                                "summary": analysis.summary,
+                                "confidence": analysis.confidence,
+                                "mitre_techniques": analysis.mitre_techniques,
+                                "root_cause": analysis.root_cause
+                            }
+                        })
+                    except Exception as b_err:
+                        logger.debug(f"Dashboard broadcast AI analysis failed: {b_err}")
                 else:
                     logger.warning(f"AI triage returned no analysis for incident {incident_id}")
                 return
         except Exception as e:
-            logger.error(f"AI triage attempt {attempt} failed for {incident_id}: {e}", exc_info=True)
-            if attempt < 3:
+            logger.error(f"AI Triage failed: {e}", exc_info=True)
+            if attempt < 5:
                 await asyncio.sleep(1.0)
 
 
@@ -205,8 +221,9 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
     # Rule Engine: Evaluate active Sigma rules against process list
     try:
         incidents = await rule_engine.evaluate(payload, session)
-        for incident in incidents:
-            asyncio.create_task(_run_ai_triage(incident.id))
+        for inc in incidents:
+            logger.info(f"Hook: Triggering AI Triage for {inc.id}")
+            asyncio.create_task(_run_ai_triage(inc.id))
 
         if incidents:
             await dashboard_manager.broadcast({
@@ -274,8 +291,9 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
     # Rule Engine: Evaluate active Sigma rules against telemetry
     try:
         incidents = await rule_engine.evaluate(payload, session)
-        for incident in incidents:
-            asyncio.create_task(_run_ai_triage(incident.id))
+        for inc in incidents:
+            logger.info(f"Hook: Triggering AI Triage for {inc.id}")
+            asyncio.create_task(_run_ai_triage(inc.id))
 
         if incidents:
             await dashboard_manager.broadcast({
@@ -300,6 +318,9 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
         agent_id=target_agent_id,
         data=payload
     )
+    if hasattr(record, "incident") and record.incident:
+        logger.info(f"Hook: Triggering AI Triage for {record.incident.id}")
+        asyncio.create_task(_run_ai_triage(record.incident.id))
     logger.info(f"Calculated risk score {record.score} for agent '{target_agent_id}'")
     if data.get("wait_ack", True):
         return {

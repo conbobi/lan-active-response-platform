@@ -229,11 +229,15 @@ class ProcessChainRule(RiskRule):
 
             parent_pid = p_dict.get("parent_pid") if p_dict.get("parent_pid") is not None else p_dict.get("ppid")
             if parent_pid is not None:
-                parent_proc = pid_map.get(parent_pid)
-                if parent_proc:
-                    for p_n in self._extract_proc_names(parent_proc):
-                        if p_n not in parent_names:
-                            parent_names.append(p_n)
+                if parent_pid == 1:
+                    if "systemd" not in parent_names:
+                        parent_names.append("systemd")
+                elif parent_pid >= 100:
+                    parent_proc = pid_map.get(parent_pid)
+                    if parent_proc:
+                        for p_n in self._extract_proc_names(parent_proc):
+                            if p_n not in parent_names:
+                                parent_names.append(p_n)
 
             for p_n in parent_names:
                 for c_n in child_names:

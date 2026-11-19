@@ -11,6 +11,7 @@ class NetworkConnectionRule(RiskRule):
     category = "network"
 
     DEFAULT_SUSPICIOUS_PORTS = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
+    SAFE_PROCESSES = {'python3', 'python', 'node', 'bash', 'sh', 'xfwm4', 'systemd', 'dbus-daemon', 'xfce4-panel'}
 
     def _get_suspicious_ports(self) -> set:
         config_ports = self.config.get("suspicious_ports")
@@ -36,7 +37,16 @@ class NetworkConnectionRule(RiskRule):
             dst_ip = c_dict.get("dst_ip")
             is_susp = c_dict.get("is_suspicious", False)
 
-            if is_susp or dst_port in suspicious_ports or src_port in suspicious_ports:
+            p_name = str(c_dict.get("process_name") or c_dict.get("process") or "").strip().lower()
+            base_p_name = p_name.replace("\\", "/").split("/")[-1]
+            is_safe = base_p_name in self.SAFE_PROCESSES or p_name in self.SAFE_PROCESSES
+
+            # Nếu tiến trình là SAFE_PROCESS và không có cờ is_suspicious, chỉ cờ nếu port là port C2 nguy hiểm thực sự (4444, 1337, 31337, 5555)
+            if is_safe and not is_susp:
+                high_risk_ports = {4444, 5555, 1337, 31337, 6667}
+                if dst_port in high_risk_ports or src_port in high_risk_ports:
+                    suspicious_conns += 1
+            elif is_susp or dst_port in suspicious_ports or src_port in suspicious_ports:
                 suspicious_conns += 1
 
             if dst_ip and threat_intel_service:

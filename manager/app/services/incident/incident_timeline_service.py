@@ -128,12 +128,24 @@ class IncidentTimelineService:
                         culprit_proc = p
                         break
 
-            if culprit_proc and culprit_proc.parent_pid and culprit_proc.parent_pid > 2:
-                # Find parent process
-                for p in procs:
-                    if p.pid == culprit_proc.parent_pid:
-                        parent_proc = p
-                        break
+            if culprit_proc and culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid:
+                if culprit_proc.parent_pid == 1:
+                    parent_proc = ProcessInfo(
+                        id="p_systemd",
+                        agent_id=culprit_proc.agent_id,
+                        pid=1,
+                        name="systemd",
+                        exe="/usr/lib/systemd/systemd",
+                        exe_path="/usr/lib/systemd/systemd"
+                    )
+                elif culprit_proc.parent_pid < 100:
+                    parent_proc = None  # Không trace process nếu parent_pid < 100
+                else:
+                    # Find parent process
+                    for p in procs:
+                        if p.pid == culprit_proc.parent_pid:
+                            parent_proc = p
+                            break
 
             if culprit_proc:
                 p_time = culprit_proc.created_at or inc_time
@@ -147,7 +159,7 @@ class IncidentTimelineService:
                         "name": parent_proc.name
                     }
                     title = f"{parent_proc.name} spawned {culprit_proc.name}"
-                elif culprit_proc.parent_pid is not None and culprit_proc.parent_pid != 0:
+                elif culprit_proc.parent_pid is not None and culprit_proc.parent_pid >= 100:
                     parent_info = {
                         "pid": culprit_proc.parent_pid,
                         "name": None

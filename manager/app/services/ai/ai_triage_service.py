@@ -72,6 +72,18 @@ class AITriageService:
             for t in raw_techs:
                 if isinstance(t, dict):
                     tech_id = str(t.get("id", "")).strip().upper()
+                    # Rule 3: Chỉ gán nhãn T1071 nếu tiến trình ĐÃ BỊ COI LÀ ĐÁNG NGỜ
+                    if tech_id.startswith("T1071"):
+                        is_suspicious_t1071 = any(
+                            getattr(p, "is_suspicious", False)
+                            or any(pat in (getattr(p, "cmdline", "") or "").lower() for pat in ("/dev/tcp/", "nc -e", "ncat -e", "pty.spawn", "socket.socket"))
+                            or any((getattr(p, "exe_path", "") or getattr(p, "exe", "") or "").lower().startswith(d) for d in ("/tmp", "/dev/shm", "/var/tmp"))
+                            for p in process_tree
+                        )
+                        if not is_suspicious_t1071:
+                            logger.info(f"ai_triage: Suppressed {tech_id} because no process is verified suspicious (normal network activity)")
+                            continue
+
                     if mitre_kb.validate_technique(tech_id):
                         kb_meta = mitre_kb.get_technique(tech_id)
                         validated_techs.append({
@@ -205,8 +217,9 @@ INSTRUCTIONS:
 - STRICT RULES:
   * ONLY use data from the PROVIDED FIELDS above.
   * If a field is empty, missing, or unknown, state "không xác định" or omit it. DO NOT invent or hallucinate.
-  * DO NOT mention file paths not present in the data (e.g. do NOT invent /tmp/, C:\Temp).
+  * DO NOT mention file paths not present in the data (e.g. do NOT invent /tmp/, C:\\Temp).
   * DO NOT mention parent process names not in the data (e.g. do NOT invent bash, cmd.exe).
+  * ONLY assign T1071 (Application Layer Protocol) if the process is verified suspicious (e.g. contains '/dev/tcp', 'nc -e', reverse shell, malware). DO NOT assign T1071 to legitimate web servers or normal processes (python3, node, bash, systemd) merely because they have network connections.
 - "summary": write 2-4 sentences in Vietnamese describing the actual incident grounded strictly in the evidence.
 - "mitre_techniques": list mapped techniques chosen strictly from the allowed MITRE IDs above with evidence.
 - "root_cause": 1-2 sentences in Vietnamese identifying the root cause.
@@ -286,11 +299,37 @@ JSON FORMAT:
             except Exception:
                 continue
 
-        # 5. Final fallback
+        # 5. Fallback: Parse direct JSON
         try:
             return json.loads(answer)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"AI did not return valid JSON: {e}. Raw snippet: {answer[:300]}")
+        except json.JSONDecodeError:
+            pass
+
+        # 6. Truncated JSON recovery fallback (nếu output LLM bị cắt giữa chừng do chạm token limit)
+        try:
+            start = answer.find("{")
+            if start >= 0:
+                truncated_text = answer[start:]
+                extracted: Dict[str, Any] = {}
+                sum_match = re.search(r'"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)', truncated_text)
+                if sum_match:
+                    extracted["summary"] = sum_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+                
+                rc_match = re.search(r'"root_cause"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)', truncated_text)
+                if rc_match:
+                    extracted["root_cause"] = rc_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+
+                tech_matches = re.findall(r'\{\s*"id"\s*:\s*"(T\d{4}(?:\.\d{3})?)"', truncated_text, re.IGNORECASE)
+                if tech_matches:
+                    extracted["mitre_techniques"] = [{"id": tid} for tid in tech_matches]
+
+                if "summary" in extracted and extracted["summary"]:
+                    logger.info("Recovered partial structured fields from truncated AI JSON response.")
+                    return extracted
+        except Exception:
+            pass
+
+        raise ValueError(f"AI did not return valid JSON. Raw snippet: {answer[:300]}")
 
     async def _get_process_tree(self, session: AsyncSession, agent_id: Optional[str]) -> List[ProcessInfo]:
         """Fetch top 30 key processes prioritizing suspicious nodes, ancestors, and network bindings."""

@@ -353,6 +353,7 @@ class RiskAssessmentService:
         if smoothed >= incident_creation_th:
             incident_service = IncidentService(self.session)
             inc = await incident_service.create_from_risk(agent_id, smoothed, factors)
+            record.incident = inc
             logger.info(f"Automated incident '{inc.id}' evaluated for agent '{agent_id}' (score: {smoothed} >= threshold: {incident_creation_th})")
 
         # 2. Automated Process Tree Termination if smoothed >= auto_kill_threshold
