@@ -42,16 +42,24 @@ class SuggestExclusionRequest(BaseModel):
     fp_samples: Optional[List[Dict[str, Any]]] = None
 
 
+class UpdateRuleRequest(BaseModel):
+    rule_name: Optional[str] = None
+    rule_yaml: Optional[str] = None
+    severity: Optional[str] = None
+    notes: Optional[str] = None
+    analyst_id: Optional[str] = "soc_analyst"
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────
 
 @router.post("/harvest")
 async def harvest_rule(
-    body: HarvestRequest,
-    db: AsyncSession = Depends(get_db)
+    body: HarvestRequest
 ):
     """
     POST /api/rules/harvest
     Agent A: Generate Sigma rule from CTI report and save as pending candidate.
+    Uses non-blocking database session to prevent connection starvation.
     """
     try:
         if not body.cti_text or not body.cti_text.strip():
@@ -60,7 +68,7 @@ async def harvest_rule(
         candidate = await harvest_service.harvest_from_cti(
             cti_text=body.cti_text.strip(),
             analyst_id=body.analyst_id or "soc_analyst",
-            db_session=db
+            db_session=None
         )
 
         return {
@@ -76,6 +84,80 @@ async def harvest_rule(
     except Exception as e:
         logger.error(f"Error in /harvest: {e}", exc_info=True)
         return {"error": f"Failed to harvest rule: {str(e)}"}
+
+
+@router.put("/{rule_id}")
+async def update_rule_endpoint(
+    rule_id: str,
+    body: UpdateRuleRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    PUT /api/rules/{rule_id}
+    Update candidate rule name, YAML content, severity or notes, and bump version.
+    """
+    try:
+        try:
+            target_uuid = uuid.UUID(rule_id)
+        except ValueError:
+            return {"error": f"Invalid rule_id UUID: {rule_id}"}
+
+        stmt = select(RuleCandidate).where(RuleCandidate.id == target_uuid)
+        result = await db.execute(stmt)
+        candidate = result.scalar_one_or_none()
+
+        if not candidate:
+            return {"error": f"Rule candidate '{rule_id}' not found"}
+
+        if body.rule_name is not None and body.rule_name.strip():
+            candidate.rule_name = body.rule_name.strip()
+        if body.severity is not None and body.severity.strip():
+            candidate.severity = body.severity.strip().lower()
+        if body.notes is not None:
+            candidate.notes = body.notes
+
+        yaml_changed = False
+        if body.rule_yaml is not None and body.rule_yaml.strip() != candidate.rule_yaml:
+            candidate.rule_yaml = body.rule_yaml.strip()
+            yaml_changed = True
+
+            try:
+                import yaml
+                parsed = yaml.safe_load(candidate.rule_yaml)
+                if isinstance(parsed, dict) and "tags" in parsed:
+                    candidate.mitre_techniques = harvest_service._extract_mitre_techniques(parsed["tags"])
+            except Exception:
+                pass
+
+            v_stmt = select(func.max(RuleVersion.version_number)).where(RuleVersion.rule_candidate_id == target_uuid)
+            v_res = await db.execute(v_stmt)
+            curr_max = v_res.scalar() or 1
+            new_version = RuleVersion(
+                rule_candidate_id=target_uuid,
+                version_number=curr_max + 1,
+                yaml_content=candidate.rule_yaml,
+                change_reason=f"Analyst manual update ({body.analyst_id or 'soc_analyst'})",
+                created_at=datetime.now(timezone.utc),
+                created_by=body.analyst_id or "soc_analyst"
+            )
+            db.add(new_version)
+
+        await db.commit()
+        await db.refresh(candidate)
+
+        return {
+            "rule_id": str(candidate.id),
+            "rule_name": candidate.rule_name,
+            "rule_yaml": candidate.rule_yaml,
+            "severity": candidate.severity,
+            "status": candidate.status,
+            "mitre_techniques": candidate.mitre_techniques or [],
+            "yaml_changed": yaml_changed,
+            "message": "Rule candidate updated successfully."
+        }
+    except Exception as e:
+        logger.error(f"Error updating rule {rule_id}: {e}", exc_info=True)
+        return {"error": f"Failed to update rule: {str(e)}"}
 
 
 @router.post("/{rule_id}/validate")

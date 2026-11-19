@@ -15,6 +15,7 @@ import {
 const operationsNav = [
   { to: '/', icon: <FiGrid size={16} />, label: 'Dashboard', end: true },
   { to: '/ai-dashboard', icon: <FiCpu size={16} />, label: 'AI SOC Studio' },
+  { to: '/ai-dashboard/harvest', icon: <FiSliders size={16} />, label: 'AI Rule Harvest' },
   { to: '/incidents', icon: <FiAlertOctagon size={16} />, label: 'Incidents' },
   { to: '/investigate', icon: <FiSearch size={16} />, label: 'Investigate' },
 ];

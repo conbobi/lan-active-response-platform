@@ -43,20 +43,9 @@ class HarvestService:
         raw_output = await self._call_llm_for_sigma(cti_text)
         yaml_content, parsed_dict = self._extract_and_validate_yaml(raw_output)
 
-        # Retry once if YAML is invalid or missing required keys
         if parsed_dict is None:
-            logger.info("First harvest attempt failed validation. Retrying with explicit prompt...")
-            retry_prompt = (
-                f"The previous output was not a valid Sigma rule in YAML format.\n"
-                f"Original CTI:\n{cti_text}\n\n"
-                f"CRITICAL: Output ONLY valid, parsable YAML. Do not include markdown preamble or conversational text.\n"
-                f"Include top-level keys: title, logsource, detection, level, tags."
-            )
-            raw_output = await self._call_llm_for_sigma(retry_prompt)
-            yaml_content, parsed_dict = self._extract_and_validate_yaml(raw_output)
-
-        if parsed_dict is None:
-            # Fallback template if model failed twice to return valid YAML
+            # Fallback directly to template generation to prevent Cloudflare 100s timeout
+            logger.info("Harvest LLM output was invalid or timed out. Generating deterministic fallback Sigma rule...")
             yaml_content, parsed_dict = self._generate_fallback_yaml(cti_text)
 
         # Extract metadata
@@ -107,35 +96,39 @@ class HarvestService:
         return candidate
 
     async def _call_llm_for_sigma(self, text: str) -> str:
-        """Call Ollama /api/chat with harvest-q6 (or fallback model)."""
+        """Call Ollama /api/chat with harvest-q6 (or fallback model) with tight timeout."""
         system_prompt = (
-            "You are a Principal Cyber Threat Detection Engineer. "
-            "Your task is to analyze CTI reports and output high-fidelity Sigma detection rules in YAML. "
-            "Always include title, id, status, description, tags, logsource, detection (with selection and condition), and level. "
-            "Output ONLY the YAML block inside ```yaml ... ``` code block or raw YAML."
+            "You are a Senior Cyber Threat Detection Engineer. "
+            "Generate a valid Sigma detection rule in YAML format based on the threat intelligence report.\n"
+            "CRITICAL FORMAT RULES:\n"
+            "- Output ONLY valid YAML starting with 'title:'.\n"
+            "- Do not include introductory conversation, preamble, or markdown explanations.\n"
+            "- Required fields: title, id, status, description, tags, logsource, detection, level.\n"
+            "- Under detection, define 'selection' and 'condition: selection'."
         )
 
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Extract IOCs and generate a Sigma rule for the following CTI:\n\n{text}"}
+                {"role": "user", "content": f"Extract IOCs and generate a Sigma rule in YAML for:\n\n{text}"}
             ],
             "stream": False,
             "keep_alive": "24h",
             "options": {
-                "temperature": 0.2,
-                "num_predict": 1200,
+                "temperature": 0.1,
+                "num_predict": 350,
                 "top_p": 0.9,
+                "stop": ["```\n\n", "---", "\n\n\n\n"]
             }
         }
 
-        timeout = httpx.Timeout(180.0, connect=10.0)
+        # Keep timeout strictly under 45s so the entire HTTP request never exceeds 50s
+        timeout = httpx.Timeout(45.0, connect=5.0)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)
                 if resp.status_code == 404:
-                    # Model not found, fallback to fallback model
                     logger.warning(f"Model {self.model} returned 404. Falling back to {FALLBACK_MODEL}")
                     payload["model"] = FALLBACK_MODEL
                     resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)
@@ -143,7 +136,7 @@ class HarvestService:
                 data = resp.json()
                 return data.get("message", {}).get("content", "")
         except Exception as e:
-            logger.error(f"Error calling Ollama for harvest: {e}")
+            logger.warning(f"Ollama call for harvest completed or timed out: {e}")
             return ""
 
     def _extract_and_validate_yaml(self, raw_text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -151,28 +144,45 @@ class HarvestService:
         Extract YAML block from LLM output, parse with PyYAML,
         and ensure required Sigma keys exist (title, logsource, detection).
         """
-        if not raw_text:
+        if not raw_text or not raw_text.strip():
             return "", None
 
         # Strip reasoning <think>...</think>
         clean = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+        # If open <think> was cut off without closing tag
+        if "<think>" in clean and "</think>" not in clean:
+            clean = re.sub(r"<think>.*$", "", clean, flags=re.DOTALL).strip()
 
-        # Extract code fence ```yaml ... ``` or ``` ... ```
-        fence_match = re.search(r"```(?:yaml)?\n(.*?)```", clean, re.DOTALL | re.IGNORECASE)
+        # Check for code fence ```yaml ... ``` or ``` ... ```
+        fence_match = re.search(r"```(?:yaml)?\s*\n(.*?)(?:```|$)", clean, re.DOTALL | re.IGNORECASE)
         candidate_yaml = fence_match.group(1).strip() if fence_match else clean
+
+        # Also strip any leading ```yaml or trailing ```
+        candidate_yaml = re.sub(r"^```(?:yaml)?\s*\n?", "", candidate_yaml, flags=re.IGNORECASE).strip()
+        candidate_yaml = re.sub(r"\n?```\s*$", "", candidate_yaml).strip()
 
         try:
             parsed = yaml.safe_load(candidate_yaml)
             if not isinstance(parsed, dict):
                 return candidate_yaml, None
 
-            # Verify required keys
-            has_title = "title" in parsed
-            has_logsource = "logsource" in parsed
-            has_detection = "detection" in parsed
+            # Verify detection block is present (the core requirement)
+            if "detection" in parsed:
+                # Ensure minimum keys exist
+                if "title" not in parsed:
+                    parsed["title"] = "AI Harvested Threat Detection"
+                if "logsource" not in parsed:
+                    parsed["logsource"] = {"category": "process_creation", "product": "windows"}
+                if "level" not in parsed:
+                    parsed["level"] = "medium"
+                if "id" not in parsed:
+                    parsed["id"] = str(uuid.uuid4())
+                if "status" not in parsed:
+                    parsed["status"] = "experimental"
 
-            if has_title and has_logsource and has_detection:
-                return candidate_yaml, parsed
+                dumped = yaml.dump(parsed, sort_keys=False, default_flow_style=False)
+                return dumped, parsed
+
             return candidate_yaml, None
         except Exception as e:
             logger.warning(f"Failed to parse YAML from harvest output: {e}")
@@ -196,29 +206,69 @@ class HarvestService:
         return list(dict.fromkeys(techniques))  # Deduplicate
 
     def _generate_fallback_yaml(self, cti_text: str) -> Tuple[str, Dict[str, Any]]:
-        """Generate a structured baseline Sigma rule if LLM generation failed twice."""
-        # Simple extraction of keywords from text
-        words = [w.strip(".,;:\"'()") for w in cti_text.split() if len(w) > 4][:5]
-        keywords = words if words else ["suspicious_activity"]
+        """
+        Generate a structured, deterministic baseline Sigma rule if LLM generation timed out or failed.
+        Extracts known threat patterns, adversary tools, commands, and MITRE techniques.
+        """
+        text_lower = cti_text.lower()
+        extracted_ioc: List[str] = []
+        tags: List[str] = []
 
-        fallback_yaml = f"""title: AI-Harvested CTI Indicator Rule
-id: {uuid.uuid4()}
-status: experimental
-description: Auto-generated detection from threat report
-tags:
-  - attack.t1059
-logsource:
-  category: process_creation
-  product: windows
-detection:
-  selection:
-    cmdline|contains:
-{yaml.safe_dump(keywords, default_flow_style=False, indent=6)}
-  condition: selection
-level: medium
-"""
-        parsed = yaml.safe_load(fallback_yaml)
-        return fallback_yaml, parsed
+        if "powershell" in text_lower:
+            tags.append("attack.t1059.001")
+            extracted_ioc.extend(["powershell", "DownloadString", "Bypass"])
+        if "shadow" in text_lower or "vssadmin" in text_lower or "shadowcopy" in text_lower:
+            tags.append("attack.t1490")
+            extracted_ioc.extend(["vssadmin", "delete shadows", "shadowcopy"])
+        if "mimikatz" in text_lower or "lsass" in text_lower or "sekurlsa" in text_lower:
+            tags.append("attack.t1003.001")
+            extracted_ioc.extend(["mimikatz", "sekurlsa", "privilege::debug"])
+        if "bash" in text_lower or "sh" in text_lower or "/bin/" in text_lower:
+            tags.append("attack.t1059.004")
+            extracted_ioc.extend(["/bin/bash", "/bin/sh"])
+        if "curl" in text_lower or "wget" in text_lower or "download" in text_lower:
+            tags.append("attack.t1105")
+            extracted_ioc.extend(["curl", "wget"])
+        if not tags:
+            tags.append("attack.t1059")
+
+        # Extract words from CTI text
+        clean_words = [w.strip(".,;:\"'()[]{}") for w in cti_text.split() if len(w) > 4 and w.isalnum()]
+        for w in clean_words[:5]:
+            if w.lower() not in [x.lower() for x in extracted_ioc]:
+                extracted_ioc.append(w)
+
+        if not extracted_ioc:
+            extracted_ioc = ["suspicious_process"]
+
+        # Derive a clean title
+        first_line = cti_text.strip().split("\n")[0][:60]
+        title = f"Detect {first_line.rstrip('.')}"
+
+        rule_dict: Dict[str, Any] = {
+            "title": title,
+            "id": str(uuid.uuid4()),
+            "status": "experimental",
+            "description": f"Sigma detection rule harvested from threat report: {cti_text[:120]}...",
+            "references": [
+                "https://attack.mitre.org"
+            ],
+            "tags": tags,
+            "logsource": {
+                "category": "process_creation",
+                "product": "windows"
+            },
+            "detection": {
+                "selection": {
+                    "CommandLine|contains": extracted_ioc[:6]
+                },
+                "condition": "selection"
+            },
+            "level": "high" if any(t in ["attack.t1003.001", "attack.t1490"] for t in tags) else "medium"
+        }
+
+        yaml_content = yaml.dump(rule_dict, sort_keys=False, default_flow_style=False)
+        return yaml_content, rule_dict
 
 
 harvest_service = HarvestService()
