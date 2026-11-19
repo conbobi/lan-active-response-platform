@@ -311,6 +311,26 @@ class IncidentService(AbstractService[IncidentRepository]):
                         culprit_proc = p
                         break
 
+            # 2.1. Network Incident: match target IP to Remote Tools (AnyDesk, TeamViewer)
+            if not culprit_proc:
+                import socket
+                import re
+                ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', inc.description or "")
+                if ip_match:
+                    target_ip = ip_match.group(0)
+                    try:
+                        host_ptr = socket.gethostbyaddr(target_ip)[0].lower()
+                        if "anydesk" in host_ptr:
+                            any_proc = next((p for p in procs if "anydesk" in (p.name or "").lower()), None)
+                            if any_proc:
+                                culprit_proc = any_proc
+                        elif "teamviewer" in host_ptr:
+                            tv_proc = next((p for p in procs if "teamviewer" in (p.name or "").lower()), None)
+                            if tv_proc:
+                                culprit_proc = tv_proc
+                    except Exception:
+                        pass
+
             # 3. Third priority: common attack / shell / interpreter binaries
             if not culprit_proc:
                 common_attack_names = {
@@ -320,6 +340,11 @@ class IncidentService(AbstractService[IncidentRepository]):
                 for p in procs:
                     p_name = (p.name or "").lower()
                     if p_name in common_attack_names and is_eligible_culprit(p):
+                        # KHÔNG ĐƯỢC CHỌN SAFE PROCESS (như python3, node, bash, sh) làm thủ phạm nếu không có dấu hiệu độc hại
+                        if p_name in ("python3", "python", "node", "bash", "sh"):
+                            cmd = (p.cmdline or "").lower()
+                            if not p.is_suspicious and not any(pat in cmd for pat in ("/dev/tcp/", "nc -e", "socket.socket", "pty.spawn")):
+                                continue
                         culprit_proc = p
                         break
 
@@ -372,13 +397,16 @@ class IncidentService(AbstractService[IncidentRepository]):
             flow_res = await self.session.execute(flow_stmt)
             flows = list(flow_res.scalars().all())
             for fl in flows:
+                p_name = fl.process_name
+                if not p_name and culprit_dict and fl.pid and fl.pid == culprit_dict.get("pid"):
+                    p_name = culprit_dict.get("name")
                 network_indicators.append({
                     "dst_ip": fl.dst_ip,
                     "dst_port": fl.dst_port,
                     "protocol": fl.protocol,
                     "bytes_sent": fl.bytes_sent,
                     "packets_sent": fl.packets_sent,
-                    "process_name": culprit_dict["name"] if culprit_dict else "unknown"
+                    "process_name": p_name or "unknown"
                 })
 
         inc.culprit_process = culprit_dict

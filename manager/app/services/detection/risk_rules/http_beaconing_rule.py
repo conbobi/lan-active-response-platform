@@ -234,7 +234,23 @@ class HttpBeaconingRule(RiskRule):
         if not candidates:
             return 0.0, ""
 
-        top_candidate = max(candidates, key=lambda c: c["rhythm_score"])
+        # Loại trừ các IP thuộc về các dịch vụ Remote Access hợp lệ (AnyDesk, TeamViewer, RustDesk)
+        valid_candidates = []
+        for c in candidates:
+            c_ip = c["dst_ip"]
+            try:
+                ptr_name = socket.gethostbyaddr(c_ip)[0].lower()
+                if any(k in ptr_name for k in ("anydesk.com", "teamviewer.com", "rustdesk.com")):
+                    logger.info(f"http_beaconing: suppressed beaconing to legitimate remote access server {ptr_name} ({c_ip})")
+                    continue
+            except Exception:
+                pass
+            valid_candidates.append(c)
+
+        if not valid_candidates:
+            return 0.0, ""
+
+        top_candidate = max(valid_candidates, key=lambda c: c["rhythm_score"])
         dst_ip = top_candidate["dst_ip"]
         interval = top_candidate["mean_interval_sec"]
         cv = top_candidate["cv"]
