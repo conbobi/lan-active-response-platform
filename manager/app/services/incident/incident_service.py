@@ -51,28 +51,27 @@ async def _safe_trigger_ai_triage(incident_id: str):
     from app.models.incident import Incident
     from app.services.ai.ai_triage_service import AITriageService
 
-    logger.info(f"Hook: Triggering AI Triage for {incident_id}")
+    logger.info(f"Triggering AI Triage for incident {incident_id}")
     await asyncio.sleep(0.8)
 
-    for attempt in range(1, 6):
+    for attempt in range(1, 4):
         try:
             async with AsyncSessionLocal() as session:
                 inc = await session.get(Incident, incident_id)
                 if not inc:
-                    if attempt < 5:
+                    if attempt < 3:
                         logger.warning(
-                            f"Incident {incident_id} not found in DB yet (attempt {attempt}/5), retrying in 1.0s..."
+                            f"Incident {incident_id} not found in DB yet (attempt {attempt}/3), retrying in 1.0s..."
                         )
                         await asyncio.sleep(1.0)
                         continue
                     else:
                         logger.error(
-                            f"Incident {incident_id} not found after 5 attempts. Aborting AI triage."
+                            f"Incident {incident_id} not found after 3 attempts. Aborting AI triage."
                         )
                         return
 
                 service = AITriageService()
-                logger.info(f"Executing analyze_incident for {incident_id}...")
                 analysis = await service.analyze_incident(incident_id, session)
                 if analysis:
                     logger.info(f"AI triage completed successfully for incident {incident_id}")
@@ -80,8 +79,8 @@ async def _safe_trigger_ai_triage(incident_id: str):
                     logger.warning(f"AI triage returned no analysis for incident {incident_id}")
                 return
         except Exception as e:
-            logger.error(f"AI Triage failed: {e}", exc_info=True)
-            if attempt < 5:
+            logger.error(f"AI triage attempt {attempt} failed for incident {incident_id}: {e}", exc_info=True)
+            if attempt < 3:
                 await asyncio.sleep(1.0)
 
 
@@ -163,16 +162,13 @@ class IncidentService(AbstractService[IncidentRepository]):
             notes="Auto-generated incident on risk assessment threshold breach."
         )
         created = await self.repository.add(inc)
-        await self.session.commit()
-        await self.session.refresh(created)
+        await self.session.flush()
 
         await self.add_note(inc_id, f"Automated incident created due to risk score {risk_score}.", user="system")
-        await self.session.commit()
 
         # Fire-and-forget AI triage (không block incident creation)
         try:
             import asyncio
-            logger.info(f"Triggering AI Triage for incident {created.id}")
             asyncio.create_task(_safe_trigger_ai_triage(created.id))
         except Exception as e:
             logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
@@ -366,29 +362,20 @@ class IncidentService(AbstractService[IncidentRepository]):
                     "memory_percent": culprit_proc.memory_percent,
                     "is_suspicious": culprit_proc.is_suspicious
                 }
-                if culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid:
-                    if culprit_proc.parent_pid == 1:
+                if culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid and culprit_proc.parent_pid > 2:
+                    parent_proc = next((p for p in procs if p.pid == culprit_proc.parent_pid), None)
+                    if parent_proc:
                         parent_dict = {
-                            "pid": 1,
-                            "name": "systemd",
-                            "exe_path": "/usr/lib/systemd/systemd"
+                            "pid": parent_proc.pid,
+                            "name": parent_proc.name,
+                            "exe_path": parent_proc.exe_path or parent_proc.exe or ""
                         }
-                    elif culprit_proc.parent_pid < 100:
-                        parent_dict = None  # Không trace process nếu parent_pid < 100
                     else:
-                        parent_proc = next((p for p in procs if p.pid == culprit_proc.parent_pid), None)
-                        if parent_proc:
-                            parent_dict = {
-                                "pid": parent_proc.pid,
-                                "name": parent_proc.name,
-                                "exe_path": parent_proc.exe_path or parent_proc.exe or ""
-                            }
-                        else:
-                            parent_dict = {
-                                "pid": culprit_proc.parent_pid,
-                                "name": None,
-                                "exe_path": None
-                            }
+                        parent_dict = {
+                            "pid": culprit_proc.parent_pid,
+                            "name": None,
+                            "exe_path": None
+                        }
 
         # 3. Network indicators
         network_indicators: List[Dict[str, Any]] = []
@@ -439,14 +426,12 @@ class IncidentService(AbstractService[IncidentRepository]):
             if parent_name == c_name:
                 parent_name = None
 
-        if parent_pid == 1 or parent_name == "systemd":
-            parts.append("được khởi chạy bởi `systemd` (PID 1)")
-        elif parent_name and parent_pid:
+        if parent_name and parent_pid:
             parts.append(f"được khởi chạy bởi `{parent_name}` (PID {parent_pid})")
         elif parent_name:
             parts.append(f"được khởi chạy bởi `{parent_name}`")
-        elif parent_pid and parent_pid >= 100:
-            parts.append(f"có parent PID {parent_pid}")
+        elif parent_pid:
+            parts.append(f"có parent PID {parent_pid} (không xác định tên)")
 
         c_exe = culprit.get("exe_path") or culprit.get("exe")
         if c_exe:
