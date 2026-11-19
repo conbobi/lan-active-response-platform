@@ -25,6 +25,7 @@ from app.repositories.flow_repository import FlowRepository
 from app.models.event import Event
 from app.repositories.event_repository import EventRepository
 from app.models.agent import Agent
+from app.models.incident import Incident
 from app.models.response_action import ResponseAction
 from app.schemas.enums import IncidentSeverity, AgentStatus, CommandStatus
 from app.services.common.audit_log_service import ActionAuditLogService
