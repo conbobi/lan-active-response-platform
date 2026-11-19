@@ -380,10 +380,12 @@ class IncidentService(AbstractService[IncidentRepository]):
         # 3. Network indicators
         network_indicators: List[Dict[str, Any]] = []
         if agent_id:
-            flow_stmt = select(Flow).where(Flow.agent_id == agent_id).order_by(Flow.created_at.desc()).limit(10)
+            flow_stmt = select(Flow).where(Flow.agent_id == agent_id).order_by(Flow.created_at.desc()).limit(20)
             flow_res = await self.session.execute(flow_stmt)
             flows = list(flow_res.scalars().all())
             for fl in flows:
+                if fl.dst_ip in ("0.0.0.0", "127.0.0.1", "::1", "localhost"):
+                    continue
                 p_name = fl.process_name
                 if not p_name and culprit_dict and fl.pid and fl.pid == culprit_dict.get("pid"):
                     p_name = culprit_dict.get("name")
@@ -395,6 +397,8 @@ class IncidentService(AbstractService[IncidentRepository]):
                     "packets_sent": fl.packets_sent,
                     "process_name": p_name or "unknown"
                 })
+                if len(network_indicators) >= 10:
+                    break
 
         inc.culprit_process = culprit_dict
         inc.parent_process = parent_dict

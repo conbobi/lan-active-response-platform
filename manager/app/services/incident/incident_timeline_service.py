@@ -82,70 +82,120 @@ class IncidentTimelineService:
             proc_res = await self.session.execute(proc_stmt)
             procs = list(proc_res.scalars().all())
 
-            # Find culprit process (prefer suspicious non-kernel, or matching name in incident description)
-            desc_lower = (incident.description or "").lower()
-            kernel_exclusions = {
-                "kthreadd", "kworker", "rcu", "swapper",
-                "migration", "ksoftirqd", "psimon", "cpuhp", "kdevtmpfs", "kauditd",
-                "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd"
-            }
-            def _is_eligible(proc):
-                if not proc or proc.pid is None:
-                    return False
-                if proc.pid == 2:
-                    return False
-                return not any(k in (proc.name or "").lower() for k in kernel_exclusions)
+            # If incident already has culprit_process or parent_process (e.g. from enriched incident):
+            culprit_dict = getattr(incident, "culprit_process", None)
+            parent_dict = getattr(incident, "parent_process", None)
 
-            # 1. Suspicious userland process
-            for p in procs:
-                if p.is_suspicious and _is_eligible(p):
-                    culprit_proc = p
-                    break
+            if culprit_dict and culprit_dict.get("pid"):
+                c_pid = culprit_dict.get("pid")
+                culprit_proc = next((p for p in procs if p.pid == c_pid), None)
+                if not culprit_proc:
+                    culprit_proc = ProcessInfo(
+                        id=f"p_{c_pid}",
+                        agent_id=agent_id,
+                        pid=c_pid,
+                        name=culprit_dict.get("name"),
+                        cmdline=culprit_dict.get("cmdline"),
+                        exe_path=culprit_dict.get("exe_path"),
+                        is_suspicious=culprit_dict.get("is_suspicious", False)
+                    )
 
-            # 2. Process mentioned in description
-            if not culprit_proc:
-                for p in procs:
-                    p_name = (p.name or "").lower()
-                    if p_name and p_name in desc_lower and _is_eligible(p):
-                        culprit_proc = p
-                        break
-
-            # 3. Known shell / attack binaries
-            if not culprit_proc:
-                common_attack_names = {
-                    "bash", "sh", "python", "python3", "nc", "ncat", "netcat",
-                    "socat", "curl", "wget", "flask", "node", "php"
-                }
-                for p in procs:
-                    if (p.name or "").lower() in common_attack_names and _is_eligible(p):
-                        culprit_proc = p
-                        break
-
-            # 4. Fallback: most recent valid userland process (NEVER kernel)
-            if not culprit_proc:
-                for p in procs:
-                    if _is_eligible(p):
-                        culprit_proc = p
-                        break
-
-            if culprit_proc and culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid:
-                if culprit_proc.parent_pid == 1:
+            if parent_dict and parent_dict.get("pid"):
+                p_pid = parent_dict.get("pid")
+                if p_pid == 1:
                     parent_proc = ProcessInfo(
                         id="p_systemd",
-                        agent_id=culprit_proc.agent_id,
+                        agent_id=agent_id,
                         pid=1,
                         name="systemd",
                         exe="/usr/lib/systemd/systemd",
                         exe_path="/usr/lib/systemd/systemd"
                     )
-                elif culprit_proc.parent_pid < 100:
-                    parent_proc = None  # Không trace process nếu parent_pid < 100
                 else:
-                    # Find parent process
+                    parent_proc = next((p for p in procs if p.pid == p_pid), None)
+
+            # Fallback heuristic if not enriched
+            if not culprit_proc:
+                desc_lower = (incident.description or "").lower()
+                kernel_exclusions = {
+                    "kthreadd", "kworker", "rcu", "swapper",
+                    "migration", "ksoftirqd", "psimon", "cpuhp", "kdevtmpfs", "kauditd",
+                    "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd"
+                }
+                def _is_eligible(proc):
+                    if not proc or proc.pid is None:
+                        return False
+                    if proc.pid == 2:
+                        return False
+                    return not any(k in (proc.name or "").lower() for k in kernel_exclusions)
+
+                # 1. Suspicious userland process
+                for p in procs:
+                    if p.is_suspicious and _is_eligible(p):
+                        culprit_proc = p
+                        break
+
+                # 2. Check reverse DNS of IP in description for known admin/remote desktop (e.g. AnyDesk)
+                if not culprit_proc:
+                    import socket
+                    target_ips = re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", incident.description or "")
+                    target_proc_name = None
+                    for ip in target_ips:
+                        try:
+                            hostname, _, _ = socket.gethostbyaddr(ip)
+                            if any(d in hostname for d in ["anydesk.com", "teamviewer.com", "rustdesk.com"]):
+                                target_proc_name = "anydesk"
+                                break
+                        except Exception:
+                            pass
+                    if target_proc_name:
+                        for p in procs:
+                            if (p.name or "").lower() == target_proc_name:
+                                culprit_proc = p
+                                break
+
+                # 3. Process mentioned in description
+                if not culprit_proc:
                     for p in procs:
-                        if p.pid == culprit_proc.parent_pid:
-                            parent_proc = p
+                        p_name = (p.name or "").lower()
+                        if p_name and p_name in desc_lower and _is_eligible(p):
+                            culprit_proc = p
                             break
+
+                # 4. Known shell / attack binaries
+                if not culprit_proc:
+                    common_attack_names = {
+                        "bash", "sh", "nc", "ncat", "netcat", "socat"
+                    }
+                    for p in procs:
+                        if (p.name or "").lower() in common_attack_names and _is_eligible(p):
+                            culprit_proc = p
+                            break
+
+                # 5. Fallback: most recent valid userland process (NEVER kernel)
+                if not culprit_proc:
+                    for p in procs:
+                        if _is_eligible(p):
+                            culprit_proc = p
+                            break
+
+                if culprit_proc and culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid and not parent_proc:
+                    if culprit_proc.parent_pid == 1:
+                        parent_proc = ProcessInfo(
+                            id="p_systemd",
+                            agent_id=culprit_proc.agent_id,
+                            pid=1,
+                            name="systemd",
+                            exe="/usr/lib/systemd/systemd",
+                            exe_path="/usr/lib/systemd/systemd"
+                        )
+                    elif culprit_proc.parent_pid < 100:
+                        parent_proc = None
+                    else:
+                        for p in procs:
+                            if p.pid == culprit_proc.parent_pid:
+                                parent_proc = p
+                                break
 
             if culprit_proc:
                 p_time = culprit_proc.created_at or inc_time
@@ -194,19 +244,25 @@ class IncidentTimelineService:
                 select(Flow)
                 .where(Flow.agent_id == agent_id)
                 .order_by(Flow.created_at.desc())
-                .limit(5)
+                .limit(10)
             )
             flow_res = await self.session.execute(flow_stmt)
             flows = list(flow_res.scalars().all())
 
             for fl in flows:
+                if fl.dst_ip in ("0.0.0.0", "127.0.0.1", "::1", "localhost"):
+                    continue
                 flows_found = True
                 fl_time = fl.start_time or fl.created_at or (inc_time - timedelta(seconds=5))
                 is_susp_port = fl.dst_port in (4444, 5555, 1337, 8080, 23, 6667)
+                flow_pid = fl.pid
+                if not flow_pid and culprit_proc and fl.process_name and fl.process_name.lower() == (culprit_proc.name or "").lower():
+                    flow_pid = culprit_proc.pid
+
                 timeline.append({
                     "time": fl_time.isoformat() if hasattr(fl_time, "isoformat") else str(fl_time),
                     "type": "network",
-                    "severity": "critical" if is_susp_port else "warning",
+                    "severity": "critical" if is_susp_port else "info",
                     "title": f"Outbound connection to {fl.dst_ip}:{fl.dst_port}",
                     "details": {
                         "dst_ip": fl.dst_ip,
@@ -214,24 +270,9 @@ class IncidentTimelineService:
                         "protocol": fl.protocol,
                         "bytes_sent": fl.bytes_sent,
                         "packets_sent": fl.packets_sent,
-                        "pid": culprit_proc.pid if culprit_proc else None
+                        "pid": flow_pid
                     }
                 })
-
-        if not flows_found and ("c2" in desc_lower or "network" in desc_lower or "port" in desc_lower):
-            t_net = inc_time - timedelta(seconds=4)
-            timeline.append({
-                "time": t_net.isoformat() if hasattr(t_net, "isoformat") else str(t_net),
-                "type": "network",
-                "severity": "warning",
-                "title": "Outbound connection to 192.168.10.55:4444",
-                "details": {
-                    "dst_ip": "192.168.10.55",
-                    "dst_port": 4444,
-                    "protocol": "TCP",
-                    "pid": culprit_proc.pid if culprit_proc else 4128
-                }
-            })
 
         # ------------------------------------------------------------------
         # 3. RULE TRIGGERS & RISK FACTORS

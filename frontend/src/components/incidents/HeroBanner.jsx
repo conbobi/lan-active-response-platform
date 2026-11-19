@@ -79,14 +79,23 @@ export default function HeroBanner({
     return parts.join(' ');
   };
 
+  const isFalsePositive = incident.status === 'false_positive' || incident.label === 'false_positive';
+  const isResolved = incident.status === 'resolved' || incident.status === 'closed' || incident.label === 'benign';
+  const isInactive = isFalsePositive || isResolved;
+
   const severityColor =
-    incident.severity === 'critical'
+    isFalsePositive
+      ? '#9ca3af'
+      : incident.severity === 'critical'
       ? 'var(--error)'
       : incident.severity === 'high'
       ? 'var(--warning)'
       : 'var(--primary)';
 
   const mitreTags = useMemo(() => {
+    if (isInactive) {
+      return [];
+    }
     if (Array.isArray(incident.mitreTags) && incident.mitreTags.length > 0) {
       return incident.mitreTags;
     }
@@ -106,7 +115,7 @@ export default function HeroBanner({
       return [{ id: 'T1071', name: 'Application Layer Protocol' }];
     }
     return [{ id: 'T1059', name: 'Command Execution' }];
-  }, [incident]);
+  }, [incident, isInactive]);
 
   return (
     <div
@@ -141,7 +150,11 @@ export default function HeroBanner({
               }}
             >
               <FiAlertTriangle size={12} />
-              {incident.severity} THREAT
+              {isFalsePositive
+                ? 'FALSE POSITIVE'
+                : isResolved
+                ? 'RESOLVED'
+                : `${incident.severity} THREAT`}
             </span>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
               ID: <strong style={{ color: 'var(--text-secondary)' }}>{incident.id}</strong>
@@ -207,38 +220,57 @@ export default function HeroBanner({
 
         {/* Action Quick Buttons */}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {isIsolated ? (
-            <Button
-              variant="outline"
-              size="sm"
-              iconLeft={<FiUnlock size={14} />}
-              disabled={actionLoading}
-              onClick={() => onAction && onAction('unisolate')}
+          {isInactive ? (
+            <span
+              style={{
+                fontSize: '0.85rem',
+                color: 'var(--text-tertiary)',
+                alignSelf: 'center',
+                fontStyle: 'italic',
+                padding: '0.25rem 0.5rem',
+                background: 'rgba(255, 255, 255, 0.04)',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px dashed var(--border)'
+              }}
             >
-              Undo Isolate
-            </Button>
+              ✓ Sự cố {isFalsePositive ? 'được phân loại Báo Động Giả (False Positive)' : 'đã được xử lý'} — Không cần can thiệp.
+            </span>
           ) : (
-            <Button
-              variant="danger"
-              size="sm"
-              iconLeft={<FiLock size={14} />}
-              disabled={actionLoading}
-              onClick={() => onAction && onAction('isolate')}
-            >
-              Isolate Host
-            </Button>
-          )}
+            <>
+              {isIsolated ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  iconLeft={<FiUnlock size={14} />}
+                  disabled={actionLoading}
+                  onClick={() => onAction && onAction('unisolate')}
+                >
+                  Undo Isolate
+                </Button>
+              ) : (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  iconLeft={<FiLock size={14} />}
+                  disabled={actionLoading}
+                  onClick={() => onAction && onAction('isolate')}
+                >
+                  Isolate Host
+                </Button>
+              )}
 
-          {culprit.pid && (
-            <Button
-              variant="warning"
-              size="sm"
-              iconLeft={<FiSlash size={14} />}
-              disabled={actionLoading}
-              onClick={() => onAction && onAction('kill_process_tree', { pid: culprit.pid, process_name: culprit.name })}
-            >
-              Kill Tree ({culprit.name})
-            </Button>
+              {culprit && culprit.pid && (
+                <Button
+                  variant="warning"
+                  size="sm"
+                  iconLeft={<FiSlash size={14} />}
+                  disabled={actionLoading}
+                  onClick={() => onAction && onAction('kill_process_tree', { pid: culprit.pid, process_name: culprit.name })}
+                >
+                  Kill Tree ({culprit.name})
+                </Button>
+              )}
+            </>
           )}
 
           <Button
@@ -246,7 +278,7 @@ export default function HeroBanner({
             size="sm"
             onClick={() => {
               const targetAgent = incident.agentId || incident.agent_id || incident.agent_hostname || '';
-              const pid = culprit.pid || '';
+              const pid = culprit?.pid || '';
               navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid ? `&pid=${pid}` : ''}`);
             }}
             title="Open culprit process in interactive root cause tree"
