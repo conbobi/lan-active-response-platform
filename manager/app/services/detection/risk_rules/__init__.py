@@ -18,10 +18,11 @@ from app.services.detection.risk_rules.dns_tunneling_rule import DnsTunnelingRul
 from app.services.detection.risk_rules.http_beaconing_rule import HttpBeaconingRule
 from app.services.detection.risk_rules.yara_match_rule import YaraMatchRule
 from app.services.detection.risk_rules.ml_anomaly_rule import MLAnomalyRule
+from app.services.detection.risk_rules.web_attack_rule import WebAttackRule
 
 
 def create_default_registry() -> RiskRuleRegistry:
-    """Instantiate a RiskRuleRegistry populated with all 18 dynamic risk rules."""
+    """Instantiate a RiskRuleRegistry populated with all 19 dynamic risk rules."""
     registry = RiskRuleRegistry()
     registry.register(CpuSpikeRule())
     registry.register(SuspiciousProcessRule())
@@ -41,6 +42,7 @@ def create_default_registry() -> RiskRuleRegistry:
     registry.register(HttpBeaconingRule())
     registry.register(YaraMatchRule())
     registry.register(MLAnomalyRule())
+    registry.register(WebAttackRule())
     return registry
 
 
@@ -66,4 +68,5 @@ __all__ = [
     "HttpBeaconingRule",
     "YaraMatchRule",
     "MLAnomalyRule",
+    "WebAttackRule",
 ]

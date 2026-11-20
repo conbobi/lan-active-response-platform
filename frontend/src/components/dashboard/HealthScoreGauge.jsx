@@ -146,15 +146,26 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
     // 1 critical → 25, 2 critical → 10
     level = 'critical';
   }
-  // PRIORITY 2: Multiple mediums
-  else if (unresolvedMedium.length >= 3) {
-    healthScore = Math.min(healthScore, 55);
+  // PRIORITY 2: Medium threats on live endpoints
+  else if (unresolvedMedium.length > 0) {
+    if (unresolvedMedium.length >= 3) {
+      healthScore = 55;
+    } else if (unresolvedMedium.length === 2) {
+      healthScore = 65;
+    } else {
+      const maxMediumScore = Math.max(...unresolvedMedium.map(getScore));
+      healthScore = Math.max(50, Math.round(100 - maxMediumScore * 0.5));
+    }
     level = 'warning';
   }
   // PRIORITY 3: Offline agents
   else if (offlineAgents >= 2) {
     healthScore = Math.min(healthScore, 70);
     level = 'warning';
+  }
+  else if (offlineAgents === 1) {
+    healthScore = 90;
+    level = 'safe';
   }
 
   // 7. Loading skeleton
@@ -206,7 +217,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
           )}
         </div>
 
-        {unresolvedCritical.length > 0 && (
+        {unresolvedCritical.length > 0 ? (
           <div style={{
             background: 'var(--critical-dim)',
             border: '1px solid rgba(255, 123, 114, 0.35)',
@@ -218,15 +229,27 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
               🚨 {unresolvedCritical.length} critical attack{unresolvedCritical.length > 1 ? 's' : ''} chưa xử lý
             </div>
           </div>
-        )}
-
-        {/* Critical Incidents Context List */}
-        {unresolvedCritical.length > 0 && (
-          <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', textAlign: 'left' }}>
-            <div style={{ color: 'var(--critical)', fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.875rem' }}>
-              ⚠️ Cần xử lý NGAY:
+        ) : unresolvedMedium.length > 0 ? (
+          <div style={{
+            background: 'var(--warning-dim)',
+            border: '1px solid rgba(210, 153, 34, 0.35)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '0.75rem 1rem',
+            marginBottom: '1rem',
+          }}>
+            <div style={{ color: 'var(--warning)', fontWeight: 600, fontSize: '0.9rem' }}>
+              ⚠️ {unresolvedMedium.length} cảnh báo đe dọa mức trung bình chưa xử lý
             </div>
-            {unresolvedCritical.slice(0, 3).map(incident => {
+          </div>
+        ) : null}
+
+        {/* Incidents Context List (Critical or Medium) */}
+        {(unresolvedCritical.length > 0 || unresolvedMedium.length > 0) && (
+          <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', textAlign: 'left' }}>
+            <div style={{ color: unresolvedCritical.length > 0 ? 'var(--critical)' : 'var(--warning)', fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.875rem' }}>
+              {unresolvedCritical.length > 0 ? '⚠️ Cần xử lý NGAY:' : '⚠️ Sự cố cần xem xét:'}
+            </div>
+            {(unresolvedCritical.length > 0 ? unresolvedCritical : unresolvedMedium).slice(0, 3).map(incident => {
               const score = getScore(incident);
               const agentId = incident.agent_id || incident.agentId || 'Unknown Host';
               const attackType = extractAttackType(incident);

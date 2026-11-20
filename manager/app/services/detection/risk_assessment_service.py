@@ -61,6 +61,7 @@ IOC_RULES = {
     "threat_intel_match",
     "http_beaconing",
     "dns_tunneling",
+    "web_attack",
 }
 ANOMALY_CAP = 35.0
 

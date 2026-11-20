@@ -16,6 +16,7 @@ from app.repositories.system_setting_repository import SystemSettingRepository
 from app.repositories.detection_rule_repository import DetectionRuleRepository
 from app.repositories.process_group_repository import ProcessGroupRepository
 from app.repositories.process_chain_rule_repository import ProcessChainRuleRepository
+from app.repositories.web_access_log_repository import WebAccessLogRepository
 
 __all__ = [
     "AbstractRepository",
@@ -37,5 +38,6 @@ __all__ = [
     "DetectionRuleRepository",
     "ProcessGroupRepository",
     "ProcessChainRuleRepository",
+    "WebAccessLogRepository",
 ]
 

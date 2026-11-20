@@ -28,6 +28,7 @@ from app.models.response_policy import ResponsePolicy
 from app.models.ai_analysis import AIAnalysis
 from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
+from app.models.web_access_log import WebAccessLog
 
 __all__ = [
     "Base",
@@ -63,4 +64,5 @@ __all__ = [
     "AIAnalysis",
     "RuleCandidate",
     "RuleVersion",
+    "WebAccessLog",
 ]

@@ -298,8 +298,10 @@ export default function Dashboard() {
                             </div>
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
                                 Target Host: <strong style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.agent_id || criticalActiveIncident.agentId || 'Unknown Host'}</strong>
-                                {(criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name) && (
+                                {(criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name) ? (
                                     <span> • Culprit: <code style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name}</code> (PID {criticalActiveIncident.culprit_process?.pid || criticalActiveIncident.culpritProcess?.pid || '—'})</span>
+                                ) : (
+                                    <span> • Phân loại: <code style={{ color: 'var(--text-secondary)' }}>Host / Network Telemetry (Chưa gắn PID)</code></span>
                                 )}
                             </div>
                         </div>

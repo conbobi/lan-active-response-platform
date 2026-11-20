@@ -14,6 +14,7 @@ from fim import FileIntegrityMonitor
 from auth_monitor import global_auth_monitor
 from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
+from web_log_monitor import web_log_monitor_task
 
 
 def _resolve_manager_url() -> str:
@@ -775,6 +776,7 @@ async def main_agent():
                     send_process_list(ws),
                     send_flow_stats(ws),
                     send_fim_alerts(ws),
+                    web_log_monitor_task(ws),
                     watchdog_task(),
                 )
         except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError, OSError) as e:

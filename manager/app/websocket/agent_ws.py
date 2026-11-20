@@ -33,6 +33,8 @@ from app.schemas.incident import IncidentCreate
 from app.services.incident.incident_service import IncidentService
 from app.models.auth_event import AuthEvent
 from app.repositories.auth_event_repository import AuthEventRepository
+from app.models.web_access_log import WebAccessLog
+from app.repositories.web_access_log_repository import WebAccessLogRepository
 from app.core.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -648,6 +650,110 @@ async def _handle_yara_scan_alert(agent_id: str, data: dict, session: AsyncSessi
     return None
 
 
+async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
+    payload = data.get("payload", {})
+    if not isinstance(payload, dict):
+        return None
+
+    target_agent_id = payload.get("agent_id", agent_id)
+    src_ip = str(payload.get("src_ip") or payload.get("client_ip") or "unknown")[:64]
+    host = str(payload.get("host") or "")[:128]
+    method = str(payload.get("method") or payload.get("http_method") or "GET").upper()[:16]
+    path = str(payload.get("path") or payload.get("url") or "/")[:1024]
+    user_agent = str(payload.get("user_agent") or "")[:512]
+
+    try:
+        status_code = int(payload.get("status_code") or payload.get("status") or 200)
+    except (ValueError, TypeError):
+        status_code = 200
+
+    raw_message = str(payload.get("raw_message") or payload.get("raw_log") or "")
+
+    # Parse timestamp
+    now_dt = datetime.now(timezone.utc)
+    ts_val = payload.get("timestamp")
+    if ts_val:
+        try:
+            if isinstance(ts_val, (int, float)):
+                ts_dt = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+            elif isinstance(ts_val, str):
+                ts_dt = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+            else:
+                ts_dt = now_dt
+        except Exception:
+            ts_dt = now_dt
+    else:
+        ts_dt = now_dt
+
+    # 1. Persist to database
+    web_repo = WebAccessLogRepository(session)
+    log_record = WebAccessLog(
+        id=f"wlog_{uuid.uuid4().hex[:12]}",
+        agent_id=target_agent_id,
+        src_ip=src_ip,
+        host=host,
+        method=method,
+        path=path,
+        user_agent=user_agent,
+        status_code=status_code,
+        raw_message=raw_message,
+        timestamp=ts_dt,
+        created_at=now_dt
+    )
+    await web_repo.add(log_record)
+
+    # 2. Evaluate single log with rule engine
+    normalized_log = {
+        "agent_id": target_agent_id,
+        "src_ip": src_ip,
+        "host": host,
+        "method": method,
+        "path": path,
+        "user_agent": user_agent,
+        "status_code": status_code,
+        "raw_message": raw_message,
+        "timestamp": ts_dt.isoformat()
+    }
+    matches = rule_engine.evaluate_web_log(normalized_log)
+    if matches:
+        event_repo = EventRepository(session)
+        sev_map = {
+            "low": IncidentSeverity.LOW,
+            "medium": IncidentSeverity.MEDIUM,
+            "high": IncidentSeverity.HIGH,
+            "critical": IncidentSeverity.CRITICAL,
+        }
+        for m in matches:
+            evt_record = Event(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                agent_id=target_agent_id,
+                event_type="WEB_ATTACK_DETECTED",
+                severity=sev_map.get(m.severity.lower(), IncidentSeverity.HIGH),
+                source="NDR_WEB_LOG",
+                details={**normalized_log, "rule_id": m.rule_id, "detail": m.detail},
+                processed=False,
+                created_at=now_dt
+            )
+            await event_repo.add(evt_record)
+
+    # 3. Trigger Risk Assessment & AI Triage
+    risk_service = RiskAssessmentService(session)
+    telemetry = {
+        "agent_id": target_agent_id,
+        "web_log": normalized_log,
+        "web_logs": [normalized_log]
+    }
+    rec = await risk_service.process_risk(agent_id=target_agent_id, data=telemetry)
+    if hasattr(rec, "incident") and rec.incident:
+        logger.info(f"Hook: Triggering AI Triage for web attack incident {rec.incident.id}")
+        asyncio.create_task(_run_ai_triage(rec.incident.id))
+
+    logger.info(f"Recorded WEB_ACCESS_LOG for agent '{target_agent_id}' from {src_ip} {method} {path} (risk: {rec.score if rec else 0.0})")
+    if data.get("wait_ack", False):
+        return {"status": "ack", "message": "Web access log processed", "score": rec.score if rec else 0.0}
+    return None
+
+
 MESSAGE_HANDLERS = {
     "HEARTBEAT": _handle_heartbeat,
     "PROCESS_LIST": _handle_process_list,
@@ -657,6 +763,7 @@ MESSAGE_HANDLERS = {
     "COMMAND_ACK": _handle_command_ack,
     "AUTH_EVENT": _handle_auth_event,
     "YARA_SCAN_ALERT": _handle_yara_scan_alert,
+    "WEB_ACCESS_LOG": _handle_web_access_log,
 }
 
 
