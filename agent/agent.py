@@ -179,15 +179,33 @@ def is_process_suspicious(name: str, cmdline: str, exe: str = "") -> bool:
 KERNEL_SYSTEM_EXCLUSIONS = {
     "kthreadd", "kworker", "systemd", "migration", "rcu_sched",
     "ksoftirqd", "psimon", "swapper", "init", "cpuhp", "kdevtmpfs",
-    "kauditd", "khungtaskd", "oom_reaper", "kblockd"
+    "kauditd", "khungtaskd", "oom_reaper", "kblockd", "scsi_eh", "scsi_tmf",
+    "jbd2", "irq/", "card1-crtc", "watchdog"
 }
+
+
+def is_kernel_thread(pid, ppid, name, exe, cmdline) -> bool:
+    """Xác định xem tiến trình có phải là Linux Kernel Thread hay không."""
+    if pid is not None and pid in (0, 1, 2):
+        return True
+    if ppid == 2:
+        return True
+    name_lower = (name or "").lower()
+    if name_lower.startswith(("scsi_", "kworker", "rcu", "migration", "cpuhp", "jbd2", "ext4", "watchdog", "card", "irq/")):
+        return True
+    if any(k in name_lower for k in KERNEL_SYSTEM_EXCLUSIONS):
+        return True
+    # Kernel threads trong Linux không có executable file trên disk và không có user cmdline
+    if not exe and (not cmdline or cmdline.strip() == f"[{name}]" or cmdline.strip() == name):
+        return True
+    return False
 
 
 def collect_process_info():
     """
     Thu thập thông tin toàn bộ tiến trình đang chạy trên host agent.
     Bao gồm PID, parent PID (ppid), name, exe, cmdline, cpu/memory %, và đánh dấu is_suspicious.
-    Lọc bỏ các tiến trình nhân (kernel threads) như kthreadd, kworker.
+    Lọc bỏ các tiến trình nhân (kernel threads) như kthreadd, kworker, scsi_eh, jbd2.
     """
     processes = []
     try:
@@ -204,11 +222,8 @@ def collect_process_info():
                 cmdline_list = info.get('cmdline') or []
                 cmdline = " ".join(cmdline_list) if isinstance(cmdline_list, list) else str(cmdline_list)
                 
-                # Bỏ qua kernel threads (PID <= 2 hoặc không có cmdline/exe và tên thuộc kernel threads)
-                name_lower = name.lower()
-                if pid is not None and (pid <= 2 or (pid < 100 and not cmdline and not exe)):
-                    continue
-                if any(k in name_lower for k in KERNEL_SYSTEM_EXCLUSIONS) and not cmdline:
+                # Bỏ qua hoàn toàn các kernel threads
+                if is_kernel_thread(pid, ppid, name, exe, cmdline):
                     continue
 
                 cpu_pct = float(info.get('cpu_percent') or 0.0)

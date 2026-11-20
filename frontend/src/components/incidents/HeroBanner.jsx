@@ -4,6 +4,7 @@ import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import InfoTooltip from '../ui/InfoTooltip';
 import { TOOLTIPS } from '../../constants/tooltips';
+import { isKernelOrSystem } from '../../constants/processExclusions';
 import {
   FiAlertTriangle,
   FiShield,
@@ -114,7 +115,10 @@ export default function HeroBanner({
     if (text.toLowerCase().includes('c2') || text.toLowerCase().includes('beacon')) {
       return [{ id: 'T1071', name: 'Application Layer Protocol' }];
     }
-    return [{ id: 'T1059', name: 'Command Execution' }];
+    if (culprit && !isKernelOrSystem(culprit)) {
+      return [{ id: 'T1059', name: 'Command Execution' }];
+    }
+    return [];
   }, [incident, isInactive]);
 
   return (
@@ -259,7 +263,7 @@ export default function HeroBanner({
                 </Button>
               )}
 
-              {culprit && culprit.pid && (
+              {culprit && culprit.pid && !isKernelOrSystem(culprit) && (
                 <Button
                   variant="warning"
                   size="sm"

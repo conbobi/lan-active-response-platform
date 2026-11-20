@@ -31,6 +31,14 @@ class KillProcessTreeCommand(BaseCommand):
                     }
                 if psutil.pid_exists(target_pid):
                     parent = psutil.Process(target_pid)
+                    p_name = (parent.name() or "").lower()
+                    if parent.ppid() == 2 or p_name.startswith(("scsi_", "kworker", "rcu", "migration", "cpuhp", "jbd2", "ext4", "watchdog", "card", "irq/")):
+                        logger.warning(f"Refusing to kill kernel thread '{p_name}' (PID {target_pid})")
+                        return {
+                            "status": "error",
+                            "message": f"Refusing to kill kernel thread '{p_name}' (PID {target_pid})",
+                            "killed_pids": [],
+                        }
                     children = parent.children(recursive=True)
 
                     # Kill children first in reverse order (bottom-up) to avoid orphan/zombie processes

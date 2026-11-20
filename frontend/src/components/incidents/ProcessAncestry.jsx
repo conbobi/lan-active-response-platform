@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import api from '../../api/api';
+import { isKernelOrSystem } from '../../constants/processExclusions';
 import {
   FiTerminal,
   FiSlash,
@@ -130,7 +131,7 @@ export default function ProcessAncestry({
           <Button
             variant="warning"
             size="sm"
-            disabled={actionLoading || !culpritPid}
+            disabled={actionLoading || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
             iconLeft={<FiSlash size={13} />}
             onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
           >
@@ -139,7 +140,7 @@ export default function ProcessAncestry({
           <Button
             variant="danger"
             size="sm"
-            disabled={actionLoading || !culpritPid}
+            disabled={actionLoading || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
             iconLeft={<FiLayers size={13} />}
             onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
           >

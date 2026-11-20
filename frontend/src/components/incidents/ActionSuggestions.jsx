@@ -4,6 +4,7 @@ import useActions from '../../hooks/useActions';
 import ActionTimeline from '../actions/ActionTimeline';
 import AISuggestionPanel from './AISuggestionPanel';
 import Button from '../ui/Button';
+import { isKernelOrSystem } from '../../constants/processExclusions';
 import {
   FiLock,
   FiSlash,
@@ -29,9 +30,9 @@ export default function ActionSuggestions({
     handleUndoAll,
   } = useActions({ incidentId: incident?.id });
 
-  const culprit = incident?.culpritProcess || { name: 'key_test.exe', pid: 4128 };
-  const networkIndicators = incident?.networkIndicators || [];
-  const targetIp = networkIndicators[0]?.dst_ip || (incident?.description?.includes('4444') ? '192.168.10.55' : null);
+  const culprit = incident?.culpritProcess || incident?.culprit_process || null;
+  const networkIndicators = incident?.networkIndicators || incident?.network_indicators || [];
+  const targetIp = networkIndicators[0]?.dst_ip || null;
 
   // Generate intelligent suggestions based on threat context
   const suggestions = [];
@@ -39,7 +40,7 @@ export default function ActionSuggestions({
   if (!isIsolated) {
     suggestions.push({
       id: 'isolate_host',
-      title: `Cô lập mạng máy trạm (${incident?.agentId})`,
+      title: `Cô lập mạng máy trạm (${incident?.agentId || incident?.agent_id || 'Agent'})`,
       description: 'Chặn toàn bộ luồng lưu thông ngoại trừ kết nối quản trị WebSocket tới EDR Manager để ngăn phát tán mã độc.',
       actionType: 'isolate',
       params: {},
@@ -49,7 +50,7 @@ export default function ActionSuggestions({
     });
   }
 
-  if (culprit.pid) {
+  if (culprit && culprit.pid && !isKernelOrSystem(culprit)) {
     suggestions.push({
       id: 'kill_tree',
       title: `Tiêu diệt cây tiến trình: ${culprit.name} (PID ${culprit.pid})`,

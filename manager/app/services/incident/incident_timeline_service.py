@@ -15,7 +15,7 @@ from app.models.risk_score import RiskScoreRecord
 from app.models.response_action import ResponseAction
 from app.core.exceptions import NotFoundError
 
-logger = logging.getLogger(__name__)
+from app.services.incident.incident_service import is_eligible_culprit
 
 
 def _parse_factors(description: str, factors_dict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -86,7 +86,7 @@ class IncidentTimelineService:
             culprit_dict = getattr(incident, "culprit_process", None)
             parent_dict = getattr(incident, "parent_process", None)
 
-            if culprit_dict and culprit_dict.get("pid"):
+            if culprit_dict and culprit_dict.get("pid") is not None:
                 c_pid = culprit_dict.get("pid")
                 culprit_proc = next((p for p in procs if p.pid == c_pid), None)
                 if not culprit_proc:
@@ -100,7 +100,7 @@ class IncidentTimelineService:
                         is_suspicious=culprit_dict.get("is_suspicious", False)
                     )
 
-            if parent_dict and parent_dict.get("pid"):
+            if parent_dict and parent_dict.get("pid") is not None:
                 p_pid = parent_dict.get("pid")
                 if p_pid == 1:
                     parent_proc = ProcessInfo(
@@ -117,21 +117,10 @@ class IncidentTimelineService:
             # Fallback heuristic if not enriched
             if not culprit_proc:
                 desc_lower = (incident.description or "").lower()
-                kernel_exclusions = {
-                    "kthreadd", "kworker", "rcu", "swapper",
-                    "migration", "ksoftirqd", "psimon", "cpuhp", "kdevtmpfs", "kauditd",
-                    "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd"
-                }
-                def _is_eligible(proc):
-                    if not proc or proc.pid is None:
-                        return False
-                    if proc.pid == 2:
-                        return False
-                    return not any(k in (proc.name or "").lower() for k in kernel_exclusions)
 
                 # 1. Suspicious userland process
                 for p in procs:
-                    if p.is_suspicious and _is_eligible(p):
+                    if p.is_suspicious and is_eligible_culprit(p):
                         culprit_proc = p
                         break
 
@@ -150,7 +139,7 @@ class IncidentTimelineService:
                             pass
                     if target_proc_name:
                         for p in procs:
-                            if (p.name or "").lower() == target_proc_name:
+                            if (p.name or "").lower() == target_proc_name and is_eligible_culprit(p):
                                 culprit_proc = p
                                 break
 
@@ -158,26 +147,24 @@ class IncidentTimelineService:
                 if not culprit_proc:
                     for p in procs:
                         p_name = (p.name or "").lower()
-                        if p_name and p_name in desc_lower and _is_eligible(p):
+                        if p_name and p_name in desc_lower and is_eligible_culprit(p):
                             culprit_proc = p
                             break
 
-                # 4. Known shell / attack binaries
+                # 4. Known shell / attack binaries only if suspicious or reverse shell cmdline
                 if not culprit_proc:
                     common_attack_names = {
-                        "bash", "sh", "nc", "ncat", "netcat", "socat"
+                        "nc", "ncat", "netcat", "socat"
                     }
                     for p in procs:
-                        if (p.name or "").lower() in common_attack_names and _is_eligible(p):
-                            culprit_proc = p
-                            break
+                        p_name = (p.name or "").lower()
+                        if p_name in common_attack_names and is_eligible_culprit(p):
+                            cmd = (p.cmdline or "").lower()
+                            if p.is_suspicious or any(pat in cmd for pat in ("/dev/tcp/", "-e /bin", "-e /bin/sh", "-e /bin/bash")):
+                                culprit_proc = p
+                                break
 
-                # 5. Fallback: most recent valid userland process (NEVER kernel)
-                if not culprit_proc:
-                    for p in procs:
-                        if _is_eligible(p):
-                            culprit_proc = p
-                            break
+                # KHÔNG CÓ BLIND FALLBACK: Giữ culprit_proc = None nếu không có bằng chứng tiến trình độc hại!
 
                 if culprit_proc and culprit_proc.parent_pid and culprit_proc.parent_pid != culprit_proc.pid and not parent_proc:
                     if culprit_proc.parent_pid == 1:

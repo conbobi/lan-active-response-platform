@@ -99,6 +99,12 @@ async def test_timeline_service_no_hallucinations(mock_db):
         description="Telemetry check",
         risk_score=0.0
     )
+    incident.culprit_process = {
+        "pid": 0,
+        "name": "System Idle Process",
+        "exe_path": "",
+        "cmdline": ""
+    }
     proc_idle = ProcessInfo(
         id="p_idle",
         agent_id="WIN-DEMO-01",

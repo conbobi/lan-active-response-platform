@@ -26,21 +26,39 @@ logger = logging.getLogger(__name__)
 SYSTEM_AND_KERNEL_EXCLUSIONS = {
     "kthreadd", "kworker", "rcu", "swapper",
     "migration", "ksoftirqd", "psimon", "cpuhp", "kdevtmpfs", "kauditd",
-    "khungtaskd", "oom_reaper", "kblockd",
+    "khungtaskd", "oom_reaper", "kblockd", "scsi_eh", "scsi_tmf",
+    "jbd2", "irq/", "card1-crtc", "watchdog",
     # Desktop environment daemons (tránh attribution sai và DoS desktop)
-    "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd"
+    "lightdm", "xorg", "xfce4-session", "xfce4-panel", "thunar", "systemd",
+    "dbus-daemon", "xfwm4", "pulseaudio"
 }
 
 
 def is_eligible_culprit(proc: Optional[ProcessInfo]) -> bool:
-    """Xác thực process có đủ điều kiện làm culprit không — loại trừ kernel threads và system desktop daemons."""
+    """Xác thực process có đủ điều kiện làm culprit không — loại trừ tuyệt đối kernel threads và system desktop daemons."""
     if not proc or proc.pid is None:
         return False
-    if proc.pid == 2:
+    if proc.pid in (0, 1, 2):
         return False
+    # Trong Linux, bất kỳ tiến trình nào có parent là kthreadd (PID 2) đều là kernel thread
+    if getattr(proc, "parent_pid", None) == 2:
+        return False
+
+    exe = (getattr(proc, "exe_path", None) or getattr(proc, "exe", None) or "").strip()
+    cmd = (getattr(proc, "cmdline", None) or "").strip()
     p_name = (proc.name or "").lower()
+
+    # Kernel thread không có file thực thi (exe) và không có cmdline người dùng
+    if not exe and (not cmd or cmd == f"[{p_name}]" or cmd == p_name):
+        return False
+
+    # Các tiền tố thread nhân Linux phổ biến
+    if p_name.startswith(("scsi_", "kworker", "rcu", "migration", "cpuhp", "jbd2", "ext4", "watchdog", "card", "irq/")):
+        return False
+
     if any(k in p_name for k in SYSTEM_AND_KERNEL_EXCLUSIONS):
         return False
+
     return True
 
 
@@ -327,29 +345,21 @@ class IncidentService(AbstractService[IncidentRepository]):
                     except Exception:
                         pass
 
-            # 3. Third priority: common attack / shell / interpreter binaries
+            # 3. Third priority: common attack / shell binaries ONLY IF suspicious or running network reverse shell
             if not culprit_proc:
                 common_attack_names = {
-                    "bash", "sh", "python", "python3", "nc", "ncat", "netcat",
-                    "socat", "curl", "wget", "flask", "node", "php", "perl", "ruby"
+                    "nc", "ncat", "netcat", "socat"
                 }
                 for p in procs:
                     p_name = (p.name or "").lower()
                     if p_name in common_attack_names and is_eligible_culprit(p):
-                        # KHÔNG ĐƯỢC CHỌN SAFE PROCESS (như python3, node, bash, sh) làm thủ phạm nếu không có dấu hiệu độc hại
-                        if p_name in ("python3", "python", "node", "bash", "sh"):
-                            cmd = (p.cmdline or "").lower()
-                            if not p.is_suspicious and not any(pat in cmd for pat in ("/dev/tcp/", "nc -e", "socket.socket", "pty.spawn")):
-                                continue
-                        culprit_proc = p
-                        break
+                        cmd = (p.cmdline or "").lower()
+                        if p.is_suspicious or any(pat in cmd for pat in ("/dev/tcp/", "-e /bin", "-e /bin/sh", "-e /bin/bash")):
+                            culprit_proc = p
+                            break
 
-            # 4. Fallback: most recent valid userland process (NEVER kernel process)
-            if not culprit_proc:
-                for p in procs:
-                    if is_eligible_culprit(p):
-                        culprit_proc = p
-                        break
+            # KHÔNG CÓ BLIND FALLBACK: Nếu không có tiến trình nào thỏa mãn các điều kiện trên,
+            # giữ culprit_proc = None. Đây là sự cố cấp độ Host/Network Telemetry, không được gán ép bừa bãi!
 
             if culprit_proc:
                 culprit_dict = {
@@ -416,7 +426,14 @@ class IncidentService(AbstractService[IncidentRepository]):
         """Generate factual narrative story for an incident without hallucinating missing fields."""
         score_val = int(incident.risk_score) if incident.risk_score is not None else 0
         if not culprit:
-            return f"Hệ thống phân tích rủi ro kích hoạt điểm đe dọa {score_val}/100 trên máy trạm {incident.agent_id}."
+            context_bits = []
+            desc = incident.description or ""
+            if "http_beaconing" in desc or "beacon" in desc.lower():
+                context_bits.append("chuỗi kết nối mạng định kỳ ra ngoài (Network Beaconing)")
+            if "ml_behavioral_anomaly" in desc or "anomaly" in desc.lower():
+                context_bits.append("đột biến tài nguyên hệ thống (ML Behavioral Anomaly)")
+            reason_str = f" do {' và '.join(context_bits)}" if context_bits else ""
+            return f"Hệ thống phân tích rủi ro ghi nhận điểm đe dọa {score_val}/100 trên máy trạm `{incident.agent_id}`{reason_str}. Chưa ghi nhận tiến trình độc hại cụ thể trực tiếp gắn với lưu lượng này."
 
         c_name = culprit.get("name") or "tiến trình không xác định"
         c_pid = culprit.get("pid")
@@ -607,6 +624,8 @@ class IncidentService(AbstractService[IncidentRepository]):
             process_name = params.get("process_name")
             if not pid:
                 raise BadRequestError("Parameter 'pid' is required for kill_process_tree action.")
+            if int(pid) <= 2:
+                raise BadRequestError("Cannot kill kernel process or system init (PID <= 2).")
 
             cmd = Command(
                 id=f"cmd_{uuid.uuid4().hex[:12]}",

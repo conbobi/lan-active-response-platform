@@ -11,10 +11,11 @@ import RecentThreats from '../components/dashboard/RecentThreats';
 import ErrorState from '../components/ui/ErrorState';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { getAgents, isolateAgent } from '../api/agents';
-import { getIncidents } from '../api/incidents';
+import { getIncidents, updateIncidentStatus } from '../api/incidents';
 import { getEvents } from '../api/events';
+import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
 import { useDashboardSocket } from '../hooks/useDashboardSocket';
-import { FiRadio, FiShield, FiAlertTriangle, FiRotateCw, FiTerminal, FiEye } from 'react-icons/fi';
+import { FiRadio, FiShield, FiAlertTriangle, FiRotateCw, FiTerminal, FiEye, FiCheckCircle } from 'react-icons/fi';
 
 function FalsePositiveBanner() {
     const [fpData, setFpData] = useState(null);
@@ -85,6 +86,7 @@ export default function Dashboard() {
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedAgent, setSelectedAgent] = useState(null);
+    const [selectedIncident, setSelectedIncident] = useState(null);
     const [isolatingId, setIsolatingId] = useState(null);
 
     const loadData = useCallback(async () => {
@@ -209,6 +211,7 @@ export default function Dashboard() {
             {/* Zone 0: Urgent Critical Threat Banner OR All Clear Banner */}
             {criticalActiveIncident ? (
                 <div
+                    onClick={() => setSelectedIncident(criticalActiveIncident)}
                     style={{
                         background: isHighOrCriticalThreat
                             ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)'
@@ -224,7 +227,11 @@ export default function Dashboard() {
                         gap: '1rem',
                         flexWrap: 'wrap',
                         boxShadow: isHighOrCriticalThreat ? '0 0 16px rgba(239, 68, 68, 0.25)' : '0 0 16px rgba(245, 158, 11, 0.25)',
+                        cursor: 'pointer',
+                        transition: 'filter 0.15s ease',
                     }}
+                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
                 >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
                         <div
@@ -235,7 +242,7 @@ export default function Dashboard() {
                                 background: isHighOrCriticalThreat ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
                                 display: 'flex',
                                 alignItems: 'center',
-                                justifyContent: 'center',
+                                justifyCenter: 'center',
                                 color: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
                                 flexShrink: 0,
                             }}
@@ -268,7 +275,7 @@ export default function Dashboard() {
                         </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
                         <Button
                             variant="primary"
                             size="sm"
@@ -299,9 +306,25 @@ export default function Dashboard() {
                             variant="ghost"
                             size="sm"
                             iconLeft={<FiEye size={13} />}
-                            onClick={() => navigate(`/incidents?id=${criticalActiveIncident.id}`)}
+                            onClick={() => setSelectedIncident(criticalActiveIncident)}
                         >
                             Triage Storyline
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            iconLeft={<FiCheckCircle size={13} />}
+                            onClick={async () => {
+                                try {
+                                    await updateIncidentStatus(criticalActiveIncident.id, 'false_positive');
+                                    toast.success(`Đã xác nhận False Positive cho sự cố ${criticalActiveIncident.id}`);
+                                    loadData();
+                                } catch (err) {
+                                    toast.error(`Lỗi cập nhật: ${err.message}`);
+                                }
+                            }}
+                        >
+                            Mark False Positive
                         </Button>
                     </div>
                 </div>
@@ -433,7 +456,7 @@ export default function Dashboard() {
             {/* Middle Grid: Agents Table + Recent Threats with 1-click links */}
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
                 <AgentTable agents={agents} onViewAgent={setSelectedAgent} />
-                <RecentThreats incidents={incidents} agents={agents} />
+                <RecentThreats incidents={incidents} agents={agents} onSelectIncident={setSelectedIncident} />
             </div>
 
             {/* Full-width Recent Alerts Stream */}
@@ -442,6 +465,14 @@ export default function Dashboard() {
             </div>
 
             {selectedAgent && <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
+            {selectedIncident && (
+                <IncidentDetailModal
+                    incident={selectedIncident}
+                    isOpen={!!selectedIncident}
+                    onClose={() => setSelectedIncident(null)}
+                    onRefresh={loadData}
+                />
+            )}
         </div>
     );
 }

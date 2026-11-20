@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { getIncidentTimeline } from '../../api/incidents';
 import Button from '../ui/Button';
+import { isKernelOrSystem } from '../../constants/processExclusions';
 import {
   FiTerminal,
   FiGlobe,
@@ -251,17 +252,19 @@ export default function StoryTimeline({
                             <strong>Parent:</strong> {item.details.parent.name || 'Unknown'} {item.details.parent.pid !== undefined && item.details.parent.pid !== null ? `(PID: ${item.details.parent.pid})` : ''}
                           </div>
                         )}
-                        <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            disabled={actionLoading}
-                            iconLeft={<FiSlash size={12} />}
-                            onClick={() => onAction && onAction('kill_process_tree', { pid: item.details.pid, process_name: item.details.name })}
-                          >
-                            Kill PID {item.details.pid}
-                          </Button>
-                        </div>
+                        {item.details.pid && !isKernelOrSystem(item.details) && (
+                          <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              disabled={actionLoading}
+                              iconLeft={<FiSlash size={12} />}
+                              onClick={() => onAction && onAction('kill_process_tree', { pid: item.details.pid, process_name: item.details.name })}
+                            >
+                              Kill PID {item.details.pid}
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     )}
 

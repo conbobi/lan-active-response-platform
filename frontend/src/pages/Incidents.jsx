@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import useIncidents from '../hooks/useIncidents';
+import { getIncident } from '../api/incidents';
 import { useAgents } from '../hooks/useAgents';
 import { useEvents } from '../hooks/useEvents';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
@@ -109,12 +110,20 @@ export default function Incidents() {
   const targetId = paramId || searchParams.get('id');
 
   useEffect(() => {
-    if (targetId && incidents.length > 0) {
+    if (!targetId) return;
+    if (incidents.length > 0) {
       const found = incidents.find((i) => String(i.id) === String(targetId));
       if (found) {
         setSelectedIncident(found);
+        return;
       }
     }
+    // Fallback: fetch directly from API by ID
+    getIncident(targetId)
+      .then((inc) => {
+        if (inc) setSelectedIncident(inc);
+      })
+      .catch((err) => console.warn('Could not load target incident by ID:', err));
   }, [targetId, incidents]);
 
   // Filtered raw telemetry events for Alerts tab

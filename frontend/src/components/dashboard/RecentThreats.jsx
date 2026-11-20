@@ -46,7 +46,7 @@ function extractAttackType(incident) {
   return incident.title || incident.description || 'Unknown Attack';
 }
 
-export default function RecentThreats({ incidents = [], agents = [] }) {
+export default function RecentThreats({ incidents = [], agents = [], onSelectIncident }) {
   const navigate = useNavigate();
   
   const now = Date.now();
@@ -139,7 +139,13 @@ export default function RecentThreats({ incidents = [], agents = [] }) {
           return (
             <div
               key={incident.id}
-              onClick={() => navigate(`/incidents/${incident.id}`)}
+              onClick={() => {
+                if (onSelectIncident) {
+                  onSelectIncident(incident);
+                } else {
+                  navigate(`/incidents/${incident.id}`);
+                }
+              }}
               style={{
                 padding: '0.75rem',
                 background: bgColor,
