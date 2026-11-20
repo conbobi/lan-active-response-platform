@@ -41,6 +41,7 @@ BASE_DIR = "/home/webuser/vulnerable_web"
 
 UPLOAD_DIR = "/tmp/uploads"
 AUTH_LOG = os.path.join(BASE_DIR, "auth.log")
+FALLBACK_AUTH_LOG = "/tmp/web_auth.log"
 
 DB_PATH = "/tmp/users.db"
 
@@ -58,18 +59,31 @@ auth_logger.propagate = False
 
 if not auth_logger.handlers:
 
-    handler = logging.FileHandler(
-        AUTH_LOG,
-        encoding="utf-8"
-    )
+    try:
+        handler = logging.FileHandler(
+            AUTH_LOG,
+            encoding="utf-8"
+        )
+        handler.setFormatter(
+            logging.Formatter("%(message)s")
+        )
+        auth_logger.addHandler(handler)
+        os.chmod(AUTH_LOG, 0o644)
+    except Exception:
+        pass
 
-    handler.setFormatter(
-        logging.Formatter("%(message)s")
-    )
-
-    auth_logger.addHandler(handler)
-
-os.chmod(AUTH_LOG, 0o640)
+    try:
+        fallback_handler = logging.FileHandler(
+            FALLBACK_AUTH_LOG,
+            encoding="utf-8"
+        )
+        fallback_handler.setFormatter(
+            logging.Formatter("%(message)s")
+        )
+        auth_logger.addHandler(fallback_handler)
+        os.chmod(FALLBACK_AUTH_LOG, 0o666)
+    except Exception:
+        pass
 
 
 def get_client_ip():
@@ -108,6 +122,8 @@ def write_auth_event(status, username, error_type=None):
     client_ip, ip_source = get_client_ip()
 
     event = {
+        "status": status,
+
         "event_type": "WEB_AUTH_" + status.upper(),
 
         "timestamp": datetime.now(

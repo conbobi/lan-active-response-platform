@@ -274,50 +274,69 @@ def get_process_list(all_processes=None):
     return (suspicious_procs + normal_procs)[:30]
 
 def get_network_connections():
-    """Lấy các kết nối mạng đang mở, đánh dấu suspicious nếu cổng đích/nguồn nằm trong danh sách lạ."""
+    """Lấy các kết nối mạng outbound đang mở, đánh dấu suspicious nếu cổng đích/nguồn nằm trong danh sách lạ."""
     suspicious_ports = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
     connections = []
     my_pid = os.getpid()
     try:
         for conn in psutil.net_connections(kind='inet'):
-            if conn.status in ('ESTABLISHED', 'LISTEN'):
-                # Bỏ qua socket của chính LARP Agent (tránh self-detection loop)
-                if conn.pid == my_pid:
-                    continue
+            # CHỈ lấy socket outbound thực sự (có raddr và không phải LISTEN)
+            if not conn.raddr or conn.status == 'LISTEN':
+                continue
+            # Bỏ qua socket của chính LARP Agent (tránh self-detection loop)
+            if conn.pid == my_pid:
+                continue
 
-                laddr = conn.laddr
-                raddr = conn.raddr
-                src_ip = laddr.ip if laddr else "0.0.0.0"
-                src_port = laddr.port if laddr else 0
-                dst_ip = raddr.ip if raddr else "0.0.0.0"
-                dst_port = raddr.port if raddr else src_port
+            laddr = conn.laddr
+            raddr = conn.raddr
+            src_ip = laddr.ip if laddr else "0.0.0.0"
+            src_port = laddr.port if laddr else 0
+            dst_ip = raddr.ip
+            dst_port = raddr.port
 
-                is_susp = (dst_port in suspicious_ports or src_port in suspicious_ports)
+            # Bỏ qua loopback và wildcard 0.0.0.0
+            if dst_ip.startswith("127.") or dst_ip in ("::1", "0.0.0.0", "localhost"):
+                continue
 
-                proc_name = ""
-                if conn.pid:
+            is_susp = (dst_port in suspicious_ports or src_port in suspicious_ports)
+
+            proc_name = "unknown"
+            exe_path = ""
+            create_time = None
+            if conn.pid:
+                try:
+                    p = psutil.Process(conn.pid)
+                    proc_name = p.name() or "unknown"
                     try:
-                        proc_name = psutil.Process(conn.pid).name()
+                        exe_path = p.exe() or ""
                     except Exception:
                         pass
+                    try:
+                        create_time = p.create_time()
+                    except Exception:
+                        pass
+                except Exception:
+                    proc_name = "unknown"
 
-                connections.append({
-                    "pid": conn.pid,
-                    "process_name": proc_name,
-                    "process": proc_name,
-                    "src_ip": src_ip,
-                    "src_port": src_port,
-                    "dst_ip": dst_ip,
-                    "dst_port": dst_port,
-                    "status": conn.status,
-                    "is_suspicious": is_susp
-                })
+            connections.append({
+                "pid": conn.pid,
+                "process_name": proc_name,
+                "process": proc_name,
+                "exe_path": exe_path,
+                "process_start_time": create_time,
+                "src_ip": src_ip,
+                "src_port": src_port,
+                "dst_ip": dst_ip,
+                "dst_port": dst_port,
+                "status": conn.status,
+                "is_suspicious": is_susp
+            })
     except Exception:
         pass
 
     suspicious_conns = [c for c in connections if c["is_suspicious"]]
     normal_conns = [c for c in connections if not c["is_suspicious"]]
-    return (suspicious_conns + normal_conns)[:20]
+    return (suspicious_conns + normal_conns)[:25]
 
 def get_file_changes_count():
     """Đếm số file .encrypted hoặc có thay đổi gần đây trong /tmp (bao gồm thư mục con)."""

@@ -187,3 +187,52 @@ async def test_process_risk_critical_attack_bypasses_ema(mock_db, mock_notificat
 
         # Incident must be created immediately!
         mock_inc_instance.create_from_risk.assert_awaited_once()
+
+
+async def test_process_risk_brute_force_bypasses_ema(mock_db, mock_notification_service):
+    """Verify that a brute force attack (score 55) bypasses EMA smoothing and immediately creates an incident."""
+    service = RiskAssessmentService(mock_db)
+    service.risk_repo = MagicMock()
+    service.risk_repo.add = AsyncMock()
+
+    prev_record = MagicMock(score=0.0, smoothed_score=0.0)
+    service.risk_repo.get_latest_by_agent = AsyncMock(return_value=[prev_record])
+
+    service.agent_repo = MagicMock()
+    service.agent_repo.get = AsyncMock(return_value=MagicMock(hostname="agent-victim", isolate=MagicMock()))
+
+    service.whitelist_service = MagicMock()
+    service.whitelist_service.is_whitelisted = AsyncMock(return_value=False)
+
+    service.threat_intel_service = MagicMock()
+    service.threat_intel_service.check_hash = AsyncMock(return_value={"is_malicious": False})
+    service.threat_intel_service.check_ip = AsyncMock(return_value={"is_malicious": False})
+
+    service.setting_service = MagicMock()
+    service.setting_service.get_risk_thresholds = AsyncMock(return_value={
+        "log": 30.0, "alert": 30.0, "alert_with_buttons": 60.0, "auto_isolate": 80.0,
+        "incident_creation_threshold": 50.0, "auto_kill_threshold": 85.0
+    })
+    service.notification_service = mock_notification_service
+
+    with patch("app.services.detection.risk_assessment_service.IncidentService") as MockIncService:
+        mock_inc_instance = MagicMock()
+        mock_inc_instance.create_from_risk = AsyncMock(return_value=MagicMock(id="inc-bruteforce"))
+        MockIncService.return_value = mock_inc_instance
+
+        # 6 failed auth events from same IP
+        payload = {
+            "agent_id": "agent-victim",
+            "auth_events": [
+                {"source_ip": "192.168.1.100", "username": "admin", "status": "failed", "count": 1}
+                for _ in range(6)
+            ]
+        }
+
+        record = await service.process_risk("agent-victim", payload)
+
+        assert record.score >= 50.0
+        # Smoothed score must not be dampened to 0.35 * 55 = 19.25!
+        assert record.smoothed_score == record.score
+        assert record.smoothed_score >= 50.0
+        mock_inc_instance.create_from_risk.assert_awaited_once()

@@ -1,4 +1,5 @@
 import uuid
+import re
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -19,6 +20,7 @@ from app.core.exceptions import NotFoundError, BadRequestError
 from app.services.core.base import AbstractService
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.common.notification_service import NotificationService
+from app.services.detection.network_reputation_service import NetworkReputationService
 
 logger = logging.getLogger(__name__)
 
@@ -317,33 +319,15 @@ class IncidentService(AbstractService[IncidentRepository]):
                     culprit_proc = p
                     break
 
-            # 2. Second priority: process mentioned in incident description
+            # 2. Second priority: process specifically identified in incident description as suspicious or culprit
             if not culprit_proc:
                 for p in procs:
                     p_name = (p.name or "").lower()
-                    if p_name and p_name in desc_lower and is_eligible_culprit(p):
-                        culprit_proc = p
-                        break
-
-            # 2.1. Network Incident: match target IP to Remote Tools (AnyDesk, TeamViewer)
-            if not culprit_proc:
-                import socket
-                import re
-                ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', inc.description or "")
-                if ip_match:
-                    target_ip = ip_match.group(0)
-                    try:
-                        host_ptr = socket.gethostbyaddr(target_ip)[0].lower()
-                        if "anydesk" in host_ptr:
-                            any_proc = next((p for p in procs if "anydesk" in (p.name or "").lower()), None)
-                            if any_proc:
-                                culprit_proc = any_proc
-                        elif "teamviewer" in host_ptr:
-                            tv_proc = next((p for p in procs if "teamviewer" in (p.name or "").lower()), None)
-                            if tv_proc:
-                                culprit_proc = tv_proc
-                    except Exception:
-                        pass
+                    if p_name and len(p_name) >= 3 and is_eligible_culprit(p):
+                        pattern = r'\b' + re.escape(p_name) + r'\b'
+                        if re.search(pattern, desc_lower) and (p.is_suspicious or "process:" in desc_lower or "culprit" in desc_lower):
+                            culprit_proc = p
+                            break
 
             # 3. Third priority: common attack / shell binaries ONLY IF suspicious or running network reverse shell
             if not culprit_proc:
@@ -397,15 +381,23 @@ class IncidentService(AbstractService[IncidentRepository]):
                 if fl.dst_ip in ("0.0.0.0", "127.0.0.1", "::1", "localhost"):
                     continue
                 p_name = fl.process_name
+                # Strictly only attribute to culprit if PID matches
                 if not p_name and culprit_dict and fl.pid and fl.pid == culprit_dict.get("pid"):
                     p_name = culprit_dict.get("name")
+                
+                rep = NetworkReputationService.get_reputation(fl.dst_ip)
+
                 network_indicators.append({
                     "dst_ip": fl.dst_ip,
                     "dst_port": fl.dst_port,
                     "protocol": fl.protocol,
                     "bytes_sent": fl.bytes_sent,
                     "packets_sent": fl.packets_sent,
-                    "process_name": p_name or "unknown"
+                    "process_name": p_name or "unknown",
+                    "pid": fl.pid,
+                    "asn": rep.get("asn", "UNKNOWN"),
+                    "org": rep.get("org", "Unknown"),
+                    "category": rep.get("category", "public_internet")
                 })
                 if len(network_indicators) >= 10:
                     break

@@ -100,7 +100,19 @@ class AITriageService:
                     f"AI hallucinated {len(rejected_techs)} MITRE IDs for incident {incident_id}, rejected: {[t.get('id') for t in rejected_techs]}"
                 )
 
-            # 7. Check confidence calibration
+            # 7. Check confidence calibration & classification
+            classification = str(parsed.get("classification", "suspicious_unconfirmed")).strip()
+            valid_classifications = {
+                "benign_expected", "suspicious_unconfirmed", "likely_malicious",
+                "confirmed_malicious", "insufficient_telemetry"
+            }
+            if classification not in valid_classifications:
+                classification = "suspicious_unconfirmed"
+
+            if classification == "benign_expected":
+                # Suppress offensive techniques for expected benign traffic
+                validated_techs = [t for t in validated_techs if not str(t.get("id", "")).startswith("T1071")]
+
             confidence = float(parsed.get("confidence", 0.75))
             if confidence > 1.0:
                 confidence = 1.0
@@ -112,10 +124,24 @@ class AITriageService:
             if confidence >= 0.9 and not has_strong_evidence:
                 confidence = 0.70
 
-            summary = str(parsed.get("summary", "")).strip()[:4000]
-            if not summary:
-                summary = "AI đã phân tích dữ liệu nhưng không tạo được tóm tắt phù hợp."
+            base_summary = str(parsed.get("summary", "")).strip()[:2000]
+            structured_sections = []
+            if parsed.get("observed_facts"):
+                structured_sections.append(f"• **Dữ kiện quan sát (Observed Facts):** {parsed['observed_facts']}")
+            if parsed.get("technical_inference"):
+                structured_sections.append(f"• **Suy luận kỹ thuật (Inference):** {parsed['technical_inference']}")
+            if parsed.get("alternative_benign_explanation"):
+                structured_sections.append(f"• **Giải thích lành tính khả dĩ:** {parsed['alternative_benign_explanation']}")
+            if parsed.get("missing_evidence"):
+                structured_sections.append(f"• **Chứng cứ còn thiếu:** {parsed['missing_evidence']}")
 
+            if structured_sections:
+                header = f"**Đánh giá sơ bộ:** `[{classification}]`\n\n"
+                summary = header + (f"{base_summary}\n\n" if base_summary else "") + "\n".join(structured_sections)
+            else:
+                summary = base_summary or "AI đã phân tích dữ liệu nhưng không tạo được tóm tắt phù hợp."
+
+            summary = summary[:4000]
             root_cause = str(parsed.get("root_cause", "")).strip()[:2000]
 
             # 8. Save AI Analysis
@@ -158,8 +184,13 @@ class AITriageService:
 
     def _system_prompt(self) -> str:
         return (
-            "You are a senior SOC analyst triaging EDR incidents. Respond ONLY with valid JSON matching the schema. "
-            "Summary and root_cause must be in Vietnamese. MITRE names in English. Do not include markdown code fences."
+            "You are a senior SOC detection engineer and incident responder triaging EDR incidents.\n"
+            "Respond ONLY with valid JSON matching the schema. Do not include markdown code fences.\n"
+            "CRITICAL SOC PRINCIPLES:\n"
+            "1. Strictly differentiate between OBSERVED FACTS, TECHNICAL INFERENCE, ALTERNATIVE BENIGN EXPLANATIONS, and MISSING EVIDENCE.\n"
+            "2. Never classify an event as C2 (T1071) merely because outbound HTTP/HTTPS was observed. Outbound HTTPS is normal expected traffic for OS, browsers, IDEs (VS Code), and remote assistance tools (AnyDesk).\n"
+            "3. Ground all statements strictly in the provided telemetry. Do not invent non-existent file paths, processes, or commandlines.\n"
+            "4. Language requirements: 'summary', 'root_cause', 'observed_facts', 'technical_inference', 'alternative_benign_explanation', and 'missing_evidence' must be in Vietnamese. MITRE technique names and tactic names in English."
         )
 
     def _build_prompt(
@@ -171,7 +202,7 @@ class AITriageService:
         mitre_kb_ids: List[str],
     ) -> str:
         first_desc_line = (incident.description or '').split('\n')[0][:200]
-        # Select top 20 candidate MITRE IDs to keep prompt lean
+        # Select candidate MITRE IDs to keep prompt lean
         priority_ids = [
             # LOLBin / Process execution
             "T1218.007", "T1218", "T1059", "T1059.001", "T1059.003", "T1059.004",
@@ -195,38 +226,47 @@ class AITriageService:
         ]
         allowed_subset = [mid for mid in priority_ids if mid in mitre_kb_ids] or mitre_kb_ids[:40]
 
-        return f"""Analyze this EDR alert and return JSON.
+        return f"""Phân tích cảnh báo EDR này và trả về JSON theo đúng định dạng.
 
 INCIDENT: {incident.title} (Score: {incident.risk_score}/100)
 Alert: {first_desc_line}
 
-SUSPICIOUS/KEY PROCESSES:
+TIẾN TRÌNH QUAN SÁT ĐƯỢC (PROCESS TELEMETRY):
 {self._format_process_tree(process_tree[:8])}
 
-NETWORK ACTIVITY:
+LƯU LƯỢNG MẠNG QUAN SÁT ĐƯỢC (NETWORK TELEMETRY):
 {self._format_flows(flows[:5])}
 
-FACTORS:
+CÁC YẾU TỐ RỦI RO (RISK FACTORS):
 {json.dumps(factors, ensure_ascii=False) if factors else "None"}
 
-ALLOWED MITRE IDs:
+CÁC MÃ MITRE ATT&CK HỢP LỆ:
 {', '.join(allowed_subset)}
 
-INSTRUCTIONS:
-- Analyze what attack happened using the processes and alert above.
-- STRICT RULES:
-  * ONLY use data from the PROVIDED FIELDS above.
-  * If a field is empty, missing, or unknown, state "không xác định" or omit it. DO NOT invent or hallucinate.
-  * DO NOT mention file paths not present in the data (e.g. do NOT invent /tmp/, C:\\Temp).
-  * DO NOT mention parent process names not in the data (e.g. do NOT invent bash, cmd.exe).
-  * ONLY assign T1071 (Application Layer Protocol) if the process is verified suspicious (e.g. contains '/dev/tcp', 'nc -e', reverse shell, malware). DO NOT assign T1071 to legitimate web servers or normal processes (python3, node, bash, systemd) merely because they have network connections.
-- "summary": write 2-4 sentences in Vietnamese describing the actual incident grounded strictly in the evidence.
-- "mitre_techniques": list mapped techniques chosen strictly from the allowed MITRE IDs above with evidence.
-- "root_cause": 1-2 sentences in Vietnamese identifying the root cause.
-- "confidence": float 0.0 to 1.0.
+QUY TẮC BẢO ĐẢM TÍNH TOÀN VẸN CHỨNG CỨ:
+- Phải phân định rạch ròi 4 phần:
+  1. "observed_facts": Sự thật quan sát được trực tiếp từ telemetry (PID, exe_path, IP, port, bytes, packets). Tuyệt đối không suy đoán.
+  2. "technical_inference": Suy luận logic kỹ thuật dựa trên các facts trên.
+  3. "alternative_benign_explanation": Giả thuyết lành tính giải thích cho hành vi này (ví dụ: VS Code cập nhật/telemetry, AnyDesk duy trì kết nối relay, lưu lượng HTTPS hợp lệ tới Cloudflare/Microsoft).
+  4. "missing_evidence": Những dữ liệu telemetry còn thiếu để đưa ra kết luận chắc chắn.
+- "classification": Chọn duy nhất 1 trong các giá trị:
+  * "benign_expected" (Hành vi phần mềm hoặc hệ thống bình thường)
+  * "suspicious_unconfirmed" (Bất thường chưa đủ căn cứ khẳng định độc hại)
+  * "likely_malicious" (Khả năng cao là độc hại dựa trên chuỗi hành vi)
+  * "confirmed_malicious" (Chắc chắn độc hại)
+  * "insufficient_telemetry" (Thiếu dữ liệu để phân loại)
+- TUYỆT ĐỐI KHÔNG GÁN T1071 chỉ vì tiến trình có kết nối HTTPS ra ngoài nếu tiến trình đó là hợp lệ (như code, anydesk, python, curl kiểm tra thường) và không có chuỗi hành vi shell/malware.
+- "summary": 2-4 câu tiếng Việt tóm tắt súc tích, khách quan.
+- "root_cause": 1-2 câu tiếng Việt chỉ ra nguyên nhân gốc.
+- "confidence": Float từ 0.0 đến 1.0.
 
 JSON FORMAT:
 {{
+  "classification": "benign_expected | suspicious_unconfirmed | likely_malicious | confirmed_malicious | insufficient_telemetry",
+  "observed_facts": "...",
+  "technical_inference": "...",
+  "alternative_benign_explanation": "...",
+  "missing_evidence": "...",
   "summary": "...",
   "mitre_techniques": [
     {{"id": "...", "name": "...", "evidence": "..."}}

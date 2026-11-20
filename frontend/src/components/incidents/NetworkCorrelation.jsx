@@ -61,7 +61,7 @@ export default function NetworkCorrelation({
             <thead>
               <tr style={{ background: 'rgba(255, 255, 255, 0.02)', borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
                 <th style={{ padding: '0.75rem 1rem' }}>Associated Process</th>
-                <th style={{ padding: '0.75rem 1rem' }}>Destination IP</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Destination & Operator</th>
                 <th style={{ padding: '0.75rem 1rem' }}>Dest Port</th>
                 <th style={{ padding: '0.75rem 1rem' }}>Protocol</th>
                 <th style={{ padding: '0.75rem 1rem' }}>Traffic Sent</th>
@@ -70,7 +70,9 @@ export default function NetworkCorrelation({
             </thead>
             <tbody>
               {displayIndicators.map((item, index) => {
-                const isCulprit = item.process_name === culprit.name || (item.dst_port === 4444);
+                const isCulprit = (culprit?.name && item.process_name === culprit.name) || (item.dst_port === 4444);
+                const procDisplay = item.process_name || 'unknown';
+                const pidDisplay = item.pid ? ` (PID ${item.pid})` : '';
                 return (
                   <tr
                     key={index}
@@ -83,20 +85,25 @@ export default function NetworkCorrelation({
                       <span
                         style={{
                           fontWeight: 700,
-                          color: isCulprit ? 'var(--error)' : 'var(--text-primary)',
+                          color: isCulprit ? 'var(--error)' : (procDisplay === 'unknown' ? 'var(--text-tertiary)' : 'var(--text-primary)'),
                           display: 'flex',
                           alignItems: 'center',
                           gap: '0.4rem',
                         }}
                       >
                         <FiArrowUpRight size={14} />
-                        {item.process_name || culprit.name}
+                        {procDisplay}{pidDisplay}
                       </span>
                     </td>
                     <td style={{ padding: '0.75rem 1rem' }}>
                       <code style={{ color: isCulprit ? 'var(--warning)' : 'var(--text-primary)', fontWeight: 600 }}>
                         {item.dst_ip}
                       </code>
+                      {item.asn && item.asn !== 'UNKNOWN' && (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', display: 'block', marginTop: '0.15rem' }}>
+                          {item.asn} • {item.org || 'Known Operator'}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '0.75rem 1rem' }}>
                       <span
@@ -116,7 +123,7 @@ export default function NetworkCorrelation({
                       {item.protocol || 'TCP'}
                     </td>
                     <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)' }}>
-                      {item.bytes_sent != null ? `${item.bytes_sent} B` : 'Active Socket'}
+                      {item.bytes_sent != null && item.bytes_sent > 0 ? `${item.bytes_sent} B` : (item.packets_sent ? `${item.packets_sent} pkts` : 'Active Socket')}
                     </td>
                     <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
                       <Button

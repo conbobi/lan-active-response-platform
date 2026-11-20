@@ -284,11 +284,16 @@ class RiskAssessmentService:
         if not isinstance(prev_smoothed, (int, float)):
             prev_smoothed = None
 
-        # 3. Áp dụng EMA (BYPASS SMOOTHING cho critical attacks)
-        if raw_score >= CRITICAL_BYPASS_THRESHOLD:
+        # 3. Áp dụng EMA (BYPASS SMOOTHING cho critical attacks hoặc security rules matched)
+        has_security_attack = any(
+            k in factors and factors[k]
+            for k in factors.keys()
+            if k not in ANOMALY_RULES and k != "total_score"
+        )
+        if raw_score >= CRITICAL_BYPASS_THRESHOLD or (has_security_attack and raw_score >= 50.0):
             smoothed = round(float(raw_score), 2)
             logger.info(
-                f"[CRITICAL BYPASS] Agent {agent_id} raw={raw_score} >= {CRITICAL_BYPASS_THRESHOLD}, skip EMA"
+                f"[SECURITY ATTACK BYPASS] Agent {agent_id} raw={raw_score} (security rule matched: {has_security_attack}), skip EMA"
             )
         else:
             smoothed = compute_ema(raw_score, prev_smoothed)

@@ -109,15 +109,6 @@ export default function HeroBanner({
     if (unique.length > 0) {
       return unique.map(id => ({ id, name: TOOLTIPS[id]?.term || id }));
     }
-    if (text.toLowerCase().includes('msbuild')) {
-      return [{ id: 'T1127.001', name: 'MSBuild Execution' }];
-    }
-    if (text.toLowerCase().includes('c2') || text.toLowerCase().includes('beacon')) {
-      return [{ id: 'T1071', name: 'Application Layer Protocol' }];
-    }
-    if (culprit && !isKernelOrSystem(culprit)) {
-      return [{ id: 'T1059', name: 'Command Execution' }];
-    }
     return [];
   }, [incident, isInactive]);
 

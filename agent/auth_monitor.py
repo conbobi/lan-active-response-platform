@@ -86,7 +86,15 @@ class AuthMonitor:
                             svc = payload.get("service") or payload.get("app") or "flask_web"
                             u = payload.get("username") or payload.get("user") or "unknown"
                             s_ip = payload.get("source_ip") or payload.get("ip") or payload.get("client_ip") or "unknown"
-                            st = str(payload.get("status") or "failed").lower()
+                            st = str(payload.get("status") or "").lower()
+                            if not st:
+                                ev_type = str(payload.get("event_type") or "").lower()
+                                if "fail" in ev_type or "error" in ev_type:
+                                    st = "failed"
+                                elif "success" in ev_type or "ok" in ev_type:
+                                    st = "success"
+                                else:
+                                    st = "failed"
                             events.append({
                                 "agent_id": self.agent_id,
                                 "service": svc,
