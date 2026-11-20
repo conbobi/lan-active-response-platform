@@ -1,17 +1,29 @@
 import uuid
 import logging
-from datetime import datetime, timezone
-from typing import List
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional
+from sqlalchemy import select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent import Agent
+from app.models.agent_history import AgentHistory
+from app.models.flow import Flow
+from app.models.command import Command
+from app.models.process_info import ProcessInfo
+from app.models.event import Event
+from app.models.auth_event import AuthEvent
+from app.models.agent_baseline import AgentBaseline
+from app.models.whitelist import WhitelistEntry
+from app.models.risk_score import RiskScoreRecord
+from app.models.response_action import ResponseAction
+from app.models.agent_group import AgentGroupMember
+from app.models.incident import Incident
 from app.repositories.agent_repository import AgentRepository
+from app.repositories.agent_history_repository import AgentHistoryRepository
 from app.schemas.agent import AgentCreate
 from app.schemas.heartbeat import HeartbeatDTO
 from app.schemas.enums import AgentStatus
 from app.core.exceptions import AgentNotFoundError, ConflictError
 from app.services.core.base import AbstractService
-from app.models.agent_history import AgentHistory
-from app.repositories.agent_history_repository import AgentHistoryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -173,4 +185,66 @@ class AgentService(AbstractService[AgentRepository]):
         return deduped[skip : skip + limit]
 
     async def delete_agent(self, agent_id: str) -> bool:
-        return await self.repository.delete(agent_id)
+        agent = await self.repository.get(agent_id)
+        if not agent:
+            raise AgentNotFoundError(f"Agent '{agent_id}' not found.")
+
+        # Clean up related records across all tables referencing agent_id
+        await self.session.execute(delete(Flow).where(Flow.agent_id == agent_id))
+        await self.session.execute(delete(Command).where(Command.agent_id == agent_id))
+        await self.session.execute(delete(ProcessInfo).where(ProcessInfo.agent_id == agent_id))
+        await self.session.execute(delete(Event).where(Event.agent_id == agent_id))
+        await self.session.execute(delete(AuthEvent).where(AuthEvent.agent_id == agent_id))
+        await self.session.execute(delete(AgentBaseline).where(AgentBaseline.agent_id == agent_id))
+        await self.session.execute(delete(AgentHistory).where(AgentHistory.agent_id == agent_id))
+        await self.session.execute(delete(WhitelistEntry).where(WhitelistEntry.agent_id == agent_id))
+        await self.session.execute(delete(RiskScoreRecord).where(RiskScoreRecord.agent_id == agent_id))
+        await self.session.execute(delete(ResponseAction).where(ResponseAction.agent_id == agent_id))
+        await self.session.execute(delete(AgentGroupMember).where(AgentGroupMember.agent_id == agent_id))
+
+        # Unlink incidents
+        await self.session.execute(
+            update(Incident).where(Incident.agent_id == agent_id).values(agent_id=None)
+        )
+
+        deleted = await self.repository.delete(agent_id)
+        await self.session.flush()
+
+        try:
+            from app.websocket.dashboard_connection_manager import dashboard_manager
+            await dashboard_manager.broadcast({
+                "type": "AGENT_DELETED",
+                "event": "AGENT_DELETED",
+                "agent_id": agent_id
+            })
+        except Exception as e:
+            logger.warning(f"Failed to broadcast agent deletion: {e}")
+
+        return deleted
+
+    async def delete_offline_agents(self) -> int:
+        """Xóa toàn bộ các agent có trạng thái DEAD hoặc offline quá 5 phút."""
+        stmt = select(Agent).where(
+            (Agent.status == AgentStatus.DEAD) |
+            (Agent.status == AgentStatus.QUARANTINE)
+        )
+        res = await self.session.execute(stmt)
+        dead_candidates = list(res.scalars().all())
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=5)
+        stmt_stale = select(Agent).where(Agent.last_seen < cutoff)
+        res_stale = await self.session.execute(stmt_stale)
+        for a in res_stale.scalars().all():
+            if not any(x.id == a.id for x in dead_candidates):
+                dead_candidates.append(a)
+
+        deleted_count = 0
+        for ag in dead_candidates:
+            # Không bao giờ xóa agent đang gửi heartbeat (last_seen trong vòng 1 phút)
+            if ag.last_seen and (now - ag.last_seen).total_seconds() < 60:
+                continue
+            await self.delete_agent(ag.id)
+            deleted_count += 1
+
+        return deleted_count

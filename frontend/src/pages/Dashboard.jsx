@@ -10,7 +10,7 @@ import HealthScoreGauge from '../components/dashboard/HealthScoreGauge';
 import RecentThreats from '../components/dashboard/RecentThreats';
 import ErrorState from '../components/ui/ErrorState';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import { getAgents, isolateAgent } from '../api/agents';
+import { getAgents, isolateAgent, deleteAgent, cleanupOfflineAgents } from '../api/agents';
 import { getIncidents, updateIncidentStatus } from '../api/incidents';
 import { getEvents } from '../api/events';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
@@ -121,6 +121,7 @@ export default function Dashboard() {
         if (
             evt === 'heartbeat' ||
             evt === 'dead_agent' ||
+            evt === 'AGENT_DELETED' ||
             evt === 'TELEMETRY_RISK' ||
             evt === 'INCIDENT_CREATED' ||
             evt === 'INCIDENT_RESOLVED' ||
@@ -131,6 +132,35 @@ export default function Dashboard() {
             loadData();
         }
     }, [loadData]);
+
+    const handleDeleteAgent = useCallback(async (agentId, hostname) => {
+        if (!window.confirm(`Bạn có chắc chắn muốn gỡ bỏ agent "${hostname || agentId}" khỏi hệ thống?`)) {
+            return;
+        }
+        try {
+            await deleteAgent(agentId);
+            toast.success(`Đã gỡ bỏ agent "${hostname || agentId}" thành công`);
+            loadData();
+        } catch (err) {
+            toast.error(`Lỗi khi gỡ bỏ agent: ${err.message}`);
+        }
+    }, [loadData]);
+
+    const handleCleanupOffline = useCallback(async () => {
+        const offlineCount = agents.filter((a) =>
+            ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase())
+        ).length;
+        if (!window.confirm(`Bạn có chắc chắn muốn dọn dẹp và gỡ bỏ tất cả ${offlineCount} agent offline không kết nối?`)) {
+            return;
+        }
+        try {
+            const res = await cleanupOfflineAgents();
+            toast.success(res.message || `Đã dọn dẹp ${res.deleted_count || offlineCount} agent offline thành công`);
+            loadData();
+        } catch (err) {
+            toast.error(`Lỗi dọn dẹp agent: ${err.message}`);
+        }
+    }, [agents, loadData]);
 
     const { isConnected } = useDashboardSocket(handleSocketMessage);
 
@@ -455,7 +485,12 @@ export default function Dashboard() {
 
             {/* Middle Grid: Agents Table + Recent Threats with 1-click links */}
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
-                <AgentTable agents={agents} onViewAgent={setSelectedAgent} />
+                <AgentTable
+                    agents={agents}
+                    onViewAgent={setSelectedAgent}
+                    onDeleteAgent={handleDeleteAgent}
+                    onCleanupOffline={handleCleanupOffline}
+                />
                 <RecentThreats incidents={incidents} agents={agents} onSelectIncident={setSelectedIncident} />
             </div>
 
@@ -464,7 +499,13 @@ export default function Dashboard() {
                 <RecentAlerts events={events} />
             </div>
 
-            {selectedAgent && <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
+            {selectedAgent && (
+                <AgentDetailModal
+                    agent={selectedAgent}
+                    onClose={() => setSelectedAgent(null)}
+                    onDeleteAgent={handleDeleteAgent}
+                />
+            )}
             {selectedIncident && (
                 <IncidentDetailModal
                     incident={selectedIncident}

@@ -1,7 +1,7 @@
 // src/hooks/useAgents.js
 import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { getAgents, isolateAgent, unisolateAgent } from '../api/agents';
+import { getAgents, isolateAgent, unisolateAgent, deleteAgent, cleanupOfflineAgents } from '../api/agents';
 
 export const useAgents = ({ autoRefresh = true, refreshInterval = 5000 } = {}) => {
   const [agents, setAgents] = useState([]);
@@ -50,6 +50,37 @@ export const useAgents = ({ autoRefresh = true, refreshInterval = 5000 } = {}) =
     }
   };
 
+  const handleDeleteAgent = async (agentId, hostname) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn gỡ bỏ agent "${hostname || agentId}" khỏi hệ thống?`)) {
+      return;
+    }
+    try {
+      await deleteAgent(agentId);
+      toast.success(`Đã gỡ bỏ agent "${hostname || agentId}" thành công`);
+      await fetchAgents();
+    } catch (e) {
+      console.error('Failed to delete agent', e);
+      toast.error(`Gỡ bỏ agent thất bại: ${e.response?.data?.detail || e.message}`);
+    }
+  };
+
+  const handleCleanupOffline = async () => {
+    const offlineCount = agents.filter((a) =>
+      ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase())
+    ).length;
+    if (!window.confirm(`Bạn có chắc chắn muốn dọn dẹp và gỡ bỏ tất cả ${offlineCount} agent offline không kết nối?`)) {
+      return;
+    }
+    try {
+      const res = await cleanupOfflineAgents();
+      toast.success(res.message || `Đã dọn dẹp ${res.deleted_count || offlineCount} agent offline thành công`);
+      await fetchAgents();
+    } catch (e) {
+      console.error('Failed to cleanup offline agents', e);
+      toast.error(`Dọn dẹp thất bại: ${e.response?.data?.detail || e.message}`);
+    }
+  };
+
   return {
     agents,
     loading,
@@ -59,7 +90,9 @@ export const useAgents = ({ autoRefresh = true, refreshInterval = 5000 } = {}) =
     refetch: fetchAgents,
     refreshAgents: fetchAgents,
     handleIsolate,
-    handleUnisolate
+    handleUnisolate,
+    handleDeleteAgent,
+    handleCleanupOffline,
   };
 };
 

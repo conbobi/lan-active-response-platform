@@ -6,13 +6,13 @@ import useActions from '../../hooks/useActions';
 import ActionTimeline from '../actions/ActionTimeline';
 import AgentSecurityContext from '../agents/AgentSecurityContext';
 import Badge from './Badge';
-import { FiX, FiCpu, FiHardDrive, FiShield, FiGlobe } from 'react-icons/fi';
+import { FiX, FiCpu, FiHardDrive, FiShield, FiGlobe, FiTrash2 } from 'react-icons/fi';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
 const TABS = ['Overview', '🚨 Active Threats', 'CPU/RAM', 'Info', 'Mitigations'];
 
-export default function AgentDetailModal({ agent, onClose }) {
+export default function AgentDetailModal({ agent, onClose, onDeleteAgent }) {
     const { history, loading } = useAgentHistory(agent?.id);
     const {
         actions,
@@ -23,6 +23,8 @@ export default function AgentDetailModal({ agent, onClose }) {
     } = useActions({ agentId: agent?.id });
     const [tab, setTab] = useState('Overview');
     if (!agent) return null;
+
+    const isDead = ['dead', 'offline', 'inactive'].includes(String(agent.status || '').toLowerCase());
 
     const labels = history.map((h) => new Date(h.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     const mkDataset = (label, data, color) => ({
@@ -42,6 +44,30 @@ export default function AgentDetailModal({ agent, onClose }) {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <Badge status={agent.status} />
+                        {isDead && onDeleteAgent && (
+                            <button
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.3rem',
+                                    padding: '0.25rem 0.55rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    color: 'var(--error)',
+                                    background: 'rgba(239, 68, 68, 0.1)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    cursor: 'pointer',
+                                }}
+                                onClick={() => {
+                                    onDeleteAgent(agent.id, agent.hostname);
+                                    onClose();
+                                }}
+                                title="Gỡ bỏ agent offline này khỏi hệ thống"
+                            >
+                                <FiTrash2 size={13} /> Gỡ bỏ
+                            </button>
+                        )}
                         <button className="modal-close" onClick={onClose}><FiX size={16} /></button>
                     </div>
                 </div>

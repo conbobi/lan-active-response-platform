@@ -67,6 +67,15 @@ async def update_agent(agent_id: str, dto: AgentUpdate, db: AsyncSession = Depen
     return await service.repository.update(agent_id, dto)
 
 
+@router.post("/cleanup-offline", status_code=status.HTTP_200_OK)
+@router.delete("/cleanup-offline", status_code=status.HTTP_200_OK)
+async def cleanup_offline_agents(db: AsyncSession = Depends(get_db)):
+    """Remove all offline/dead agents and clean up associated stale state."""
+    service = AgentService(db)
+    count = await service.delete_offline_agents()
+    return {"status": "success", "deleted_count": count, "message": f"Successfully removed {count} offline agent(s)."}
+
+
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     """Unregister/delete an agent."""

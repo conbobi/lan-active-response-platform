@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
-import { FiEye, FiSlash, FiLock, FiUnlock, FiServer } from 'react-icons/fi';
+import { FiEye, FiSlash, FiLock, FiUnlock, FiServer, FiTrash2 } from 'react-icons/fi';
 import Badge from './Badge';
 
-export default function AgentTable({ agents, onViewAgent }) {
+export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onCleanupOffline }) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+
+  const offlineAgents = agents.filter(
+    (a) => ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase())
+  );
+
   const rows = agents
     .filter((a) => {
       const ms = a.hostname.toLowerCase().includes(search.toLowerCase());
@@ -20,6 +25,30 @@ export default function AgentTable({ agents, onViewAgent }) {
           <FiServer size={16} color="var(--primary)" />
           <h3 style={{ fontWeight: 700, fontSize: '0.95rem' }}>Agents Overview</h3>
           <span className="badge badge-info" style={{ marginLeft: '0.25rem' }}>{agents.length}</span>
+          {offlineAgents.length > 0 && onCleanupOffline && (
+            <button
+              onClick={onCleanupOffline}
+              style={{
+                marginLeft: '0.5rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.25rem 0.6rem',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                background: 'rgba(239, 68, 68, 0.1)',
+                color: 'var(--error)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              title="Xóa toàn bộ các agent đã mất kết nối khỏi hệ thống"
+            >
+              <FiTrash2 size={12} />
+              Dọn dẹp offline ({offlineAgents.length})
+            </button>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <input
@@ -77,22 +106,33 @@ export default function AgentTable({ agents, onViewAgent }) {
                   <td>
                     <div className="table-actions">
                       <button className="action-btn" title="View" onClick={() => onViewAgent && onViewAgent(a)}><FiEye size={13} /></button>
-                      <button
-                        className="action-btn danger"
-                        title={isDead ? "Agent offline" : "Block"}
-                        disabled={isDead}
-                        style={isDead ? { opacity: 0.35, cursor: 'not-allowed' } : {}}
-                      >
-                        <FiSlash size={13} />
-                      </button>
-                      <button
-                        className="action-btn"
-                        title={isDead ? "Agent offline" : "Isolate"}
-                        disabled={isDead}
-                        style={isDead ? { opacity: 0.35, cursor: 'not-allowed' } : {}}
-                      >
-                        <FiLock size={13} />
-                      </button>
+                      {isDead ? (
+                        onDeleteAgent && (
+                          <button
+                            className="action-btn danger"
+                            title="Gỡ bỏ agent offline này"
+                            onClick={() => onDeleteAgent(a.id, a.hostname)}
+                            style={{ color: 'var(--error)' }}
+                          >
+                            <FiTrash2 size={13} />
+                          </button>
+                        )
+                      ) : (
+                        <>
+                          <button
+                            className="action-btn danger"
+                            title="Block"
+                          >
+                            <FiSlash size={13} />
+                          </button>
+                          <button
+                            className="action-btn"
+                            title="Isolate"
+                          >
+                            <FiLock size={13} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -29,6 +29,7 @@ import {
   FiLayers,
   FiPlus,
   FiCornerDownRight,
+  FiTrash2,
 } from 'react-icons/fi';
 
 const ITEMS_PER_PAGE = 8;
@@ -70,7 +71,15 @@ export default function Agents({ initialTab }) {
   };
 
   // Agents logic
-  const { agents, loading: agentsLoading, handleIsolate, handleUnisolate, refreshAgents } = useAgents();
+  const {
+    agents,
+    loading: agentsLoading,
+    handleIsolate,
+    handleUnisolate,
+    handleDeleteAgent,
+    handleCleanupOffline,
+    refreshAgents,
+  } = useAgents();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -298,6 +307,30 @@ export default function Agents({ initialTab }) {
               <FiServer size={16} color="var(--primary)" />
               <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>Active Endpoints</span>
               <span className="badge badge-info">{filteredAgents.length}</span>
+              {agents.some((a) => ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase())) && (
+                <button
+                  type="button"
+                  onClick={handleCleanupOffline}
+                  style={{
+                    marginLeft: '0.5rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.25rem 0.6rem',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    color: 'var(--error)',
+                    cursor: 'pointer',
+                  }}
+                  title="Xóa toàn bộ các agent đã mất kết nối khỏi hệ thống"
+                >
+                  <FiTrash2 size={12} />
+                  Dọn dẹp offline ({agents.filter((a) => ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase())).length})
+                </button>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <SearchBar
@@ -408,7 +441,17 @@ export default function Agents({ initialTab }) {
                             🌳 Tree
                           </Button>
 
-                          {agent.status !== 'isolated' ? (
+                          {['dead', 'offline', 'inactive'].includes(String(agent.status || '').toLowerCase()) ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              iconLeft={<FiTrash2 size={13} color="var(--error)" />}
+                              onClick={() => handleDeleteAgent(agent.id, agent.hostname)}
+                              title="Gỡ bỏ agent offline này khỏi hệ thống"
+                            >
+                              Gỡ bỏ
+                            </Button>
+                          ) : agent.status !== 'isolated' ? (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -589,7 +632,11 @@ export default function Agents({ initialTab }) {
 
       {/* Modals */}
       {selectedAgent && (
-        <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
+        <AgentDetailModal
+          agent={selectedAgent}
+          onClose={() => setSelectedAgent(null)}
+          onDeleteAgent={handleDeleteAgent}
+        />
       )}
 
       <CreateGroupModal

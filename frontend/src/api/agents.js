@@ -44,3 +44,11 @@ export const getAgentHistory = async (agentId) => {
 export const unisolateAgent = async (agentId) => {
   return await api.post(`/agents/${agentId}/unisolate`);
 };
+
+export const deleteAgent = async (agentId) => {
+  return await api.delete(`/agents/${agentId}`);
+};
+
+export const cleanupOfflineAgents = async () => {
+  return await api.post('/agents/cleanup-offline');
+};
