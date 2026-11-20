@@ -257,14 +257,21 @@ async def send_web_log(ws, log_data: Dict[str, Any], agent_id: Optional[str] = N
     if not ws or not log_data:
         return False
 
+    aid = agent_id or AGENT_ID
     message = {
         "type": "WEB_ACCESS_LOG",
-        "agent_id": agent_id or AGENT_ID,
+        "agent_id": aid,
         "payload": log_data,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     try:
         await ws.send(json.dumps(message))
+        print(
+            f"[{aid}] [WebLogMonitor] Dispatched WEB_ACCESS_LOG: "
+            f"{log_data.get('src_ip')} {log_data.get('http_method')} {log_data.get('path')} "
+            f"(UA: '{log_data.get('user_agent')}')",
+            flush=True
+        )
         return True
     except Exception as e:
         logger.warning(f"Failed to send WEB_ACCESS_LOG over WebSocket: {e}")
@@ -277,25 +284,26 @@ async def tail_cloudflared_logs(
     stop_event: Optional[asyncio.Event] = None
 ):
     """
-    Continuously tails cloudflared logs using `journalctl -u cloudflared -f -o json`.
-    Falls back to file monitoring if journalctl is unavailable.
+    Continuously tails cloudflared and web access logs using `journalctl -u cloudflared -u vulnerable_web -f -o json`.
+    Falls back to file monitoring if journalctl is unavailable or permission denied.
     Safely catches exceptions and never crashes the agent process.
     """
+    print(f"[{AGENT_ID}] [WebLogMonitor] Starting WebLogMonitor for cloudflared & vulnerable_web...", flush=True)
     logger.info("Starting WebLogMonitor background task for cloudflared access logs...")
     retry_delay = 3
 
     while stop_event is None or not stop_event.is_set():
         proc = None
         try:
-            # 1. Attempt to stream journalctl -u cloudflared
-            cmd = ["journalctl", "-u", "cloudflared", "-f", "-o", "json", "-n", "0"]
+            # 1. Attempt to stream journalctl -u cloudflared and -u vulnerable_web
+            cmd = ["journalctl", "-u", "cloudflared", "-u", "vulnerable_web", "-f", "-o", "json", "-n", "0"]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL
+                stderr=asyncio.subprocess.PIPE
             )
 
-            logger.info("Attached to journalctl -u cloudflared stream.")
+            print(f"[{AGENT_ID}] [WebLogMonitor] Attached to journalctl -u cloudflared -u vulnerable_web stream.", flush=True)
             retry_delay = 3
 
             while stop_event is None or not stop_event.is_set():
@@ -303,6 +311,21 @@ async def tail_cloudflared_logs(
                     break
                 line_bytes = await proc.stdout.readline()
                 if not line_bytes:
+                    # Stream ended; inspect return code
+                    await proc.wait()
+                    if proc.returncode != 0:
+                        err_bytes = await proc.stderr.read() if proc.stderr else b""
+                        err_msg = err_bytes.decode("utf-8", errors="ignore").strip()
+                        print(f"[{AGENT_ID}] [WebLogMonitor] journalctl failed (code {proc.returncode}): {err_msg}", flush=True)
+                        if "permission" in err_msg.lower() or "not opened" in err_msg.lower() or proc.returncode == 1:
+                            print(
+                                f"[{AGENT_ID}] [WebLogMonitor] Permission denied for journalctl. "
+                                f"Please run agent with sudo or execute: 'sudo usermod -aG systemd-journal,adm $USER'",
+                                flush=True
+                            )
+                            print(f"[{AGENT_ID}] [WebLogMonitor] Switching to fallback log file monitoring...", flush=True)
+                            await _tail_fallback_files(ws, callback, stop_event)
+                            return
                     break
 
                 line_str = line_bytes.decode("utf-8", errors="ignore").strip()
@@ -321,11 +344,11 @@ async def tail_cloudflared_logs(
 
         except FileNotFoundError:
             # journalctl command not found (e.g. non-systemd container)
-            logger.debug("journalctl not found on host, switching to fallback log file tailing...")
+            print(f"[{AGENT_ID}] [WebLogMonitor] journalctl not found, switching to fallback log files...", flush=True)
             await _tail_fallback_files(ws, callback, stop_event)
             break
         except Exception as e:
-            logger.warning(f"Error in cloudflared log tailer: {e}. Retrying in {retry_delay}s...")
+            print(f"[{AGENT_ID}] [WebLogMonitor] Error in log tailer: {e}. Retrying in {retry_delay}s...", flush=True)
         finally:
             if proc is not None:
                 try:
