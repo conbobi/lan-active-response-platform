@@ -21,12 +21,7 @@ RUN echo "trap : EXIT" > /etc/bash_env
 
 COPY *.py /app/
 COPY commands/ /app/commands/
+COPY vulnerable_web/ /app/vulnerable_web/
 
-# Thêm thư mục mô phỏng hành vi mã độc (malware simulation)
-RUN mkdir -p /app/malware_sim
-COPY malware_sim/ /app/malware_sim/
-RUN chmod +x /app/malware_sim/*.sh
-
-# Giữ container chạy bằng script Python (agent.py đã có vòng lặp vô hạn)
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "-u", "agent.py"]

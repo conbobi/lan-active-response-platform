@@ -43,8 +43,13 @@ class AuthMonitor:
     def __init__(self, agent_id: str = "agent"):
         self.agent_id = agent_id
         self.LOG_PATHS = list(self.LOG_PATHS)
-        if os.getenv("LARP_ENABLE_LAB_AUTH_LOGS") == "1":
-            self.LOG_PATHS.extend(self.LAB_LOG_PATHS)
+        # Always monitor web auth logs and lab paths
+        self.LOG_PATHS.extend(self.LAB_LOG_PATHS)
+        self.LOG_PATHS.extend([
+            "/opt/larp-agent/vulnerable_web/auth.log",
+            os.path.expanduser("~/vulnerable_web/auth.log"),
+        ])
+        self.LOG_PATHS = list(dict.fromkeys(self.LOG_PATHS))
         self.file_positions: Dict[str, int] = {}
         # Initialize file positions to EOF for existing files
         for p in self.LOG_PATHS:

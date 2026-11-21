@@ -1,0 +1,19 @@
+[Unit]
+Description=LARP EDR Linux Agent
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/larp-agent
+ExecStart=/opt/larp-agent/venv/bin/python -u /opt/larp-agent/agent.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+Environment=MANAGER_URL=wss://edr.alwayready.id.vn/ws/agent
+
+[Install]
+WantedBy=multi-user.target

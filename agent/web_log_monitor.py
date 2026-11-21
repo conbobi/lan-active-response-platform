@@ -25,11 +25,12 @@ class WebLogMonitor:
 
     # Fallback log files if journalctl is not available
     FALLBACK_LOG_PATHS = [
+        "/var/log/vulnerable_web/access.log",
+        "/tmp/web_access.log",
+        "/opt/larp-agent/vulnerable_web/access.log",
+        "/home/webuser/vulnerable_web/access.log",
         "/var/log/cloudflared.log",
         "/tmp/cloudflared.log",
-        "/var/log/vulnerable_web/access.log",
-        "/home/webuser/vulnerable_web/access.log",
-        "/tmp/web_access.log",
         "/var/log/nginx/access.log",
     ]
 

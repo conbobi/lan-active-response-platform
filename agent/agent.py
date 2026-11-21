@@ -38,7 +38,7 @@ def _resolve_manager_url() -> str:
 
     return "wss://edr.alwayready.id.vn/ws/agent"
 
-MANAGER_URL = os.getenv("MANAGER_URL", "wss://edr.alwayready.id.vn/ws/agent")
+MANAGER_URL = _resolve_manager_url()
 
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
 
@@ -774,7 +774,7 @@ async def watchdog_task():
             os._exit(1)
 
 def get_manager_ws_url():
-    url = os.getenv("MANAGER_URL", "ws://manager:8000/ws/agent")
+    url = _resolve_manager_url()
     sep = "&" if "?" in url else "?"
     if "agent_id=" not in url:
         url = f"{url}{sep}agent_id={AGENT_ID}"

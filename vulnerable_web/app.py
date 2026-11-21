@@ -37,84 +37,119 @@ app.secret_key = os.getenv(
     "insecure_key_123"
 )
 
-BASE_DIR = "/home/webuser/vulnerable_web"
-
+BASE_DIR = os.getenv("VULNERABLE_WEB_DIR", os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = "/tmp/uploads"
-AUTH_LOG = os.path.join(BASE_DIR, "auth.log")
-FALLBACK_AUTH_LOG = "/tmp/web_auth.log"
-
-DB_PATH = "/tmp/users.db"
+DB_PATH = os.getenv("VULNERABLE_DB_PATH", "/tmp/users.db")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BASE_DIR, exist_ok=True)
+os.makedirs("/var/log/vulnerable_web", exist_ok=True)
 
+# Log file targets
+AUTH_LOG_PATHS = [
+    os.path.join(BASE_DIR, "auth.log"),
+    "/var/log/vulnerable_web/auth.log",
+    "/tmp/web_auth.log",
+]
+
+ACCESS_LOG_PATHS = [
+    os.path.join(BASE_DIR, "access.log"),
+    "/var/log/vulnerable_web/access.log",
+    "/tmp/web_access.log",
+]
 
 # ============================================================
-# LARP WEB AUTHENTICATION LOGGING
+# LARP WEB AUTHENTICATION & ACCESS LOGGING
 # ============================================================
 
 auth_logger = logging.getLogger("larp_web_auth")
 auth_logger.setLevel(logging.INFO)
 auth_logger.propagate = False
 
+access_logger = logging.getLogger("larp_web_access")
+access_logger.setLevel(logging.INFO)
+access_logger.propagate = False
+
+formatter = logging.Formatter("%(message)s")
+
+# Attach file handlers for auth logging
 if not auth_logger.handlers:
+    for log_p in AUTH_LOG_PATHS:
+        try:
+            os.makedirs(os.path.dirname(log_p), exist_ok=True)
+            h = logging.FileHandler(log_p, encoding="utf-8")
+            h.setFormatter(formatter)
+            auth_logger.addHandler(h)
+            try:
+                os.chmod(log_p, 0o666)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
-    try:
-        handler = logging.FileHandler(
-            AUTH_LOG,
-            encoding="utf-8"
-        )
-        handler.setFormatter(
-            logging.Formatter("%(message)s")
-        )
-        auth_logger.addHandler(handler)
-        os.chmod(AUTH_LOG, 0o644)
-    except Exception:
-        pass
-
-    try:
-        fallback_handler = logging.FileHandler(
-            FALLBACK_AUTH_LOG,
-            encoding="utf-8"
-        )
-        fallback_handler.setFormatter(
-            logging.Formatter("%(message)s")
-        )
-        auth_logger.addHandler(fallback_handler)
-        os.chmod(FALLBACK_AUTH_LOG, 0o666)
-    except Exception:
-        pass
+# Attach file handlers for access logging
+if not access_logger.handlers:
+    for log_p in ACCESS_LOG_PATHS:
+        try:
+            os.makedirs(os.path.dirname(log_p), exist_ok=True)
+            h = logging.FileHandler(log_p, encoding="utf-8")
+            h.setFormatter(formatter)
+            access_logger.addHandler(h)
+            try:
+                os.chmod(log_p, 0o666)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 
 def get_client_ip():
     """
-    Lấy IP Client từ Cloudflare Tunnel.
-
-    Chỉ tin CF-Connecting-IP khi origin được giới hạn
-    để chỉ nhận traffic từ Cloudflare Tunnel.
-
-    Không tin tưởng X-Forwarded-For do client có thể giả mạo.
+    Lấy IP Client từ Cloudflare Tunnel, Reverse Proxy (X-Forwarded-For) hoặc Direct Request.
     """
-
-    cf_ip = request.headers.get(
-        "CF-Connecting-IP",
-        ""
-    ).strip()
-
+    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
     if cf_ip:
-
         try:
-            return (
-                str(ipaddress.ip_address(cf_ip)),
-                "cloudflare"
-            )
+            return (str(ipaddress.ip_address(cf_ip)), "cloudflare")
+        except ValueError:
+            pass
 
+    xff = request.headers.get("X-Forwarded-For", "").strip()
+    if xff:
+        client = xff.split(",")[0].strip()
+        try:
+            return (str(ipaddress.ip_address(client)), "x_forwarded_for")
         except ValueError:
             pass
 
     remote_ip = request.remote_addr or "unknown"
-
     return remote_ip, "remote_addr"
+
+
+@app.after_request
+def log_http_access_telemetry(response):
+    """
+    Ghi lại toàn bộ HTTP request telemetry vào access.log để WebLogMonitor
+    trên LARP Agent phát hiện công cụ quét mạng (Hydra, nmap, sqlmap, nikto, v.v.).
+    """
+    try:
+        client_ip, ip_source = get_client_ip()
+        full_path = request.full_path if request.query_string else request.path
+        entry = {
+            "client_ip": client_ip,
+            "ip_source": ip_source,
+            "method": request.method,
+            "path": full_path,
+            "status_code": response.status_code,
+            "user_agent": request.headers.get("User-Agent", ""),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "host": request.host,
+        }
+        json_line = json.dumps(entry, ensure_ascii=False)
+        access_logger.info(json_line)
+    except Exception:
+        pass
+    return response
 
 
 def write_auth_event(status, username, error_type=None):
@@ -764,22 +799,14 @@ def logout():
 # ============================================================
 
 if __name__ == "__main__":
-
     init_db()
 
-    # Nếu cloudflared chạy trực tiếp trên cùng máy:
-    # nên bind Flask vào 127.0.0.1.
-    #
-    # Nếu cloudflared chạy trong container riêng:
-    # cần cấu hình địa chỉ origin phù hợp.
+    flask_host = os.getenv("FLASK_HOST", "0.0.0.0")
+    flask_port = int(os.getenv("FLASK_PORT", "5000"))
 
-    flask_host = os.getenv(
-        "FLASK_HOST",
-        "127.0.0.1"
-    )
-
+    print(f"[*] Starting Vulnerable Web App on {flask_host}:{flask_port}...", flush=True)
     app.run(
         host=flask_host,
-        port=5000,
+        port=flask_port,
         debug=False
     )
