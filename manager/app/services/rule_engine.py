@@ -1,5 +1,7 @@
 import asyncio
+import ipaddress
 import logging
+import posixpath
 import re
 import time
 import uuid
@@ -25,6 +27,85 @@ class RuleMatch:
     mitre_techniques: List[str]
     matched_event: Dict[str, Any]
     detail: str
+    entity: Optional[str] = None
+
+
+LINUX_SHELLS = {"bash", "dash", "sh", "ash", "ksh", "zsh"}
+LINUX_TEMP_DIRS = ("/tmp/", "/dev/shm/", "/var/tmp/")
+SENSITIVE_FILES = {
+    "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow",
+    "/etc/sudoers", "/etc/ssh/sshd_config", "/etc/crontab",
+}
+SENSITIVE_DIRS = ("/etc/sudoers.d/", "/etc/ssh/sshd_config.d/", "/etc/cron.d/", "/var/spool/cron/")
+
+
+def match_endpoint_telemetry(telemetry: Dict[str, Any]) -> List[RuleMatch]:
+    matches = []
+    for event in telemetry.get("network_connections") or []:
+        if not isinstance(event, dict) or event.get("protocol") != "TCP" or event.get("status") != "ESTABLISHED":
+            continue
+        path = event.get("exe_path")
+        if not isinstance(path, str) or not path.startswith("/"):
+            continue
+        try:
+            remote = ipaddress.ip_address(event["dst_ip"])
+            port = int(event["dst_port"])
+            pid = int(event["pid"])
+            started = float(event["process_start_time"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if isinstance(remote, ipaddress.IPv6Address) and remote.ipv4_mapped:
+            remote = remote.ipv4_mapped
+        if remote.is_loopback or remote.is_unspecified or remote.is_multicast:
+            continue
+        if pid <= 0 or not 0 < started < float("inf") or not 0 < port <= 65535:
+            continue
+
+        path = posixpath.normpath(path)
+        entity = f"{pid}:{started}"
+        peer = f"[{remote}]:{port}"
+        detail = f"PID={pid}, process_start_time={started}, executable={path}, remote={peer}, TCP=ESTABLISHED"
+        if posixpath.basename(path) in LINUX_SHELLS and event.get("socket_stdio") is True:
+            matches.append(RuleMatch(
+                "builtin_linux_network_shell", "Linux shell attached to a remote socket",
+                "high", ["T1059.004"], event,
+                f"{detail}, same socket observed on stdin and an output stream",
+                f"{entity}:{peer}",
+            ))
+        if path.startswith(LINUX_TEMP_DIRS):
+            matches.append(RuleMatch(
+                "builtin_linux_temp_network_exec", "Linux temporary executable with a remote connection",
+                "high", [], event, detail, entity,
+            ))
+
+    for event in telemetry.get("file_changes") or []:
+        if not isinstance(event, dict):
+            continue
+        raw_path = event.get("file_path")
+        if not isinstance(raw_path, str) or not raw_path.startswith("/"):
+            continue
+        path = posixpath.normpath(raw_path)
+        if path not in SENSITIVE_FILES and not path.startswith(SENSITIVE_DIRS):
+            continue
+        action = event.get("action")
+        old_hash = event.get("old_hash") or ""
+        new_hash = event.get("new_hash") or ""
+        old_valid = isinstance(old_hash, str) and bool(re.fullmatch(r"[a-f0-9]{64}", old_hash))
+        new_valid = isinstance(new_hash, str) and bool(re.fullmatch(r"[a-f0-9]{64}", new_hash))
+        transition = (
+            (action == "MODIFIED" and old_valid and new_valid and old_hash != new_hash)
+            or (action == "CREATED" and not old_hash and new_valid)
+            or (action == "DELETED" and old_valid and not new_hash)
+        )
+        if transition:
+            severity = "critical" if path in {"/etc/passwd", "/etc/shadow"} else "high"
+            matches.append(RuleMatch(
+                "builtin_linux_sensitive_file_change", f"Sensitive Linux file changed: {path}",
+                severity, [], event,
+                f"path={path}, action={action}, old_sha256={old_hash or 'absent'}, new_sha256={new_hash or 'absent'}",
+                f"{path}:{action}:{old_hash}:{new_hash}",
+            ))
+    return matches
 
 
 SAFE_PROCESSES = ['python3', 'python', 'node', 'bash', 'sh', 'xfwm4', 'systemd', 'dbus-daemon', 'xfce4-panel']
@@ -105,7 +186,7 @@ def is_suspicious_for_t1071(event: Dict[str, Any]) -> bool:
 
 class RuleEngine:
     """
-    Evaluate active Sigma rules against telemetry from agent.
+    Evaluate built-in endpoint rules and active Sigma rules against agent telemetry.
     Cache active rules 60s, hot-reload after activate/disable.
     """
 
@@ -122,16 +203,13 @@ class RuleEngine:
         telemetry: Dict[str, Any],
         session: AsyncSession,
     ) -> List[Incident]:
-        """Evaluate all active rules against telemetry, create Incidents for matches."""
-        rules = await self._get_active_rules(session)
-        if not rules:
-            return []
-
+        """Evaluate telemetry and create incidents for matching rules."""
         agent_id = telemetry.get("agent_id")
         if not agent_id:
             logger.warning("rule_engine.evaluate: missing agent_id in telemetry")
             return []
 
+        rules = await self._get_active_rules(session)
         matches: List[RuleMatch] = []
         for rule in rules:
             try:
@@ -140,9 +218,6 @@ class RuleEngine:
             except Exception as e:
                 logger.error(f"rule_engine: rule '{rule.get('rule_name')}' eval failed: {e}")
                 continue
-
-        if not matches:
-            return []
 
         # Lọc bỏ matches nếu process_name hoặc Image nằm trong SAFE_PROCESSES và không ở /tmp, /dev/shm, /var/tmp
         filtered_matches = []
@@ -165,9 +240,6 @@ class RuleEngine:
             filtered_matches.append(m)
         matches = filtered_matches
 
-        if not matches:
-            return []
-
         # Lọc bỏ generic network match (T1071) nếu tiến trình không bị coi là đáng ngờ
         # (Chỉ gán T1071 nếu tiến trình đáng ngờ / reverse shell / path độc hại)
         filtered_matches = []
@@ -184,9 +256,6 @@ class RuleEngine:
                 m.mitre_techniques = [t for t in m.mitre_techniques if not str(t).startswith("T1071")]
             filtered_matches.append(m)
         matches = filtered_matches
-
-        if not matches:
-            return []
 
         # Ưu tiên Reverse Shell (T1059 / T1059.004) lên đầu
         matches.sort(
@@ -211,6 +280,9 @@ class RuleEngine:
                 filtered_matches.append(m)
             matches = filtered_matches
 
+        matches = match_endpoint_telemetry(telemetry) + matches
+        if not matches:
+            return []
         incidents = await self._create_incidents(matches, telemetry, agent_id, session)
         if incidents:
             logger.info(
@@ -323,7 +395,7 @@ class RuleEngine:
         """Load active rules từ DB, cache 60s."""
         async with self._lock:
             now = time.time()
-            if now - self._cache_loaded_at < self.CACHE_TTL_SEC and self._cached_rules:
+            if now - self._cache_loaded_at < self.CACHE_TTL_SEC:
                 return self._cached_rules
 
             stmt = select(RuleCandidate).where(RuleCandidate.status == "active")
@@ -587,7 +659,7 @@ class RuleEngine:
                 "T1059" in (inc.description or "")
                 or "reverse shell" in (inc.title or "").lower()
                 or "shell" in (inc.title or "").lower()
-            )
+            ) and not (inc.notes or "").startswith("rule_id:builtin_")
             for inc in recent
         )
 
@@ -610,7 +682,7 @@ class RuleEngine:
             incident = Incident(
                 id=inc_id,
                 agent_id=agent_id,
-                title=f"[{m.severity.upper()}] {m.rule_name}",
+                title=f"[{m.severity.upper()}] {m.rule_name}"[:256],
                 description=(
                     f"Rule: {m.rule_name}\n"
                     f"Rule ID: {m.rule_id}\n"
@@ -622,7 +694,10 @@ class RuleEngine:
                 severity=sev_map.get(m.severity.lower(), IncidentSeverity.MEDIUM),
                 status=IncidentStatus.OPEN,
                 risk_score=float(self._severity_to_score(m.severity)),
-                notes=f"rule_id:{m.rule_id} | Auto-generated by LARP AI Rule Engine",
+                notes=(
+                    f"rule_id:{m.rule_id} | entity:{m.entity}"
+                    if m.entity is not None else f"rule_id:{m.rule_id} | Auto-generated by LARP AI Rule Engine"
+                ),
             )
             session.add(incident)
             created.append(incident)
@@ -637,6 +712,8 @@ class RuleEngine:
 
     def _is_same_rule_incident(self, incident: Incident, match: RuleMatch) -> bool:
         """Kiểm tra incident trùng lặp theo rule_id hoặc rule_name."""
+        if match.entity is not None:
+            return incident.notes == f"rule_id:{match.rule_id} | entity:{match.entity}"
         if incident.notes and f"rule_id:{match.rule_id}" in incident.notes:
             return True
         if incident.description and f"Rule ID: {match.rule_id}" in incident.description:

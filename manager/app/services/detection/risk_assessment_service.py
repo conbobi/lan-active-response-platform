@@ -1,6 +1,7 @@
 import re
 import uuid
 import logging
+from datetime import datetime
 from typing import Dict, Any, Tuple, Union, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -156,7 +157,8 @@ class RiskAssessmentService:
         return is_agent_process(process)
 
     async def evaluate(
-        self, agent_id: str, data: Union[RiskAssessmentDTO, Dict[str, Any]]
+        self, agent_id: str, data: Union[RiskAssessmentDTO, Dict[str, Any]],
+        *, auth_history_before: Optional[datetime] = None,
     ) -> Tuple[float, Dict[str, Any]]:
         """
         Evaluate composite risk score (0 - 100) using dynamic rules in RiskRuleRegistry,
@@ -201,6 +203,7 @@ class RiskAssessmentService:
             "setting_service": self.setting_service,
             "session": self.session,
             "agent_id": agent_id,
+            "auth_history_before": auth_history_before,
         }
 
         rule_scores: Dict[str, float] = {}
@@ -257,13 +260,15 @@ class RiskAssessmentService:
     async def process_risk(
         self,
         agent_id: str,
-        data: Union[RiskAssessmentDTO, Dict[str, Any]]
+        data: Union[RiskAssessmentDTO, Dict[str, Any]],
+        *,
+        auth_history_before: Optional[datetime] = None,
     ) -> RiskScoreRecord:
         """
         Process assessment, calculate raw + smoothed score via EMA, store record, check whitelist,
         and execute auto-isolation, incident creation, & alert based on smoothed score.
         """
-        raw_score, factors = await self.evaluate(agent_id, data)
+        raw_score, factors = await self.evaluate(agent_id, data, auth_history_before=auth_history_before)
 
         # 2. Lấy smoothed_score gần nhất từ DB (hỗ trợ cả mock trong unit test)
         latest = None
@@ -312,6 +317,9 @@ class RiskAssessmentService:
             res_add = self.risk_repo.add(record)
             if inspect.isawaitable(res_add):
                 await res_add
+
+        if auth_history_before is not None and not factors.get("brute_force"):
+            return record
 
         # 5. Phản ứng tự động dựa trên smoothed score
         action = await self.determine_action(smoothed)

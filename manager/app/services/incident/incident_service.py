@@ -140,12 +140,17 @@ class IncidentService(AbstractService[IncidentRepository]):
         risk_score: float,
         factors: Dict[str, Any]
     ) -> Incident:
-        """Automated incident creation triggered by high risk score (> 50). Deduplicates active incidents for agent."""
-        # Check if active (OPEN/INVESTIGATING/CONTAINED) incident exists for agent
+        """Deduplicate active risk incidents by agent and detection source."""
+        auth_alert = factors.get("brute_force")
+        notes = (
+            "risk_source:brute_force"
+            if auth_alert else "Auto-generated incident on risk assessment threshold breach."
+        )
         stmt = (
             select(Incident)
             .where(
                 Incident.agent_id == agent_id,
+                Incident.notes == notes,
                 Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED])
             )
             .order_by(Incident.created_at.desc())
@@ -168,7 +173,10 @@ class IncidentService(AbstractService[IncidentRepository]):
             return existing
 
         inc_id = f"inc_{uuid.uuid4().hex[:12]}"
-        title = f"High Risk Threat Spike on Agent '{agent_id}' (Score: {risk_score})"
+        title = (
+            f"Authentication Risk on Agent '{agent_id}' (Score: {risk_score})"
+            if auth_alert else f"High Risk Threat Spike on Agent '{agent_id}' (Score: {risk_score})"
+        )
         desc = f"Automated incident generated due to risk score {risk_score}.\nFactors: {factors}"
 
         inc = Incident(
@@ -179,7 +187,7 @@ class IncidentService(AbstractService[IncidentRepository]):
             status=IncidentStatus.OPEN,
             agent_id=agent_id,
             risk_score=risk_score,
-            notes="Auto-generated incident on risk assessment threshold breach."
+            notes=notes,
         )
         created = await self.repository.add(inc)
         await self.session.flush()

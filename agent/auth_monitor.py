@@ -16,24 +16,23 @@ class AuthMonitor:
     """
 
     LOG_PATHS = [
-        "/tmp/auth.log",                         # Simulated/test log path
-        "/tmp/web_auth.log",                     # Web auth log for lab testing
         "/home/webuser/vulnerable_web/auth.log", # Flask web auth log
         "/var/log/vulnerable_web/auth.log",      # Production web auth log
         "/var/log/auth.log",                     # Ubuntu/Debian SSH/PAM
         "/var/log/secure",                       # CentOS/RHEL/Fedora
     ]
+    LAB_LOG_PATHS = ["/tmp/auth.log", "/tmp/web_auth.log"]
 
     FAILED_SSH_RE = re.compile(
         r"Failed password for (?:invalid user )?(?P<user>\S+) from (?P<ip>\S+) port \d+ ssh2",
         re.IGNORECASE
     )
     ACCEPTED_SSH_RE = re.compile(
-        r"Accepted (?:password|publickey) for (?P<user>\S+) from (?P<ip>\S+) port \d+ ssh2",
+        r"Accepted (?P<method>password|publickey) for (?P<user>\S+) from (?P<ip>\S+) port \d+ ssh2",
         re.IGNORECASE
     )
     FAILED_PAM_RE = re.compile(
-        r"pam_unix\(\S+:auth\): authentication failure;.*rhost=(?P<ip>\S*)\s+user=(?P<user>\S*)",
+        r"pam_unix\((?P<service>[^:\s]+):auth\): authentication failure;.*rhost=(?P<ip>\S*)\s+user=(?P<user>\S*)",
         re.IGNORECASE
     )
     WEB_AUTH_RE = re.compile(
@@ -43,6 +42,9 @@ class AuthMonitor:
 
     def __init__(self, agent_id: str = "agent"):
         self.agent_id = agent_id
+        self.LOG_PATHS = list(self.LOG_PATHS)
+        if os.getenv("LARP_ENABLE_LAB_AUTH_LOGS") == "1":
+            self.LOG_PATHS.extend(self.LAB_LOG_PATHS)
         self.file_positions: Dict[str, int] = {}
         # Initialize file positions to EOF for existing files
         for p in self.LOG_PATHS:
@@ -146,6 +148,7 @@ class AuthMonitor:
                             "source_ip": m_succ.group("ip"),
                             "username": m_succ.group("user"),
                             "status": "success",
+                            "auth_method": m_succ.group("method").lower(),
                             "count": 1,
                             "timestamp": now_iso
                         })
@@ -153,7 +156,8 @@ class AuthMonitor:
 
                     # 5. Check PAM failure
                     m_pam = self.FAILED_PAM_RE.search(line_str)
-                    if m_pam:
+                    # sshd also logs the failed password explicitly for the same attempt.
+                    if m_pam and m_pam.group("service").lower() not in {"ssh", "sshd"}:
                         ip = m_pam.group("ip") or "127.0.0.1"
                         user = m_pam.group("user") or "unknown"
                         events.append({

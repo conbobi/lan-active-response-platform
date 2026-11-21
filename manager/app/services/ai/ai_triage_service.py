@@ -40,8 +40,11 @@ class AITriageService:
             process_tree = process_tree[:20]
             flows = await self._get_recent_flows(session, incident.agent_id, incident.created_at, minutes=15)
             flows = flows[:10]
-            factors = await self._get_risk_factors(
-            session, incident.agent_id, incident.created_at, incident.description,)
+            factors = {}
+            if not (getattr(incident, "notes", None) or "").startswith(("rule_id:", "risk_source:")):
+                factors = await self._get_risk_factors(
+                    session, incident.agent_id, incident.created_at, incident.description,
+                )
 
             # 3. Build prompt
             prompt = self._build_prompt(
@@ -201,7 +204,14 @@ class AITriageService:
         factors: Dict[str, Any],
         mitre_kb_ids: List[str],
     ) -> str:
-        first_desc_line = (incident.description or '').split('\n')[0][:200]
+        description = incident.description or ""
+        notes = getattr(incident, "notes", None) or ""
+        if notes.startswith("rule_id:"):
+            alert_evidence = description[:1600]
+        elif notes.startswith("risk_source:"):
+            alert_evidence = description.rsplit("[Auto Update]", 1)[-1][:1600]
+        else:
+            alert_evidence = description.split("\n", 1)[0][:200]
         # Select candidate MITRE IDs to keep prompt lean
         priority_ids = [
             # LOLBin / Process execution
@@ -229,7 +239,8 @@ class AITriageService:
         return f"""Phân tích cảnh báo EDR này và trả về JSON theo đúng định dạng.
 
 INCIDENT: {incident.title} (Score: {incident.risk_score}/100)
-Alert: {first_desc_line}
+CHỨNG CỨ CỦA CẢNH BÁO (dữ liệu quan sát):
+{alert_evidence}
 
 TIẾN TRÌNH QUAN SÁT ĐƯỢC (PROCESS TELEMETRY):
 {self._format_process_tree(process_tree[:8])}

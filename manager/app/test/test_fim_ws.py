@@ -10,6 +10,7 @@ if str(agent_dir) not in sys.path:
     sys.path.insert(0, str(agent_dir))
 
 from fim import FileIntegrityMonitor
+from app.services.rule_engine import RuleEngine
 from app.websocket.agent_ws import agent_websocket_endpoint
 from app.schemas.enums import IncidentSeverity
 
@@ -101,12 +102,12 @@ async def test_fim_alert_critical_file_creates_incident():
     mock_session = AsyncMock()
     mock_session.commit = AsyncMock()
     mock_session.add = MagicMock()
+    mock_session.execute.return_value = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.all.return_value = []
+    mock_session.__aenter__.return_value = mock_session
     mock_session_local = MagicMock(return_value=mock_session)
     mock_session_local.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_local.__aexit__ = AsyncMock(return_value=None)
-
-    mock_inc_service = MagicMock()
-    mock_inc_service.create_incident = AsyncMock()
 
     mock_event_repo = MagicMock()
     mock_event_repo.add = AsyncMock()
@@ -114,8 +115,10 @@ async def test_fim_alert_critical_file_creates_incident():
     with patch("app.websocket.agent_ws.connection_manager.connect", AsyncMock()), \
          patch("app.websocket.agent_ws.connection_manager.disconnect", MagicMock()), \
          patch("app.websocket.agent_ws.AsyncSessionLocal", mock_session_local), \
+         patch("app.websocket.agent_ws.rule_engine", RuleEngine()), \
          patch("app.websocket.agent_ws.EventRepository", return_value=mock_event_repo), \
-         patch("app.websocket.agent_ws.IncidentService", return_value=mock_inc_service):
+         patch("app.websocket.agent_ws.dashboard_manager.broadcast", AsyncMock()) as broadcast, \
+         patch("app.websocket.agent_ws._run_ai_triage", AsyncMock()) as triage:
 
         await agent_websocket_endpoint(mock_ws)
 
@@ -127,11 +130,14 @@ async def test_fim_alert_critical_file_creates_incident():
         assert event_obj.agent_id == "client1"
 
         # 2. Verify CRITICAL incident was created for /etc/passwd
-        mock_inc_service.create_incident.assert_awaited_once()
-        inc_dto = mock_inc_service.create_incident.call_args[0][0]
-        assert inc_dto.severity == IncidentSeverity.CRITICAL
-        assert "/etc/passwd" in inc_dto.title
-        assert inc_dto.agent_id == "client1"
+        mock_session.add.assert_called_once()
+        incident = mock_session.add.call_args.args[0]
+        assert incident.severity == IncidentSeverity.CRITICAL
+        assert "/etc/passwd" in incident.title
+        assert incident.agent_id == "client1"
+        assert incident.risk_score == 95.0
+        triage.assert_called_once_with(incident.id)
+        assert broadcast.await_args.args[0]["data"][0]["id"] == incident.id
 
         # 3. Verify response ACK
         mock_ws.send_json.assert_called_once_with({

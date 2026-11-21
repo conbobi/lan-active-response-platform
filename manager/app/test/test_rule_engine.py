@@ -1,5 +1,7 @@
 import pytest
-from app.services.rule_engine import RuleEngine
+from unittest.mock import AsyncMock, MagicMock
+
+from app.services.rule_engine import RuleEngine, match_endpoint_telemetry
 
 
 def test_match_contains():
@@ -181,5 +183,57 @@ def test_parent_pid_low_not_traced():
     assert engine._match_field("parent_pid", 500, {"parent_pid": 2}) is False
     # PID 1 matching PID 1 is allowed
     assert engine._match_field("parent_pid", 1, {"parent_pid": 1}) is True
+
+
+def test_endpoint_network_rules_require_process_and_socket_evidence():
+    shell = {
+        "exe_path": "/usr/bin/bash", "pid": 808, "process_start_time": 1000.5,
+        "dst_ip": "192.0.2.21", "dst_port": 443, "protocol": "TCP",
+        "status": "ESTABLISHED", "socket_stdio": True,
+    }
+    temp_exec = {**shell, "exe_path": "/dev/shm/tool", "socket_stdio": False}
+    matches = match_endpoint_telemetry({"network_connections": [shell, temp_exec]})
+    assert [match.rule_id for match in matches] == [
+        "builtin_linux_network_shell", "builtin_linux_temp_network_exec",
+    ]
+    assert "192.0.2.21" in matches[0].detail
+    different_start = match_endpoint_telemetry(
+        {"network_connections": [{**shell, "process_start_time": 1001}]}
+    )[0]
+    assert different_start.entity != matches[0].entity
+
+    benign = [
+        {**shell, "socket_stdio": False},
+        {**shell, "dst_ip": "127.0.0.1"},
+        {**shell, "dst_ip": "::ffff:127.0.0.1"},
+        {**shell, "status": "SYN_SENT"},
+        {**shell, "protocol": "UDP"},
+        {**temp_exec, "process_start_time": None},
+        {**temp_exec, "exe_path": "/tmp-backup/tool"},
+        {**temp_exec, "exe_path": "/tmp/../usr/bin/tool"},
+    ]
+    assert match_endpoint_telemetry({"network_connections": benign}) == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_fim_deduplicates_transitions_and_preserves_distinct_changes():
+    engine = RuleEngine()
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.execute.return_value.scalars.return_value.all.return_value = []
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    change = {"file_path": "/etc/sudoers.d/example", "action": "MODIFIED",
+              "old_hash": "a" * 64, "new_hash": "b" * 64}
+    incidents = await engine.evaluate({
+        "agent_id": "a",
+        "file_changes": [
+            change, change, {**change, "old_hash": "b" * 64, "new_hash": "c" * 64},
+            {**change, "file_path": "/tmp/passwd"}, {**change, "new_hash": "a" * 64},
+        ],
+    }, session)
+    assert [incident.risk_score for incident in incidents] == [75.0, 75.0]
+    assert incidents[0].notes != incidents[1].notes
+    assert "new_sha256=" + "b" * 64 in incidents[0].description
 
 

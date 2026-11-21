@@ -274,14 +274,33 @@ def get_process_list(all_processes=None):
     normal_procs = [p for p in all_processes if not p["is_suspicious"]]
     return (suspicious_procs + normal_procs)[:30]
 
+def has_socket_stdio(pid, fd):
+    """Check that the observed socket is attached to stdin and an output stream."""
+    if not pid or fd < 0:
+        return False
+
+    def read_fd(number):
+        try:
+            return os.readlink(f"/proc/{pid}/fd/{number}")
+        except OSError:
+            return ""
+
+    socket_link = read_fd(fd)
+    return (
+        socket_link.startswith("socket:[")
+        and read_fd(0) == socket_link
+        and socket_link in (read_fd(1), read_fd(2))
+    )
+
+
 def get_network_connections():
-    """Lấy các kết nối mạng outbound đang mở, đánh dấu suspicious nếu cổng đích/nguồn nằm trong danh sách lạ."""
+    """Collect sockets with a remote peer and any available owning process metadata."""
     suspicious_ports = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
     connections = []
     my_pid = os.getpid()
     try:
         for conn in psutil.net_connections(kind='inet'):
-            # CHỈ lấy socket outbound thực sự (có raddr và không phải LISTEN)
+            # psutil reports local and remote endpoints for inbound and outbound sockets.
             if not conn.raddr or conn.status == 'LISTEN':
                 continue
             # Bỏ qua socket của chính LARP Agent (tránh self-detection loop)
@@ -319,6 +338,13 @@ def get_network_connections():
                 except Exception:
                     proc_name = "unknown"
 
+            is_tcp = conn.type == socket.SOCK_STREAM
+            shell = os.path.basename(exe_path) in {"bash", "dash", "sh", "ash", "ksh", "zsh"}
+            socket_stdio = (
+                is_tcp and conn.status == psutil.CONN_ESTABLISHED
+                and shell and has_socket_stdio(conn.pid, conn.fd)
+            )
+
             connections.append({
                 "pid": conn.pid,
                 "process_name": proc_name,
@@ -329,15 +355,23 @@ def get_network_connections():
                 "src_port": src_port,
                 "dst_ip": dst_ip,
                 "dst_port": dst_port,
+                "protocol": "TCP" if is_tcp else "UDP",
                 "status": conn.status,
+                "socket_stdio": socket_stdio,
                 "is_suspicious": is_susp
             })
     except Exception:
         pass
 
-    suspicious_conns = [c for c in connections if c["is_suspicious"]]
-    normal_conns = [c for c in connections if not c["is_suspicious"]]
-    return (suspicious_conns + normal_conns)[:25]
+    connections.sort(
+        key=lambda conn: (
+            conn["socket_stdio"],
+            conn["exe_path"].startswith(("/tmp/", "/dev/shm/", "/var/tmp/")),
+            conn["is_suspicious"],
+        ),
+        reverse=True,
+    )
+    return connections[:25]
 
 def get_file_changes_count():
     """Đếm số file .encrypted hoặc có thay đổi gần đây trong /tmp (bao gồm thư mục con)."""
@@ -634,7 +668,6 @@ async def send_risk_telemetry(websocket):
                 "credential_access_events": cred_events,
                 "lateral_movement_events": [],
                 "dns_queries": dns_queries,
-                "auth_events": auth_events,
                 "connection_history": conn_hist,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
@@ -642,7 +675,7 @@ async def send_risk_telemetry(websocket):
             message = {"type": "TELEMETRY_RISK", "payload": payload, "wait_ack": False}
             await send_ws_json_no_wait(websocket, message)
 
-            # If auth attempts detected, dispatch real-time AUTH_EVENT message as well
+            # AUTH_EVENT is the canonical ingestion path for authentication logs.
             if auth_events:
                 auth_msg = {
                     "type": "AUTH_EVENT",

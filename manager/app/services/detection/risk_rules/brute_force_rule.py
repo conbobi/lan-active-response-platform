@@ -1,17 +1,45 @@
-from typing import Any, Dict, Tuple, List, Set
 from collections import defaultdict
+from ipaddress import ip_address
+from typing import Any, Dict, Tuple
+
+from app.repositories.auth_event_repository import AuthEventRepository
 from app.services.detection.risk_rules.base import RiskRule
 
 
+def normalize_auth_event(event: dict) -> dict | None:
+    status = str(event.get("status") or "").strip().lower()
+    if not status and isinstance(event.get("success"), bool):
+        status = "success" if event["success"] else "failed"
+    if status not in {"failed", "success"}:
+        return None
+
+    try:
+        count = int(event.get("count", 1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not 1 <= count <= 2_147_483_647:
+        return None
+
+    try:
+        parsed_ip = ip_address(str(event.get("source_ip") or "").strip())
+        source = str(getattr(parsed_ip, "ipv4_mapped", None) or parsed_ip)
+    except ValueError:
+        source = "unknown"
+
+    service = str(event.get("service") or "ssh").strip().lower()[:32] or "ssh"
+    return {
+        "service": "ssh" if service == "sshd" else service,
+        "source_ip": source,
+        "username": (str(event.get("username") or "").strip() or "unknown")[:64],
+        "status": status,
+        "count": count,
+        "auth_method": str(event.get("auth_method") or "").strip().lower(),
+    }
+
+
 class BruteForceRule(RiskRule):
-    """
-    Risk rule detecting brute force authentication attacks (SSH / RDP / Local auth).
-    Triggers when:
-    1. >= 5 failed logins from same IP in short window (score: 55)
-    2. >= 10 failed logins on same user (score: 50)
-    3. Distributed attack: >= 3 distinct IPs targeting same user (score: 65)
-    4. Successful login following repeated failures (breach! score: 85)
-    """
+    """Correlate authentication failures and subsequent logins within each service."""
+
     rule_id = "brute_force"
     name = "Brute Force Authentication Detection"
     description = "Detects targeted or distributed brute force authentication attempts and credential stuffing."
@@ -19,95 +47,82 @@ class BruteForceRule(RiskRule):
     weight = 1.0
     base_score = 30.0
     category = "identity"
-
-    FAILED_LOGIN_THRESHOLD = 5
-    FAILED_USERNAME_THRESHOLD = 10
-    DISTRIBUTED_IP_THRESHOLD = 3
-
-    DEFAULT_CONFIG = {
-        "threshold": 5,
-        "critical_threshold": 15,
-        "window_seconds": 60
-    }
+    config = {"threshold": 5, "critical_threshold": 15, "window_seconds": 60}
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
-        threshold = int(self.config.get("threshold", self.FAILED_LOGIN_THRESHOLD))
-        critical_threshold = int(self.config.get("critical_threshold", 15))
+        threshold = max(1, int(self.config.get("threshold", 5)))
+        critical_threshold = max(threshold, int(self.config.get("critical_threshold", 15)))
+        window_seconds = max(1, int(self.config.get("window_seconds", 60)))
 
-        auth_events: List[Dict[str, Any]] = telemetry.get("auth_events", [])
-        failed_count = int(telemetry.get("failed_login_attempts", 0))
-        has_success_after_fail = False
+        events = []
+        for raw_event in telemetry.get("auth_events") or []:
+            event = normalize_auth_event(raw_event) if isinstance(raw_event, dict) else None
+            if event and event["source_ip"] != "unknown":
+                events.append(event)
 
-        by_ip: Dict[str, int] = defaultdict(int)
-        by_user: Dict[str, int] = defaultdict(int)
-        user_ips: Dict[str, Set[str]] = defaultdict(set)
-
-        for evt in auth_events:
-            status = str(evt.get("status", "")).lower()
-            is_failed = (status == "failed") or (evt.get("success") is False)
-            cnt = int(evt.get("count", 1))
-
-            u = str(evt.get("username") or "unknown").strip()
-            s_ip = str(evt.get("source_ip") or "unknown").strip()
-
-            if is_failed:
-                failed_count += cnt
-                if s_ip and s_ip != "unknown":
-                    by_ip[s_ip] += cnt
-                if u and u != "unknown":
-                    by_user[u] += cnt
-                    if s_ip and s_ip != "unknown":
-                        user_ips[u].add(s_ip)
-            elif (status == "success" or evt.get("success") is True) and failed_count > 0:
-                has_success_after_fail = True
-
-        # Fallback check DB sliding window if context session provided and count below threshold
-        session = context.get("session")
-        agent_id = context.get("agent_id") or telemetry.get("agent_id")
-        if session and agent_id and failed_count < threshold:
-            try:
-                from app.repositories.auth_event_repository import AuthEventRepository
-                repo = AuthEventRepository(session)
-                window_sec = int(self.config.get("window_seconds", 60))
-                db_fails = await repo.count_failed_attempts(agent_id=agent_id, window_seconds=window_sec)
-                failed_count = max(failed_count, db_fails)
-            except Exception:
-                pass
-
-        if failed_count == 0 and not has_success_after_fail:
+        if not events:
+            # The risk-evaluate API also accepts an aggregate count without identity.
+            count = int(telemetry.get("failed_login_attempts") or 0)
+            if count >= threshold:
+                return min(50.0, self.base_score), f"{count} failed logins reported without source attribution"
             return 0.0, ""
 
-        # Check 1: Success after multiple failed attempts -> Breach!
-        if has_success_after_fail and failed_count >= threshold:
-            reason = f"CRITICAL: Successful authentication breach following {failed_count} failed attempts"
-            return 85.0 * self.base_score / 30.0, reason
+        by_source = defaultdict(int)
+        by_account = defaultdict(int)
+        by_user = defaultdict(int)
+        user_sources = defaultdict(set)
+        history_before = context.get("auth_history_before")
+        if history_before is not None:
+            history = await AuthEventRepository(context["session"]).get_failed_attempt_groups(
+                context["agent_id"], history_before, window_seconds, {event["service"] for event in events}
+            )
+            for service, source, user, count in history:
+                if source == "unknown" or count <= 0:
+                    continue
+                by_source[service, source] += count
+                if user != "unknown":
+                    by_account[service, source, user] += count
+                    by_user[service, user] += count
+                    user_sources[service, user].add(source)
 
-        # Check 2: Distributed brute force attack (multiple IPs -> same user)
-        for user, ips in user_ips.items():
-            if len(ips) >= self.DISTRIBUTED_IP_THRESHOLD:
-                ips_sample = ", ".join(list(ips)[:3])
-                reason = f"Distributed brute force on user '{user}': {len(ips)} source IPs ({ips_sample})"
-                return 65.0 * self.base_score / 30.0, reason
+        best_score, reason = 0.0, ""
+        for event in events:
+            service, source, user = event["service"], event["source_ip"], event["username"]
+            source_key = (service, source)
+            account_key = (service, source, user)
+            user_key = (service, user)
+            score, detail = 0.0, ""
 
-        # Check 3: Brute force by IP
-        for ip, count in by_ip.items():
-            if count >= self.FAILED_LOGIN_THRESHOLD:
-                reason = f"Brute force from IP {ip}: {count} failed logins"
-                return 55.0 * self.base_score / 30.0, reason
+            if event["status"] == "success":
+                prior_failures = by_account[account_key]
+                if prior_failures >= threshold and event["auth_method"] != "publickey":
+                    score = 85.0
+                    detail = (
+                        f"{service} login for '{user}' from {source} after {prior_failures} "
+                        "failed attempts for the same account and source"
+                    )
+            else:
+                count = event["count"]
+                by_source[source_key] += count
+                if user != "unknown":
+                    by_account[account_key] += count
+                    by_user[user_key] += count
+                    user_sources[user_key].add(source)
 
-        # Check 4: Brute force by username
-        for user, count in by_user.items():
-            if count >= self.FAILED_USERNAME_THRESHOLD:
-                reason = f"Brute force on user '{user}': {count} failed attempts"
-                return 50.0 * self.base_score / 30.0, reason
+                source_total = by_source[source_key]
+                user_total = by_user[user_key]
+                source_count = len(user_sources[user_key])
+                if source_total >= critical_threshold:
+                    score = 75.0
+                    detail = f"Brute force on {service} from {source}: {source_total} failed logins"
+                elif user_total >= threshold and source_count >= 3:
+                    score = 65.0
+                    detail = f"Distributed brute force on {service} account '{user}': {user_total} failed logins from {source_count} sources"
+                elif source_total >= threshold:
+                    score = 55.0
+                    detail = f"Brute force on {service} from {source}: {source_total} failed logins"
 
-        # Check 5: Heavy total failures
-        if failed_count >= critical_threshold:
-            return 75.0 * self.base_score / 30.0, f"Aggressive brute force attack detected: {failed_count} failed attempts"
+            if score > best_score:
+                best_score, reason = score, detail
 
-        # Check 6: Generic threshold met
-        if failed_count >= threshold:
-            score = min(50.0, self.base_score + (failed_count - threshold) * 2.0)
-            return score, f"Brute force activity detected: {failed_count} failed login attempts"
-
-        return 0.0, ""
+        return best_score * self.base_score / 30.0, reason

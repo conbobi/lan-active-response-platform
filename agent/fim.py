@@ -1,7 +1,6 @@
 # agent/fim.py
 import hashlib
 import os
-import glob
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
@@ -27,11 +26,16 @@ class FileIntegrityMonitor:
         "/etc/passwd",
         "/etc/shadow",
         "/etc/sudoers",
+        "/etc/group",
+        "/etc/gshadow",
         "/etc/hosts",
         "/etc/ssh/sshd_config",
+        "/etc/crontab",
     ]
     DEFAULT_WATCHED_DIRS = [
         "/etc/cron.d",
+        "/etc/sudoers.d",
+        "/etc/ssh/sshd_config.d",
         "/var/spool/cron",
         "/tmp/malware_sim",
         "/home/webuser/vulnerable_web/uploads",

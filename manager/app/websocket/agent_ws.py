@@ -18,6 +18,7 @@ from app.schemas.command_ack import CommandAckDTO
 from app.services.agent.agent_service import AgentService
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.detection.risk_assessment_service import RiskAssessmentService
+from app.services.detection.risk_rules.brute_force_rule import normalize_auth_event
 from app.models.process_info import ProcessInfo
 from app.repositories.process_info_repository import ProcessInfoRepository
 from app.models.flow import Flow
@@ -213,6 +214,28 @@ async def _run_ai_triage(incident_id: str):
                 await asyncio.sleep(1.0)
 
 
+async def _evaluate_incident_rules(agent_id: str, telemetry: dict, session: AsyncSession) -> None:
+    incidents = await rule_engine.evaluate({**telemetry, "agent_id": agent_id}, session)
+    if not incidents:
+        return
+
+    for incident in incidents:
+        asyncio.create_task(_run_ai_triage(incident.id))
+    await dashboard_manager.broadcast({
+        "type": "INCIDENT_NEW",
+        "data": [
+            {
+                "id": incident.id,
+                "title": incident.title,
+                "severity": incident.severity.value,
+                "risk_score": incident.risk_score,
+                "agent_id": agent_id,
+            }
+            for incident in incidents
+        ],
+    })
+
+
 async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
@@ -220,28 +243,8 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
     saved_count = await _save_process_list(session, target_agent_id, procs_data)
     logger.info(f"Saved {saved_count} processes for agent '{target_agent_id}' via PROCESS_LIST")
 
-    # Rule Engine: Evaluate active Sigma rules against process list
     try:
-        incidents = await rule_engine.evaluate(payload, session)
-        for inc in incidents:
-            logger.info(f"Hook: Triggering AI Triage for {inc.id}")
-            asyncio.create_task(_run_ai_triage(inc.id))
-
-        if incidents:
-            await dashboard_manager.broadcast({
-                "type": "INCIDENT_NEW",
-                "data": [
-                    {
-                        "id": str(i.id),
-                        "title": i.title,
-                        "severity": i.severity.value if hasattr(i.severity, "value") else str(i.severity),
-                        "risk_score": i.risk_score,
-                        "agent_id": target_agent_id
-                    }
-                    for i in incidents
-                ]
-            })
-            logger.info(f"rule_engine: {len(incidents)} incident(s) created for agent '{target_agent_id}' from PROCESS_LIST")
+        await _evaluate_incident_rules(target_agent_id, payload, session)
     except Exception as e:
         logger.error(f"rule_engine hook failed on PROCESS_LIST for agent '{target_agent_id}': {e}", exc_info=True)
 
@@ -290,28 +293,8 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
         except Exception as e:
             logger.warning(f"Failed to record network connections from telemetry: {e}")
 
-    # Rule Engine: Evaluate active Sigma rules against telemetry
     try:
-        incidents = await rule_engine.evaluate(payload, session)
-        for inc in incidents:
-            logger.info(f"Hook: Triggering AI Triage for {inc.id}")
-            asyncio.create_task(_run_ai_triage(inc.id))
-
-        if incidents:
-            await dashboard_manager.broadcast({
-                "type": "INCIDENT_NEW",
-                "data": [
-                    {
-                        "id": str(i.id),
-                        "title": i.title,
-                        "severity": i.severity.value if hasattr(i.severity, "value") else str(i.severity),
-                        "risk_score": i.risk_score,
-                        "agent_id": target_agent_id
-                    }
-                    for i in incidents
-                ]
-            })
-            logger.info(f"rule_engine: {len(incidents)} incident(s) created for agent '{target_agent_id}'")
+        await _evaluate_incident_rules(target_agent_id, payload, session)
     except Exception as e:
         logger.error(f"rule_engine hook failed for agent '{target_agent_id}': {e}", exc_info=True)
 
@@ -418,8 +401,6 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
     target_agent_id = payload.get("agent_id", agent_id)
     file_path = str(payload.get("file_path", ""))
     action = str(payload.get("action", "MODIFIED"))
-    old_hash = str(payload.get("old_hash", ""))
-    new_hash = str(payload.get("new_hash", ""))
     now_dt = datetime.now(timezone.utc)
 
     fim_event = Event(
@@ -435,23 +416,7 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
     event_repo = EventRepository(session)
     await event_repo.add(fim_event)
 
-    is_critical_file = any(
-        file_path == cf or file_path.endswith(cf)
-        for cf in ("/etc/passwd", "/etc/shadow", "passwd", "shadow")
-    )
-    if is_critical_file:
-        inc_dto = IncidentCreate(
-            id=f"inc_{uuid.uuid4().hex[:12]}",
-            title=f"Critical File Integrity Alert: {file_path}",
-            description=f"Unauthorized {action} detected on system file '{file_path}' for agent '{target_agent_id}'. Baseline hash: {old_hash[:12]}... -> Current hash: {new_hash[:12]}...",
-            severity=IncidentSeverity.CRITICAL,
-            agent_id=target_agent_id,
-            risk_score=95.0,
-            notes="Automated incident triggered by Agent FIM."
-        )
-        inc_service = IncidentService(session)
-        await inc_service.create_incident(inc_dto)
-        logger.warning(f"CRITICAL Incident created for FIM tampering on {file_path} (agent {target_agent_id})")
+    await _evaluate_incident_rules(target_agent_id, {"file_changes": [payload]}, session)
 
     logger.info(f"Recorded FIM_ALERT for agent '{target_agent_id}' on {file_path} ({action})")
     if data.get("wait_ack", True):
@@ -578,32 +543,37 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
     now_dt = datetime.now(timezone.utc)
     auth_repo = AuthEventRepository(session)
 
-    events_list = payload.get("events") if isinstance(payload.get("events"), list) else [payload]
-    for evt in events_list:
+    raw_events = payload.get("events") if isinstance(payload.get("events"), list) else [payload]
+    events_list = []
+    for raw_event in raw_events:
+        evt = normalize_auth_event(raw_event) if isinstance(raw_event, dict) else None
+        if evt is None:
+            continue
+        events_list.append(evt)
         auth_record = AuthEvent(
             id=f"auth_{uuid.uuid4().hex[:12]}",
             agent_id=target_agent_id,
-            service=str(evt.get("service") or "ssh"),
-            source_ip=str(evt.get("source_ip") or "unknown"),
-            username=str(evt.get("username") or "unknown"),
-            status=str(evt.get("status") or "failed"),
-            count=int(evt.get("count", 1)),
+            service=evt["service"],
+            source_ip=evt["source_ip"],
+            username=evt["username"],
+            status=evt["status"],
+            count=evt["count"],
             timestamp=now_dt,
             created_at=now_dt
         )
         await auth_repo.add(auth_record)
 
-    risk_service = RiskAssessmentService(session)
-    rec = await risk_service.process_risk(
-        agent_id=target_agent_id,
-        data={"auth_events": events_list, "agent_id": target_agent_id}
-    )
-    if hasattr(rec, "incident") and rec.incident:
-        logger.info(f"Hook: Triggering AI Triage for auth incident {rec.incident.id}")
-        asyncio.create_task(_run_ai_triage(rec.incident.id))
-    logger.info(f"Recorded AUTH_EVENT for agent '{target_agent_id}' (risk: {rec.score})")
+    score = 0.0
+    if events_list:
+        record = await RiskAssessmentService(session).process_risk(
+            agent_id=target_agent_id,
+            data={"auth_events": events_list, "agent_id": target_agent_id},
+            auth_history_before=now_dt,
+        )
+        score = record.score
+    logger.info(f"Recorded AUTH_EVENT for agent '{target_agent_id}' (risk: {score})")
     if data.get("wait_ack", True):
-        return {"status": "ack", "message": "Auth event processed", "score": rec.score}
+        return {"status": "ack", "message": "Auth event processed", "score": score}
     return None
 
 

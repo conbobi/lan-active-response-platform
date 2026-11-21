@@ -10,6 +10,24 @@ class AuthEventRepository(SqlAlchemyRepository[AuthEvent]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, AuthEvent)
 
+    async def get_failed_attempt_groups(
+        self, agent_id: str, before: datetime, window_seconds: int, services: set[str]
+    ) -> list[tuple[str, str, str, int]]:
+        """Aggregate previous failures by service, source and account."""
+        stmt = (
+            select(AuthEvent.service, AuthEvent.source_ip, AuthEvent.username, func.sum(AuthEvent.count))
+            .where(
+                AuthEvent.agent_id == agent_id,
+                AuthEvent.status == "failed",
+                AuthEvent.service.in_(services),
+                AuthEvent.timestamp >= before - timedelta(seconds=window_seconds),
+                AuthEvent.timestamp < before,
+            )
+            .group_by(AuthEvent.service, AuthEvent.source_ip, AuthEvent.username)
+        )
+        result = await self.session.execute(stmt)
+        return [(service, source, user, int(count)) for service, source, user, count in result]
+
     async def count_failed_attempts(
         self,
         agent_id: str,

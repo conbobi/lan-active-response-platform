@@ -3,6 +3,7 @@ import tempfile
 import time
 import asyncio
 import json
+from types import SimpleNamespace
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import sys
@@ -146,11 +147,13 @@ def test_auth_monitor_web_and_ssh_events():
         with open(log_path, "a") as f:
             f.write("[WEB_AUTH] status=failed username=admin ip=172.67.204.217 service=flask_web\n")
             f.write('{"service": "flask_web", "username": "victim", "source_ip": "1.2.3.4", "status": "failed"}\n')
+            f.write("pam_unix(sshd:auth): authentication failure; rhost=192.168.1.100 user=root\n")
             f.write("Failed password for invalid user root from 192.168.1.100 port 2222 ssh2\n")
             f.write("[WEB_AUTH] status=success username=admin ip=172.67.204.217 service=flask_web\n")
+            f.write("Accepted publickey for root from 192.168.1.100 port 2222 ssh2\n")
 
         events = monitor.get_new_events()
-        assert len(events) == 4
+        assert len(events) == 5
         assert events[0]["service"] == "flask_web"
         assert events[0]["username"] == "admin"
         assert events[0]["status"] == "failed"
@@ -165,7 +168,31 @@ def test_auth_monitor_web_and_ssh_events():
 
         assert events[3]["username"] == "admin"
         assert events[3]["status"] == "success"
+        assert events[4]["auth_method"] == "publickey"
     finally:
         if os.path.exists(log_path):
             os.remove(log_path)
+
+
+def test_socket_telemetry_uses_the_observed_file_descriptor(monkeypatch):
+    peer = SimpleNamespace(ip="192.0.2.5", port=443)
+    local = SimpleNamespace(ip="192.0.2.6", port=32001)
+    conn = SimpleNamespace(
+        pid=123, fd=5, type=agent.socket.SOCK_STREAM, status=agent.psutil.CONN_ESTABLISHED,
+        laddr=local, raddr=peer,
+    )
+    proc = SimpleNamespace(name=lambda: "bash", exe=lambda: "/usr/bin/bash", create_time=lambda: 1000.5)
+    descriptors = {"0": "socket:[42]", "1": "socket:[42]", "2": "/dev/null", "5": "socket:[42]"}
+    monkeypatch.setattr(agent.psutil, "net_connections", lambda **_: [conn])
+    monkeypatch.setattr(agent.psutil, "Process", lambda _: proc)
+    monkeypatch.setattr(agent.os, "getpid", lambda: 124)
+    monkeypatch.setattr(agent.os, "readlink", lambda path: descriptors[path.rsplit("/", 1)[-1]])
+
+    sample, = agent.get_network_connections()
+    assert sample["protocol"] == "TCP"
+    assert sample["process_start_time"] == 1000.5
+    assert sample["socket_stdio"] is True
+    descriptors["1"] = "socket:[43]"
+    sample, = agent.get_network_connections()
+    assert sample["socket_stdio"] is False
 

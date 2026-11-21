@@ -2,9 +2,22 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from app.models.incident import Incident
 from app.models.process_info import ProcessInfo
+from app.services.ai.ai_triage_service import AITriageService
 from app.services.incident.incident_service import IncidentService
 from app.services.incident.incident_timeline_service import IncidentTimelineService
 from app.services.detection.risk_rules.cpu_spike_rule import CpuSpikeRule
+
+
+def test_triage_prompt_includes_rule_match_evidence_and_score():
+    incident = Incident(
+        title="Sensitive Linux file changed",
+        description="Rule: Sensitive Linux file changed\nDetail: path=/etc/sudoers, action=MODIFIED",
+        notes="rule_id:builtin_linux_sensitive_file_change",
+        risk_score=75.0,
+    )
+    prompt = AITriageService()._build_prompt(incident, [], [], {}, [])
+    assert "path=/etc/sudoers, action=MODIFIED" in prompt
+    assert "Score: 75.0/100" in prompt
 
 
 def test_generate_story_system_idle_process_with_parent():

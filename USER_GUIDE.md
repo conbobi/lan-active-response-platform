@@ -38,35 +38,64 @@ Tài liệu này cung cấp hướng dẫn vận hành chi tiết dành cho Chuy
    - [6.4. DNS Tunneling & Shannon Entropy](#64-dns-tunneling--shannon-entropy)
    - [6.5. HTTP/TCP C2 Beaconing Detection](#65-httptcp-c2-beaconing-detection)
    - [6.6. Machine Learning Behavioral Baseline (Isolation Forest)](#66-machine-learning-behavioral-baseline-isolation-forest)
+7. [Báo cáo rà soát mã nguồn](#7-báo-cáo-rà-soát-mã-nguồn)
+8. [Bộ luật endpoint và xác thực](#8-bộ-luật-endpoint-và-xác-thực)
 
 ---
 
 ## 1. Tổng Quan Kiến Trúc & Các Phân Hệ Chính
 
-LARP được thiết kế theo mô hình **Manager - Agent** giao tiếp hai chiều thời gian thực qua **WebSocket (WS)**:
+LARP dùng mô hình Endpoint Agent → Manager → SOC Dashboard. Manager phát lệnh chiều ngược lại và Agent trả kết quả thực thi.
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     LARP MANAGER (FastAPI + PostgreSQL)                │
-│  - REST API & WebSocket Handler (/api/v1/ws/{agent_id})                 │
-│  - Real-time Flow Analytics & FIM Incident Generator                    │
-│  - Dynamic Process Chain Detection & Risk Engine (13 Rules)             │
-└────────────▲───────────────────────────────────────────────▲────────────┘
-             │ WebSocket (Heartbeat, Commands, Logs)         │
-             ▼                                               ▼
-┌─────────────────────────────┐                 ┌─────────────────────────┐
-│     LARP AGENT (client1)    │                 │   REACT VITE DASHBOARD  │
-│ - Process Tree Collector    │                 │ - Live WS Flow Charts   │
-│ - Real Flow Stats Delta     │                 │ - Process Tree Explorer │
-│ - FIM Monitor (SHA-256)     │                 │ - Dynamic Rule Manager  │
-│ - Reconnect Exponential     │                 │ - Incident SOC Board    │
-│ - Watchdog (30s exit)       │                 └─────────────────────────┘
-└─────────────────────────────┘
+```mermaid
+flowchart LR
+  L["Linux Agent · psutil, FIM, Auth, DNS, socket và web log"] <-->|"/ws/agent"| M["Manager · FastAPI"]
+  W["Windows Agent · Python minimal / C++"] <-->|"/ws/agent"| M
+  M <-->|"REST /api/v1 · /ws/dashboard"| U["SOC Dashboard · React, Vite, Nginx"]
+  M <--> P[("PostgreSQL")]
+  M --> R["RiskRuleRegistry · điểm và chính sách"]
+  M --> S["RuleEngine · luật sự kiện và Sigma active"]
+  R --> I["Incidents"]
+  S --> I
+  I --> A["Ollama · triage và đề xuất response"]
+  A --> U
+  U --> C["Analyst duyệt đề xuất"]
+  C --> M
 ```
 
-- **Manager**: Điều phối trung tâm, lưu trữ cơ sở dữ liệu PostgreSQL (`flows`, `incidents`, `process_groups`, `process_chain_rules`, `detection_rules`), đánh giá rủi ro và phát lệnh điều khiển.
-- **Agent**: Triển khai trên máy trạm/máy chủ Linux. Định kỳ gửi Telemetry, Flow Stats thật (tính toán qua `psutil.net_io_counters`), phát hiện thay đổi file (FIM SHA-256), cây tiến trình (lọc sạch zombie) và cơ chế tự phục hồi kết nối.
-- **Frontend Dashboard**: Ứng dụng web React Vite cung cấp giao diện trực quan hóa cao cấp, đồ thị thời gian thực, bảng điều khiển SOC và cây tiến trình động.
+| Nguồn | Thu thập và truyền | Xử lý và lưu trữ |
+| --- | --- | --- |
+| Máy trạm | `HEARTBEAT` mang CPU, RAM, đĩa, IP và trạng thái. `PROCESS_LIST` định kỳ 20 giây mang PID, PPID, tên, exe, cmdline và mức sử dụng tài nguyên. | Agent Service cập nhật `agents`, `agent_history`, gửi lệnh chờ trong ACK. Snapshot vào `process_info` và đi qua Rule Engine. |
+| Telemetry | `TELEMETRY_RISK` mỗi 15 giây mang tiến trình, kết nối và tín hiệu hệ thống. `ConnectionTracker` giữ lịch sử kết nối TCP theo socket và PID, với `first_seen`, `last_seen`, số lần quan sát và thời điểm tạo tiến trình nếu có. | Sigma xét các candidate active. Risk Registry tính điểm và lưu `risk_score_records`. Socket có IP/cổng đích đi vào `flows`. |
+| Mạng và DNS | `FLOW_STATS` mỗi 5 giây lấy chênh lệch bộ đếm byte/gói qua psutil. DNS sniffer Linux theo dõi truy vấn DNS quan sát được trên interface cấu hình trong sniffer. | `flows` phục vụ điều tra mạng và dashboard. DNS đi cùng telemetry để luật DNS phân tích. Bộ đếm theo interface và snapshot socket có phạm vi khác nhau. |
+| Toàn vẹn tệp | `FileIntegrityMonitor` lấy baseline SHA-256 khi khởi tạo. Mỗi 10 giây so trạng thái và gửi `FIM_ALERT` khi tệp được tạo, sửa hoặc xóa. Agent có đường quét YARA theo lệnh. | Handler FIM lưu `events`. Kết quả quét theo lệnh đi qua `YARA_SCAN_ALERT`. Cấu hình chữ ký nằm ở `yara_rules`. |
+| Xác thực | `AuthMonitor` đọc phần mới từ các file log SSH/PAM và web theo offset. Đường chuyên dụng là `AUTH_EVENT`. | `auth_events` lưu service, IP, tài khoản, trạng thái, count và thời điểm. Risk Registry dùng dữ liệu auth để đánh giá brute force. |
+| Web | `web_log_monitor.py` đọc nguồn Cloudflare Tunnel và file access log theo nguồn khả dụng, chuẩn hóa request rồi gửi `WEB_ACCESS_LOG`. | `web_access_logs` lưu request. Tín hiệu web đi qua rule event và risk rule đang được cấu hình. |
+| Phản ứng | Manager đẩy lệnh qua WebSocket hoặc trả trong heartbeat. Agent thực thi cục bộ và gửi `COMMAND_ACK`. | `commands`, `response_actions`, `action_audit_logs` theo dõi vòng đời, snapshot, kết quả và rollback theo loại hành động. |
+
+Các Agent Windows có bộ thu thập và lệnh được hỗ trợ riêng. Adapter Linux cho FIM, auth log và DNS cần quyền đọc các nguồn tương ứng. Capture DNS và socket phụ thuộc quyền, interface, namespace và chu kỳ lấy mẫu. Với reconnect, Agent thử lại từ 2 đến 15 giây và có watchdog theo heartbeat ACK.
+
+Lịch sử phát triển ghi nhận bốn mốc chính. AI đi từ client Ollama và nhãn phản hồi đến triage, rồi đến đề xuất phản ứng có Analyst duyệt. Luồng containment bổ sung ACK phía Agent, cooldown, snapshot, rollback và tự bảo vệ Agent. Sau đó, AI SOC Studio thêm harvest/validation cùng vòng đời Sigma. Các lần xử lý cảnh báo giả trên desktop và dịch vụ remote dẫn tới việc lưu PID, executable và thời điểm tạo tiến trình, phân biệt socket mở mới với lần quan sát lặp và yêu cầu bằng chứng trước khi quy kết. Luồng web log mở rộng nguồn tín hiệu cho dịch vụ sau Cloudflare Tunnel.
+
+### 1.1. Bản đồ mã nguồn và dữ liệu
+
+| Phân hệ | Entry point và tệp cần đọc | Bảng hoặc dữ liệu |
+| --- | --- | --- |
+| Endpoint | `agent/agent.py`, `win_agent_minimal.py`, `win_agent_cpp/main.cpp`, `fim.py`, `auth_monitor.py`, `dns_sniffer.py`, `connection_tracker.py`, `web_log_monitor.py`, `commands/` trong thư mục `agent/`. | Snapshot tiến trình, socket, bộ đệm DNS và baseline hash trên Agent. |
+| Ingestion | `manager/app/main.py`, `websocket/agent_ws.py`, `dashboard_ws.py`, `services/core/command_dispatcher.py`. | `agents`, `agent_history`, `process_info`, `flows`, `events`, `auth_events`, `web_access_logs`, `commands`. |
+| Risk và detection | `services/detection/risk_assessment_service.py`, `services/detection/risk_rules/`, `services/rule_engine.py`. | `risk_score_records`, `detection_rules`, `process_groups`, `process_chain_rules`, `agent_baselines`, `whitelist_entries`, `system_settings`. |
+| AI và vòng đời luật | `services/ai/{ai_client,ai_triage_service,ai_response_service,harvest_service,validation_service}.py`, `api/routes/{rules,dashboard}.py`, `routers/v1/incident_router.py`. | `rule_candidates`, `rule_versions`, `incidents`, `incident_notes`, `ai_analysis`. |
+| Điều tra và containment | `services/incident/`, `services/response/`, `services/process/`, `services/detection/threat_intelligence_service.py`. | `response_policies`, `response_actions`, `action_audit_logs`, `agent_groups`, `agent_group_members`, `threat_feeds`, `threat_indicators`, bảng notification và báo cáo. |
+| SOC UI | `frontend/src/App.jsx`, `routes/index.jsx`, `api/`, `hooks/`, `pages/`, `frontend/nginx.conf`. | REST cho truy vấn/trạng thái và `/ws/dashboard` cho cập nhật trực tiếp. |
+
+Backend dùng Python, FastAPI, Pydantic v2, SQLAlchemy 2 async và asyncpg. PostgreSQL 16 là cơ sở dữ liệu trong Compose. Frontend dùng React 19, Vite, Axios, React Router và Chart.js. Docker Compose khởi chạy DB, Manager, Ollama, frontend/Nginx và Cloudflare Tunnel. Agent endpoint được triển khai riêng theo cấu hình Compose hiện tại. Ollama dùng model cấu hình bằng `AI_MODEL` (Compose đặt `sec-q6`).
+
+### 1.2. Quy ước triển khai
+
+- Đặt model SQLAlchemy, DTO Pydantic, truy vấn repository, nghiệp vụ service và REST/WS handler đúng lớp tương ứng. Các đường nhập liệu thời gian thực làm việc qua AsyncSession. Khi thay schema, rà cả `manager/alembic/`, `manager/scripts/migrate_*.py` và khởi tạo DB.
+- Risk rule triển khai `evaluate(telemetry, context) → (score, reason)` trong `services/detection/risk_rules/` và đăng ký ở `__init__.py`. Giữ `rule_id` ổn định cho cấu hình DB, factors và UI. Rule Engine dùng `RuleMatch` cho luật sự kiện và dùng candidate/version cho Sigma theo luồng harvest → validation → analyst activate.
+- Giữ các trường telemetry mới tùy chọn để tương thích Agent đang triển khai. `agent_id` theo endpoint, `pid` cần đối chiếu `process_start_time` khi có, timestamp dùng UTC. Dữ liệu không quan sát được cần được biểu diễn rõ trong kết quả điều tra.
+- Dùng `manager/app/test/` cho unit/test handler, `manager/tests/integration/` cho API và DB, `agent/test_agent_features.py` cho hành vi Agent. Dùng fixture telemetry cho ca dương, ca âm và thiếu dữ liệu.
 
 ---
 
@@ -74,20 +103,11 @@ LARP được thiết kế theo mô hình **Manager - Agent** giao tiếp hai ch
 
 ### 2.1. Đánh Giá Điểm Rủi Ro (Risk Score)
 
-Hệ thống chấm điểm rủi ro cho từng Agent trên thang điểm từ **0 đến 100** dựa trên 13 quy tắc phân tích hành vi và trọng số vi phạm:
+**Risk Score** trong `RiskAssessmentService` là điểm 0–100 do 19 strategy tính từ telemetry. Mỗi luật trả điểm theo chứng cứ và cấu hình, Manager nhân với trọng số, áp dụng debounce cho nhóm anomaly, cap nhóm anomaly rồi giới hạn tổng ở 100. `score` là điểm đã tổng hợp của chu kỳ. `smoothed_score` áp dụng EMA (alpha 0,35), có bypass cho điểm nghiêm trọng hoặc rule bảo mật đạt ngưỡng hiện hành. Cả hai được lưu cùng `factors`.
 
-| Mức Độ | Dải Điểm (Risk Score) | Màu Sắc | Ý Nghĩa & Nguy Cơ | Hành Động Đề Xuất |
-| :--- | :---: | :---: | :--- | :--- |
-| **Low** | 0 – 49 | 🟢 Xanh lục | Hoạt động bình thường. Lưu lượng và tiến trình nằm trong ngưỡng cho phép. | Tiếp tục giám sát định kỳ. |
-| **Medium** | 50 – 69 | 🟡 Vàng | Xuất hiện hành vi đáng ngờ nhẹ (quét cổng nội bộ, tăng CPU đột biến, tệp hệ thống phụ bị sửa). | SOC ghi nhận và theo dõi sát. |
-| **High** | 70 – 84 | 🟠 Cam | Dấu hiệu tấn công rõ rệt (chuỗi tiến trình lạ, kết nối C2 IP độc hại, sửa Registry/Cron). | Gửi cảnh báo khẩn, khuyến nghị Isolate hoặc Kill Process. |
-| **Critical** | 85 – 100 | 🔴 Đỏ | Mối đe dọa nghiêm trọng (Ransomware xóa Shadow Copies, FIM phát hiện sửa `/etc/passwd`, DDoS flood). | **Tự động cô lập mạng (Auto-Isolate)** và phát thông báo đa kênh. |
+Cấu hình ngưỡng nằm ở Settings và `system_settings`. Mặc định từ `SettingService` gồm log 20, alert 50, alert với nút 70, tạo incident 50, fallback auto-isolate 85 và auto-kill 85. Khi điều tra, đối chiếu ngưỡng triển khai, chế độ monitor, whitelist và response policy. Các incident do Rule Engine ghi có `risk_score` theo severity của match (30/50/75/95) và đi theo đường tạo incident riêng.
 
-> **Chính sách Leo Thang Rủi Ro (Risk Escalation Policy):**
-> - `Điểm >= 20`: Ghi nhận Telemetry Log ngầm.
-> - `Điểm >= 50`: Phát cảnh báo tiêu chuẩn (Standard Alert).
-> - `Điểm >= 70`: Bật thông báo tương tác nổi (Interactive Notification kèm nút Isolate/Kill).
-> - `Điểm >= 85`: Tự động ngắt kết nối mạng của Agent (Auto-Isolate) nếu bật thiết lập *Automated Active Response*.
+**AI Confidence** thuộc `ai_analysis`, thang 0–1. Ollama nhận context và điểm sự cố có sẵn để tạo tóm tắt, nguyên nhân, phân loại và MITRE. AI Response Assist dựa trên triage để gợi ý phản ứng, Analyst chọn Apply hoặc Dismiss. Rule Harvest đề xuất Sigma từ CTI, Validation tính FPR/precision/recall/F1 trên tập kiểm định, Analyst quyết định Activate. Ba luồng AI phục vụ điều tra và quản lý luật, còn Risk Score đến từ engine xác định.
 
 ---
 
@@ -99,8 +119,7 @@ Phân hệ Network Flow thu thập **dữ liệu lưu lượng thực tế** (`F
 - `bytes_recv`: Lượng byte nhận về trong chu kỳ.
 - `packets_sent`: Tổng số gói tin gửi đi.
 - `packets_recv`: Tổng số gói tin nhận về.
-- `tcp`: Số gói tin TCP gửi/nhận.
-- `udp`: Số gói tin UDP gửi/nhận.
+- `tcp_packets_delta`, `udp_packets_delta` lấy từ bộ đếm giao thức hệ điều hành khi có. Agent dùng tỷ lệ ước tính khi thiếu số liệu. Dùng `packets_sent_delta` và `packets_recv_delta` để đọc tổng packet từ interface.
 
 #### Cách nhận diện các hình thức tấn công mạng điển hình:
 
@@ -128,8 +147,7 @@ Phân hệ Network Flow thu thập **dữ liệu lưu lượng thực tế** (`F
 Trang **Process Tree** giúp chuyên viên SOC phân tích cấu trúc cha-con của mọi tiến trình đang chạy:
 
 1. **Gốc Cây Tiến Trình (Root Node PID 1)**:
-   - Tất cả các tiến trình mồ côi (Orphan Processes có `ppid = 0` hoặc cha không tồn tại) đều được hệ thống tự động gắn vào nút gốc PID 1 (`systemd` / `init`).
-   - Điều này đảm bảo cây tiến trình luôn toàn vẹn và không bị đứt đoạn hiển thị.
+   - Một PID cha thiếu có thể do giới hạn thu thập hoặc do tiến trình cha đã thoát. Khi điều tra, kiểm tra PPID và nguồn snapshot trước khi quy kết quan hệ cha-con.
 2. **Cơ Chế Lọc Sạch Tiến Trình Zombie**:
    - Tiến trình Zombie (trạng thái `STATUS_ZOMBIE`, `defunct`) là tiến trình con đã kết thúc nhưng tiến trình cha chưa gọi hàm `wait()`.
    - Hàm `collect_process_info()` của Agent **chủ động loại bỏ** các tiến trình zombie này. Điều này giữ cho cây tiến trình luôn gọn gàng, không bị nghẽn giao diện bởi các tiến trình rác đã chết.
@@ -151,16 +169,15 @@ Cơ chế **File Integrity Monitoring (FIM)** giám sát mã băm SHA-256 của 
    - Khi một file bị thay đổi (Modification), thêm mới (Creation), hoặc bị xóa (Deletion), Agent gửi đúng **01 gói tin cảnh báo duy nhất** (`FIM_ALERT`) và lập tức cập nhật lại hash mới.
    - Các chu kỳ quét tiếp theo sẽ không gửi lặp lại, tránh gây quá tải hộp thư SOC (Alert Flooding).
 3. **Tự Động Tạo Sự Cố (Automatic Incident Creation)**:
-   - Nếu tệp bị sửa đổi nằm trong danh sách nhạy cảm (như `/etc/passwd` hoặc `/etc/shadow`), Manager sẽ tự động tạo một sự cố mức **CRITICAL** trên bảng Incidents với tiêu đề:
-     `FIM Alert: /etc/passwd modified on client1`.
+   - Manager tạo incident **Critical** cho thay đổi được quan sát trên `/etc/passwd` hoặc `/etc/shadow`. Các tệp quản trị khác thuộc tập luật nhạy cảm có mức **High**. Incident lưu đường dẫn, thao tác và hash trước/sau.
 
 ---
 
 ### 2.5. Quản Lý Luật Phát Hiện (Detection Rules & Dynamic Process Chains)
 
-Hệ thống hỗ trợ 2 tầng luật phát hiện:
+Các luật hoạt động qua Risk Registry, Process Chain và Rule Engine. Danh sách dưới đây là 13 strategy ban đầu trong Risk Registry.
 
-#### 13 Quy Tắc Cố Định Cốt Lõi (Core Detection Rules):
+#### 13 strategy ban đầu
 1. `cpu_spike`: Tăng vọt CPU đột biến.
 2. `suspicious_process`: Khởi chạy công cụ tấn công (`mimikatz`, `nmap`, `netcat`, `nc`, `hydra`).
 3. `network_connection`: Kết nối vượt ngưỡng số lượng port/kết nối.
@@ -223,7 +240,7 @@ Không cần sửa code Python, quản trị viên có thể tự cấu hình:
   - **Giải quyết (Resolve)**: Cập nhật sự cố sang trạng thái `Resolved` sau khi hoàn tất khắc phục.
 
 ### 3.5. Process Tree (Cây Tiến Trình & Gốc Rễ Đe Dọa)
-- **Truy cập**: `http://localhost:5173/processes`
+- **Truy cập**: `http://localhost:5173/investigate?tab=process`
 - **Thao tác**:
   - Chọn Agent từ menu trên cùng.
   - Theo dõi danh sách các tiến trình nghi vấn được bôi màu đỏ/cam.
@@ -231,17 +248,15 @@ Không cần sửa code Python, quản trị viên có thể tự cấu hình:
   - Thao tác **Kill PID** (diệt 1 tiến trình) hoặc **Kill Tree** (diệt sạch cây tiến trình con cháu).
 
 ### 3.6. Detection Rules (Process Groups & Process Chains)
-- **Truy cập**: `http://localhost:5173/detection-rules`
+- **Truy cập**: `http://localhost:5173/rules/detection`
 - **Thao tác**:
-  - **Tab 1: Detection Rules**: Bật/tắt 13 luật cố định và điều chỉnh điểm số trọng số (`weight`).
+  - **Tab 1: Detection Rules**: Bật/tắt các strategy trong Risk Registry và điều chỉnh trọng số (`weight`).
   - **Tab 2: Process Groups**: Tạo các nhóm mẫu tiến trình (ví dụ: nhóm Office, nhóm Shell).
   - **Tab 3: Process Chain Rules**: Tạo quy tắc phát hiện chuỗi cha-con giữa 2 nhóm tiến trình.
 
 ### 3.7. Risk Assessment (Phân Tích Telemetry)
-- **Truy cập**: `http://localhost:5173/risk-assessment`
-- **Thao tác**:
-  - Chạy thử nhanh với các kịch bản mẫu: *Ransomware Burst*, *Privilege Escalation*, *Normal Telemetry*.
-  - Nhập thông số telemetry và nhấn **Evaluate Risk Score** để xem phân tích các nhân tố rủi ro.
+
+Trang Dashboard và chi tiết incident hiển thị điểm tổng hợp. Dùng `GET /api/v1/risk/{agent_id}/history` trong Swagger (`http://localhost:8005/docs`) để đối chiếu `score`, `smoothed_score` và `factors` của từng chu kỳ.
 
 ### 3.8. Network (Sơ Đồ Mạng 3D & Điều Phối Băng Thông)
 - **Truy cập**: `http://localhost:5173/network`
@@ -253,14 +268,14 @@ Không cần sửa code Python, quản trị viên có thể tự cấu hình:
 ### 3.9. Commands (Phát Lệnh Điều Khiển)
 - **Truy cập**: `http://localhost:5173/commands`
 - **Thao tác**:
-  - Phát lệnh trực tiếp xuống Agent: cô lập máy, cập nhật luật firewall, thu thập log hệ thống hoặc chạy script tùy chỉnh.
-  - Theo dõi trạng thái hoàn thành (`PENDING`, `COMPLETED`, `FAILED`) và nút **Retry** gửi lại lệnh.
+  - Phát lệnh được Agent hỗ trợ, ví dụ cô lập, mở cô lập hoặc kết thúc tiến trình.
+  - Theo dõi trạng thái hoàn thành (`PENDING`, `SENT`, `SUCCESS`, `FAILED`, `TIMEOUT`) và nút **Retry** gửi lại lệnh.
 
 ### 3.10. Whitelist & Settings (Cấu Hình Hệ Thống)
 - **Truy cập**: `http://localhost:5173/whitelist` và `http://localhost:5173/settings`
 - **Thao tác**:
   - Thêm tiến trình hoặc đường dẫn file tin cậy vào Whitelist để không bị tính điểm rủi ro.
-  - Cấu hình 4 ngưỡng leo thang rủi ro (Risk Thresholds: 20, 50, 70, 85).
+  - Cấu hình ngưỡng cảnh báo, tạo incident và phản ứng tại Settings.
   - Bật/tắt tính năng Tự động phản ứng (Automated Active Response).
 
 ---
@@ -323,8 +338,7 @@ credentials.txt      | MODIFIED     | Cũ: fecb560aa9d7d24ac01713b1c8bebb0a71d6b
 ```
 
 #### Cách kiểm tra trên giao diện Web:
-1. Mở trang **Incidents** (`http://localhost:5173/incidents`).
-2. Quan sát sự cố mới được tạo với nhãn `CRITICAL` và tóm tắt tệp tin bị thay đổi.
+Script kiểm tra hash trên file demo trong `/tmp/fim_demo`. Phần kiểm tra Manager tạo incident dùng fixture WebSocket trong `manager/app/test/test_fim_ws.py`.
 
 ---
 
@@ -361,7 +375,7 @@ Tạo lưu lượng mạng (ICMP / HTTP traffic) trong 10-15 giây để kiểm 
 1. Mở trang **Dashboard** (`http://localhost:5173/`).
 2. Quan sát biểu đồ **Network Traffic**:
    - Bạn sẽ thấy đường lưu lượng `bytes_sent` và `packets_sent` tăng vọt tạo thành một đỉnh nhọn (spike) rõ rệt.
-   - Các gói tin được lưu trực tiếp vào cơ sở dữ liệu `flows` của PostgreSQL và hiển thị chuẩn xác thay vì dữ liệu giả lập (synthetic data).
+   - Manager lưu mẫu tổng hợp vào `flows`. Mẫu biểu đồ phản ánh delta bộ đếm giữa hai chu kỳ.
 
 ---
 
@@ -403,7 +417,7 @@ Tạo cấu trúc tiến trình lồng nhau 3 cấp (`bash` -> `python3` -> `sle
 ```
 
 #### Cách kiểm tra trên giao diện Web:
-1. Mở trang **Process Tree** (`http://localhost:5173/processes`).
+1. Mở trang **Process Tree** (`http://localhost:5173/investigate?tab=process`).
 2. Chọn đúng Agent mục tiêu (ví dụ: `client1`).
 3. **Kiểm tra phân cấp cây**: Nhận diện rõ ràng `python3` là cha của tiến trình `sleep`.
 4. **Kiểm tra lọc Zombie**: Tiến trình có PID Zombie (`PID 651471`) **hoàn toàn biến mất** khỏi cây tiến trình, không làm rác giao diện giám sát.
@@ -494,7 +508,7 @@ Nền tảng LARP đã được nâng cấp với 6 tính năng bảo mật chuy
 ### 6.2. YARA Signature Integration
 * **Mục đích**: Nhận diện nhị phân mã độc, webshells và ransomware theo mẫu chuỗi ký tự và điều kiện logic YARA chuẩn quốc tế.
 * **Cơ chế hoạt động**:
-  - **Tự động quét khi có tệp mới**: Khi module FIM trên Agent phát hiện tệp mới tạo (`CREATED`) hoặc bị thay đổi (`MODIFIED`) trong thư mục theo dõi, YARA scanner sẽ lập tức quét tệp. Nếu khớp chữ ký độc hại, cảnh báo `YARA_SCAN_ALERT` được phát lên Manager và lập tức sinh Incident **CRITICAL** (điểm rủi ro: 90–100).
+  - **Tự động quét khi có tệp mới**: Khi module FIM trên Agent phát hiện tệp mới tạo (`CREATED`) hoặc bị thay đổi (`MODIFIED`) trong thư mục theo dõi, YARA scanner sẽ lập tức quét tệp. ID chữ ký khớp được đính kèm trong `FIM_ALERT.yara_matches`. Đường sự kiện chuyên dụng `YARA_SCAN_ALERT` có xử lý incident riêng.
   - **Quét theo yêu cầu (On-demand)**: Chuyên viên SOC có thể phát lệnh quét từ xa xuống bất kỳ máy trạm nào.
 * **Cách sử dụng trên UI**:
   1. Vào menu **Cyber Intelligence -> YARA Signatures** (`/rules/yara`).
@@ -502,19 +516,17 @@ Nền tảng LARP đã được nâng cấp với 6 tính năng bảo mật chuy
   3. Bấm **Dispatch Scan** -> Chọn Agent mục tiêu (ví dụ `client1`) -> Nhập thư mục cần quét (ví dụ `/tmp` hoặc `/app`) -> Bấm **Start Scan**.
 
 ### 6.3. Brute Force Detection
-* **Mục đích**: Phát hiện tấn công dò quét mật khẩu hàng loạt qua SSH, RDP hoặc tài khoản hệ thống.
-* **Nguyên lý tính điểm**:
-  - Cơ chế cửa sổ thời gian trượt (Sliding Window): Mặc định $\ge 5$ lần thử thất bại trong 30–60 giây sẽ bị tính **30 điểm rủi ro**.
-  - Tấn công dồn dập $\ge 15$ lần hoặc **có 1 lần đăng nhập thành công ngay sau chuỗi thất bại** (dấu hiệu kẻ tấn công đã dò trúng mật khẩu và xâm nhập thành công): Lập tức phạt **75–90 điểm**, tạo Incident khẩn cấp và kích hoạt cô lập mạng tự động.
-* **Cách cấu hình trên UI**:
-  - Vào **Detection Rules** (`/rules/detection`), tìm rule `brute_force`, bấm biểu tượng chỉnh sửa để thay đổi tham số JSON: `{"threshold": 5, "critical_threshold": 15, "window_seconds": 60}`.
+
+Luật `brute_force` xét các lần thất bại theo Agent, service và IP trong cửa sổ 60 giây từ lúc Manager nhận sự kiện. Với base score 30 và weight 1, mặc định 5 lần thất bại cùng nguồn cho 55 điểm và 15 lần cho 75 điểm. Các lần thử phân tán trên cùng dịch vụ và tài khoản có thể đạt 65 điểm. Một lần đăng nhập thành công theo sau ít nhất 5 lần thất bại cùng service/IP/tài khoản có thể đạt 85 điểm. Agent hiện gửi phương thức xác thực để loại `publickey` khỏi nhánh nâng mức này. SOC vẫn cần xác minh tài khoản và hoạt động tiếp theo.
+
+Chỉnh `threshold`, `critical_threshold`, `window_seconds`, base score và weight trong **Detection Rules** (`/rules/detection`). Incident và phản ứng tuân theo ngưỡng và policy đã cấu hình. SSH trên máy chỉ ghi journald cần thêm nguồn thu thập auth tương ứng. Các đường dẫn auth demo dưới `/tmp` được bật riêng bằng `LARP_ENABLE_LAB_AUTH_LOGS=1`.
 
 ### 6.4. DNS Tunneling & Shannon Entropy
 * **Mục đích**: Phát hiện kênh liên lạc gián điệp C2 và thất thoát dữ liệu (Data Exfiltration) lén lút qua giao thức DNS (ví dụ: dnscat2, iodine).
 * **Nguyên lý tính điểm**:
   - Tính độ hỗn loạn thông tin **Shannon Entropy $H(X)$**: Nếu entropy của subdomain $\ge 3.8$ (dấu hiệu Base64/Hex/mã hóa), cộng $+35$ điểm.
   - Độ dài FQDN $> 45$ ký tự: cộng $+25$ điểm.
-  - Tần suất các truy vấn bản ghi bất thường (TXT, NULL) $\ge 10$ query/phút: cộng $+30$ điểm.
+  - Từ 10 truy vấn TXT/NULL trong batch truyền lên: cộng 30 điểm. Tổng điểm của luật được giới hạn ở 80.
 * **Cách quan sát trên UI**:
   - Vào trang **Network 3D** (`/network`), cuộn xuống bảng **DNS Tunneling & Entropy Inspector** để xem các bản ghi DNS có entropy cao và trạng thái cảnh báo theo thời gian thực.
 
@@ -522,7 +534,7 @@ Nền tảng LARP đã được nâng cấp với 6 tính năng bảo mật chuy
 * **Mục đích**: Bắt quả tang mã độc định kỳ gửi tín hiệu "nhịp tim" (beacon) về máy chủ điều khiển C2 (Cobalt Strike, Sliver, Meterpreter).
 * **Nguyên lý tính điểm**:
   - Thuật toán phân tích chuỗi thời gian: Tính các khoảng cách thời gian giữa các kết nối liên tiếp $\Delta t_i$, từ đó tính Hệ số biến thiên (Coefficient of Variation) $CV = \frac{\sigma}{\mu}$.
-  - Nếu $CV < 0.25$ (chu kỳ rất đều, độ lệch dưới 25% jitter) với $\ge 8$ kết nối: Phạt **50 điểm**.
+  - Mặc định đánh giá từ 5 kết nối độc lập với $CV \le 0.25$. Điểm cơ sở là 50 và được cấu hình tại rule `http_beaconing`.
   - Nếu IP máy chủ đích trùng khớp với kho Threat Intelligence: Đẩy thẳng lên **90 điểm (CRITICAL)**.
 * **Cách quan sát trên UI**:
   - Vào trang **Network 3D** (`/network`), quan sát widget **C2 HTTP Beaconing Analysis** để xem danh sách IP nghi vấn, chu kỳ trung bình (interval) và hệ số jitter $CV$.
@@ -535,8 +547,73 @@ Nền tảng LARP đã được nâng cấp với 6 tính năng bảo mật chuy
   - Tác vụ huấn luyện và dự đoán hoàn toàn chạy ngầm qua luồng không chặn (`asyncio.to_thread`), bảo đảm hiệu năng tối đa cho máy chủ SOC.
   - Hệ thống tự động re-train lại baseline hàng ngày.
 * **Cách quan sát trên UI**:
-  - Vào trang **Risk Monitor** (`/risk`), click vào một Agent bất kỳ để mở modal chi tiết: widget **🤖 ML Behavioral Baseline** sẽ hiển thị trạng thái hoạt động của mô hình cho Agent đó.
+  - Kiểm tra lịch sử risk và factor `ml_behavioral_anomaly` theo Agent để xem các chu kỳ có tín hiệu ML.
 
 ---
 
-*Tài liệu được cập nhật tự động và đồng bộ với nền tảng LARP phiên bản mới nhất.*
+## 7. Báo cáo rà soát mã nguồn
+
+Ảnh chụp trạng thái trước khi sửa ngày 21/11/2026. Đã duyệt toàn bộ file xuất `antigravity_history.txt` và đối chiếu các quyết định kiến trúc với mã nguồn. Bản xuất có các đoạn bị cắt sẵn. Đường chạy hiện tại trong repo là căn cứ cho các kết luận dưới đây.
+
+| Ưu tiên | Tệp và hàm | Phát hiện và cách sửa |
+| --- | --- | --- |
+| P0 | `manager/app/websocket/agent_ws.py` · `agent_websocket_endpoint`, `_handle_heartbeat` và các handler | Session Agent lấy định danh từ query/payload và endpoint chấp nhận kết nối trực tiếp. Telemetry và ACK có thể bị gán sai endpoint. Xác thực Agent, gắn danh tính vào phiên kết nối, kiểm tra quyền sở hữu command khi ACK và bao phủ cả handshake đồng thời. |
+| P0 | `manager/app/services/detection/risk_assessment_service.py` · `process_risk` | Nhánh fallback tạo raw command sau lỗi của ResponseActionService có thể bỏ qua guard, cooldown và snapshot. Điểm cấp Agent có thể chọn PID theo tên/flag ngoài chứng cứ đã kích hoạt luật. Dùng một pipeline duy nhất, neo mục tiêu theo PID + thời điểm tạo và chứng cứ của incident và ghi lý do khi không thể thực thi. |
+| P0 | `docker-compose.yml` · service Manager | Cấu hình chứa webhook dạng credential trong file được theo dõi. Thu hồi/luân chuyển credential và nạp cấu hình qua biến môi trường hoặc secret store. |
+| P1 | `manager/app/services/ai/ai_client.py` · `generate`, `websocket/agent_ws.py` · `_run_ai_triage`, `routers/v1/incident_router.py` · endpoints AI | HTTP async và background task tách LLM khỏi request chính. Read timeout là 600 giây, mỗi lần mở HTTP client và job thiếu hàng đợi bền, giới hạn đồng thời lẫn khóa theo incident. Cùng một incident risk có thể được lên lịch từ IncidentService và WebSocket. Triage giữ transaction đọc qua lúc chờ LLM. Dùng job `queued/running/succeeded/failed`, khóa theo incident + loại job, worker hạn concurrency, deadline toàn job, retry hữu hạn cho lỗi tạm thời, đọc snapshot rồi đóng session trước inference. |
+| P1 | `manager/app/services/ai/ai_triage_service.py` · `_parse_json_answer`, `analyze_incident` | JSON rách có thể được nhận bằng regex như kết quả hợp lệ, confidence thiếu lấy 0,75, sai kiểu gây lỗi và NaN qua phép so sánh. Guard confidence tin chuỗi evidence do model tự viết. Dùng schema strict có số hữu hạn, từ chối payload thiếu/cắt, bắt model tham chiếu ID chứng cứ đã quan sát. Ghi riêng trạng thái failed và rollback session trước khi lưu lỗi. |
+| P1 | `manager/app/services/ai/ai_triage_service.py` · `_get_process_tree`, `_get_recent_flows`, `_get_risk_factors`, `_build_prompt` | Context lấy snapshot mới của Agent, chọn risk record mới trong khoảng ±15 phút và có fallback flow ngoài cửa sổ. Cắt mô tả còn dòng đầu khiến bằng chứng Sigma/FIM phía dưới rơi khỏi prompt. Dùng snapshot/evidence gắn incident, tách dữ kiện khác thời điểm, ưu tiên chi tiết match. Lưu model thực dùng và phân loại theo trường có kiểu. |
+| P1 | `manager/app/services/ai/ai_response_service.py` · `suggest_response`, `_parse_json_answer` | Parser fallback và chuẩn hóa action tách khỏi triage. Lỗi hoặc thiếu triage có thể chỉ trả `None` trong job nền. Dùng schema theo action, trạng thái job và kiểm tra triage thành công trước khi đề xuất. Giữ bước Analyst duyệt và kiểm tra bằng chứng lúc Apply. |
+| P1 | `manager/app/services/detection/risk_assessment_service.py` · `evaluate`, `apply_category_cap`, `process_risk` | Trọng số đã có. Lưu factors chủ yếu ở dạng lý do nên thiếu score riêng từng luật. Có IOC bất kỳ thì gỡ cap anomaly, các rule cùng nhìn một chứng cứ có thể cộng chồng. Ngược lại, chỉ cần một tiến trình bất kỳ khớp whitelist thì nhánh incident/response thoát sớm. Lưu raw, weighted và evidence theo factor, gộp theo nhóm/tín hiệu, cap theo nhóm, áp whitelist theo thực thể gây match và hiệu chuẩn với telemetry đã gắn nhãn. |
+| P1 | `manager/app/services/detection/risk_rules/http_beaconing_rule.py` · `evaluate`, `manager/app/services/detection/risk_assessment_service.py` · `evaluate` | Rule beaconing nhân `weight` trong strategy và service nhân lần nữa. Ví dụ base 50 và weight 0,5 cho 12,5 điểm thay vì 25. Áp weight một lần trong service và thêm kiểm thử với nhiều weight. |
+| P1 | `manager/app/services/rule_engine.py` · `_evaluate_rule`, `_match_selection`, `_create_incidents`, `services/ai/validation_service.py` · `_evaluate_detection`, `load_historical_logs` | Validator hiểu nhiều block và condition hơn runtime chỉ đọc `selection`. Tiêu chí dạng dict bị bỏ qua, tên chương trình có thể suppress cả match, nhãn T1059 có thể suppress T1071 của tiến trình khác. Validation có mẫu tổng hợp và cổng duyệt hiện kiểm tra FPR/precision. Dùng evaluator chung fail-closed, dedup theo rule + thực thể và kiểm định với holdout theo thời gian, coverage và recall tối thiểu. |
+| P1 | `agent/agent.py` · `send_risk_telemetry`, `agent/auth_monitor.py` · `get_new_events`, `risk_rules/brute_force_rule.py` · `evaluate` | Auth xuất hiện hai đường ingest, nhóm toàn Agent và xác nhận success bằng tổng fail đã thấy. Nhánh theo IP có thể che ngưỡng critical, số lần generic thấp hơn ngưỡng incident và log file thiếu sẽ không tạo dữ liệu. Tách nguồn chuẩn, ràng buộc service/IP/user và thứ tự theo cửa sổ, xét critical trước, khai báo độ phủ file/journald và dùng log lab có chủ đích. |
+| P1 | `agent/fim.py` · `check_integrity`, `manager/app/websocket/agent_ws.py` · `_handle_fim_alert` | FIM của Agent phát sự kiện riêng. Handler dùng suffix rộng cho passwd/shadow và không chuyển event file vào nhánh Sigma. YARA match của quét trong FIM nằm ở payload. Đưa đường file vào Rule Engine, dùng đường dẫn chính xác và sự kiện chuyển trạng thái, và có test riêng cho YARA từ FIM. |
+| P2 | `agent/agent.py` · `get_network_connections`, `main_agent`, `agent/connection_tracker.py` · `process_connections`, `agent/dns_sniffer.py` · `start_background_sniffer` | Snapshot socket có địa chỉ local/remote nhưng thiếu chiều kết nối, bị giới hạn mẫu và không thấy socket ngắn giữa hai poll. DNS phụ thuộc interface và quyền. Reconnect dùng gather với các task sống lâu. Dùng identity socket + tiến trình, đo coverage của collector, bổ sung nguồn sự kiện nếu cần, cancel và join task theo vòng đời kết nối. |
+| P2 | `frontend/src/pages/Dashboard.jsx` · `criticalActiveIncident`, `manager/app/services/dashboard/dashboard_service.py` · `get_summary` | Banner có thể chọn một incident từ 50 điểm trong khi health chỉ chuyển warning khi có ít nhất ba incident mức trung bình theo bộ lọc backend. Dùng cùng tiêu chí thời gian, trạng thái và Agent còn hoạt động, đồng thời ưu tiên incident điểm cao nhất cho banner. |
+| P2 | `manager/app/initializers/init_db.py` · `init_db`, `services/detection/detection_rule_service.py` · `list_rules` | DDL ad hoc trong cùng transaction có thể khiến PostgreSQL abort sau lỗi cột đã tồn tại. Seed chỉ chạy nếu bảng luật trống. Dùng migration idempotent có version và phần seed bổ sung theo rule ID cho DB đã triển khai. |
+
+Hai ca hồi quy ngoài bộ luật cũng thất bại trên bản `HEAD` trước thay đổi. `test_build_tree_attaches_orphan_nodes_to_root` mong một gốc ảo PID 1, trong khi `ProcessTreeService.build_tree` trả các gốc quan sát được. Cần thống nhất cách hiển thị gốc với quy tắc giữ PPID thiếu cho điều tra. `test_docker_compose_has_restart_unless_stopped` đòi service `client*` có hiệu lực, còn Compose hiện để Agent mẫu trong chú thích. Cần kiểm thử trên profile Agent nếu profile đó được hỗ trợ.
+
+Kết quả trên là phân tích mã và đường dữ liệu. Precision/recall vận hành cần tập telemetry đại diện có nhãn. Lịch sử chat ghi nhận các trường hợp desktop, phần mềm remote, hạ tầng Cloudflare và dữ liệu dashboard cũ nhưng chưa cung cấp bộ holdout kiểm định đầy đủ.
+
+## 8. Bộ luật endpoint và xác thực
+
+| Luật | Chứng cứ để khớp | Kết quả |
+| --- | --- | --- |
+| `builtin_linux_network_shell` | Tệp thực thi shell được nhận diện trên Linux có socket TCP đã thiết lập với peer ngoài loopback. Cùng socket gắn vào stdin và stdout hoặc stderr của shell và có PID và thời điểm tạo tiến trình. | Incident **High**, 75/100, với MITRE T1059.004. SOC xác minh chiều kết nối và bối cảnh truy cập. |
+| `builtin_linux_temp_network_exec` | Tệp thực thi từ `/tmp/`, `/var/tmp/` hoặc `/dev/shm/` có socket TCP đã thiết lập của cùng tiến trình với peer ngoài loopback và có PID và thời điểm tạo tiến trình. | Incident **High**, 75/100, ghi đường dẫn, PID, thời điểm tạo và endpoint đích. |
+| `builtin_linux_sensitive_file_change` | `FIM_ALERT` báo tạo/sửa/xóa với chuyển trạng thái hash hợp lệ. Theo dõi SSH server config, sudoers, cron và các tệp tài khoản hệ thống theo danh sách của rule. | **Critical**, 95/100 cho `/etc/passwd`, `/etc/shadow` và **High**, 75/100 cho các đường dẫn nhạy cảm còn lại. |
+| `brute_force` | History xác thực theo service, IP và tài khoản, được ghép với batch hiện tại. | Risk Registry áp base score và weight rồi tạo incident theo cài đặt. Xem [mục 6.3](#63-brute-force-detection). |
+
+Ba luật `builtin_` chạy khi Manager nhận telemetry tương ứng. Rule Engine dedup trong 5 phút theo Agent, rule và thực thể quan sát được (PID + thời điểm tạo, peer cho network shell, hoặc chuyển trạng thái SHA-256 cho FIM). Incident giữ chứng cứ match để đưa vào prompt triage, có cập nhật qua `/ws/dashboard` và điểm cố định theo severity của rule. Các luật này không yêu cầu tạo Sigma candidate hoặc migration DB. `brute_force` hiện dùng hàng `detection_rules` đã có.
+
+Cập nhật Agent Linux cùng Manager để có trường `socket_stdio`, giao thức socket và danh sách FIM mở rộng. Agent cũ vẫn gửi được telemetry theo định dạng hiện tại. Hai luật socket cần quyền đọc socket và `/proc/<pid>/fd`, cũng như quan sát được socket trong một lần lấy mẫu. Với binary thực thi tạm không có socket, shell ngắn giữa hai chu kỳ hoặc phiên dùng pipe trung gian, cần thêm nguồn chứng cứ khác. Thay đổi FIM có thể đến từ bảo trì hợp lệ. Các ca hồi quy dùng fixture và cơ sở dữ liệu SQLite tạm để xác minh điều kiện match, loại nhiễu và tương quan cửa sổ. Cần benchmark telemetry thật để đo precision/recall.
+
+<details>
+<summary>Ghi chú trích xuất lịch sử đang có trong workspace</summary>
+
+```text
+python3 -c '
+import json
+439  path = "/home/blackhat/.gemini/antigravity/brain/9c682eb7-9db3-4373-af75-95a9782e0c31/.system_generated/logs/transcript.jsonl"
+440  out = []
+441  with open(path, "r", encoding="utf-8") as f:
+442      for line in f:
+443          try:
+444              d = json.loads(line)
+445              role = d.get("role") or d.get("type") or d.get("author") or "MSG"
+446              text = d.get("text") or d.get("content") or d.get("message") or ""
+447              if isinstance(text, list):
+448                  text = " ".join(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in text)
+449              if text and len(str(text).strip()) > 0:
+450                  out.append(f"=== {str(role).upper()} ===\n{str(text).strip()}\n")
+451          except Exception:
+452              pass
+453  with open("antigravity_history.txt", "w", encoding="utf-8") as f:
+454      f.write("\n".join(out))
+455  print("Da trich xuat xong, so dong:", len(out))
+456  '
+```
+
+</details>
