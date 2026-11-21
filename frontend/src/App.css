@@ -1,7 +1,7 @@
 /* src/App.css */
 .card {
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-bg-card);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
     border-radius: var(--radius-md);
     padding: 1.5rem;
 }
@@ -24,18 +24,26 @@
 .agent-table th,
 .agent-table td {
     padding: 0.625rem;
-    color: var(--color-text-primary);
+    color: var(--text-primary);
     vertical-align: middle;
 }
 
+.agent-table th {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--bg-tertiary);
+}
+
 .agent-table tbody tr {
-    border-top: 1px solid var(--color-bg-card);
+    border-top: 1px solid var(--border-subtle);
 }
 
 .agent-table tbody tr:hover {
-    background: var(--color-bg-card);
+    background: var(--bg-tertiary);
 }
 
 .disabled {
-    color: var(--color-text-tertiary);
+    color: var(--text-tertiary);
 }

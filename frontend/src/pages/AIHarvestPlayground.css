@@ -85,14 +85,14 @@
 
 /* ── Card Containers ─────────────────────────────────────────────────── */
 .harvest-card {
-  background: #11161d;
-  border: 1px solid #2d3644;
+  background: #162032;
+  border: 1px solid #334155;
   border-radius: 0.75rem;
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .harvest-card-header {
@@ -110,7 +110,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #c9d1d9;
+  color: #cbd5e1;
 }
 
 .harvest-agent-badge {
@@ -164,12 +164,12 @@
 /* ── Textarea & Inputs ───────────────────────────────────────────────── */
 .harvest-textarea {
   width: 100%;
-  background: #0d1319;
-  border: 1px solid #30363d;
+  background: #111927;
+  border: 1px solid #334155;
   border-radius: 0.5rem;
   padding: 0.875rem;
   font-size: 0.75rem;
-  color: #e6edf3;
+  color: #f8fafc;
   line-height: 1.6;
   resize: vertical;
   min-height: 220px;
@@ -206,9 +206,9 @@
 }
 
 .harvest-analyst-input {
-  background: #0d1319;
-  border: 1px solid #30363d;
-  color: #ffffff;
+  background: #111927;
+  border: 1px solid #334155;
+  color: #f8fafc;
   padding: 0.3rem 0.5rem;
   border-radius: 0.375rem;
   font-size: 0.75rem;
@@ -314,8 +314,8 @@
 
 /* ── Code / YAML Panel ────────────────────────────────────────────────── */
 .harvest-yaml-container {
-  background: #0d1117;
-  border: 1px solid #2d3644;
+  background: #0f172a;
+  border: 1px solid #334155;
   border-radius: 0.75rem;
   overflow: hidden;
   display: flex;
@@ -327,7 +327,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 1rem;
-  background: #161b22;
+  background: #162032;
   border-bottom: 1px solid #21262d;
   font-size: 0.75rem;
 }
@@ -431,8 +431,8 @@
 }
 
 .val-kpi-card {
-  background: #161b22;
-  border: 1px solid #2d3644;
+  background: #162032;
+  border: 1px solid #334155;
   border-radius: 0.625rem;
   padding: 0.875rem;
   display: flex;
@@ -457,7 +457,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #8b949e;
+  color: #cbd5e1;
 }
 
 .val-kpi-val {
@@ -468,13 +468,13 @@
 
 .val-kpi-sub {
   font-size: 0.6875rem;
-  color: #8b949e;
+  color: #94a3b8;
 }
 
 /* ── Confusion Matrix ─────────────────────────────────────────────────── */
 .val-table-container {
-  background: #11161d;
-  border: 1px solid #2d3644;
+  background: #162032;
+  border: 1px solid #334155;
   border-radius: 0.625rem;
   padding: 1rem;
   overflow-x: auto;

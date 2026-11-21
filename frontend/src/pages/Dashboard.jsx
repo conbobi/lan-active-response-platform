@@ -244,10 +244,10 @@ export default function Dashboard() {
                     onClick={() => setSelectedIncident(criticalActiveIncident)}
                     style={{
                         background: isHighOrCriticalThreat
-                            ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)'
-                            : 'linear-gradient(90deg, rgba(245, 158, 11, 0.2) 0%, rgba(17, 24, 39, 0.95) 100%)',
-                        border: isHighOrCriticalThreat ? '1px solid var(--error)' : '1px solid var(--warning)',
-                        borderLeft: isHighOrCriticalThreat ? '5px solid var(--error)' : '5px solid var(--warning)',
+                            ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.22) 0%, rgba(22, 32, 50, 0.95) 100%)'
+                            : 'linear-gradient(90deg, rgba(244, 63, 94, 0.18) 0%, rgba(22, 32, 50, 0.95) 100%)',
+                        border: isHighOrCriticalThreat ? '1px solid var(--error)' : '1px solid rgba(239, 68, 68, 0.45)',
+                        borderLeft: isHighOrCriticalThreat ? '5px solid var(--error)' : '5px solid #f43f5e',
                         borderRadius: 'var(--radius-sm)',
                         padding: '1rem 1.25rem',
                         marginBottom: '1.25rem',
@@ -256,7 +256,7 @@ export default function Dashboard() {
                         justifyContent: 'space-between',
                         gap: '1rem',
                         flexWrap: 'wrap',
-                        boxShadow: isHighOrCriticalThreat ? '0 0 16px rgba(239, 68, 68, 0.25)' : '0 0 16px rgba(245, 158, 11, 0.25)',
+                        boxShadow: '0 0 16px rgba(239, 68, 68, 0.25)',
                         cursor: 'pointer',
                         transition: 'filter 0.15s ease',
                     }}
@@ -269,11 +269,11 @@ export default function Dashboard() {
                                 width: 36,
                                 height: 36,
                                 borderRadius: '50%',
-                                background: isHighOrCriticalThreat ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                background: 'rgba(239, 68, 68, 0.25)',
                                 display: 'flex',
                                 alignItems: 'center',
-                                justifyCenter: 'center',
-                                color: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
+                                justifyContent: 'center',
+                                color: 'var(--error)',
                                 flexShrink: 0,
                             }}
                         >
@@ -281,8 +281,8 @@ export default function Dashboard() {
                         </div>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontWeight: 800, color: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
-                                    {isHighOrCriticalThreat ? '🔴 CRITICAL THREAT ACTIVE: ' : '🟠 ACTIVE THREAT DETECTED: '}
+                                <span style={{ fontWeight: 800, color: isHighOrCriticalThreat ? 'var(--critical)' : '#f87171', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
+                                    {isHighOrCriticalThreat ? '🔴 CRITICAL THREAT ACTIVE: ' : '🚨 ACTIVE THREAT DETECTED: '}
                                     {criticalActiveIncident.title || 'LOLBin Reverse Shell / C2'}
                                 </span>
                                 <span style={{
@@ -290,8 +290,8 @@ export default function Dashboard() {
                                     fontWeight: 700,
                                     padding: '0.1rem 0.5rem',
                                     borderRadius: '999px',
-                                    background: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
-                                    color: isHighOrCriticalThreat ? '#fff' : '#000',
+                                    background: isHighOrCriticalThreat ? 'var(--error)' : '#f43f5e',
+                                    color: '#ffffff',
                                 }}>
                                     SCORE {Math.round(criticalActiveIncident.risk_score ?? criticalActiveIncident.riskScore ?? 100)}/100
                                 </span>
@@ -315,9 +315,9 @@ export default function Dashboard() {
                             disabled={isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
                             onClick={() => handleQuickIsolate(criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
                             style={{
-                                background: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
-                                borderColor: isHighOrCriticalThreat ? 'var(--error)' : 'var(--warning)',
-                                color: isHighOrCriticalThreat ? '#fff' : '#000',
+                                background: isHighOrCriticalThreat ? 'var(--error)' : '#e11d48',
+                                borderColor: isHighOrCriticalThreat ? 'var(--error)' : '#f43f5e',
+                                color: '#ffffff',
                                 fontWeight: 700
                             }}
                         >
@@ -363,7 +363,7 @@ export default function Dashboard() {
             ) : unresolvedIncidents > 0 ? (
                 <div
                     style={{
-                        background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(17, 24, 39, 0.7) 100%)',
+                        background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(22, 32, 50, 0.85) 100%)',
                         border: '1px solid rgba(245, 158, 11, 0.3)',
                         borderLeft: '5px solid var(--warning)',
                         borderRadius: 'var(--radius-sm)',
@@ -408,7 +408,7 @@ export default function Dashboard() {
             ) : (
                 <div
                     style={{
-                        background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.12) 0%, rgba(17, 24, 39, 0.7) 100%)',
+                        background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.12) 0%, rgba(22, 32, 50, 0.85) 100%)',
                         border: '1px solid rgba(16, 185, 129, 0.3)',
                         borderLeft: '5px solid var(--success)',
                         borderRadius: 'var(--radius-sm)',

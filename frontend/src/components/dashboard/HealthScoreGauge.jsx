@@ -85,11 +85,17 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
   );
 
   const isIncidentOnLiveAgent = (incident) => {
-    const agentId = incident?.agent_id || incident?.agentId;
-    if (!agentId) return false;
-    // Nếu không tìm thấy agent trong danh sách → coi như dead (stale data)
-    if (!agentAliveMap.has(agentId)) return false;
-    return agentAliveMap.get(agentId);
+    const rawId = incident?.agent_id || incident?.agentId;
+    if (!rawId) return true;
+    const agentId = String(rawId).trim().toLowerCase();
+    if (safeAgents.length === 0) return true;
+    for (const [id, alive] of agentAliveMap.entries()) {
+      if (String(id).trim().toLowerCase() === agentId) {
+        return alive;
+      }
+    }
+    // If agent is not explicitly found in current agents list, keep it so active threats aren't hidden
+    return true;
   };
 
   // 2. Helper getScore (xử lý risk_score ?? score)
@@ -146,7 +152,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
     // 1 critical → 25, 2 critical → 10
     level = 'critical';
   }
-  // PRIORITY 2: Medium threats on live endpoints
+  // PRIORITY 2: Medium threats on live endpoints (màu hơi đỏ)
   else if (unresolvedMedium.length > 0) {
     if (unresolvedMedium.length >= 3) {
       healthScore = 55;
@@ -156,7 +162,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
       const maxMediumScore = Math.max(...unresolvedMedium.map(getScore));
       healthScore = Math.max(50, Math.round(100 - maxMediumScore * 0.5));
     }
-    level = 'warning';
+    level = 'threat';
   }
   // PRIORITY 3: Offline agents
   else if (offlineAgents >= 2) {
@@ -177,16 +183,17 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
 
   // 8. Config theo level
   const config = {
-    safe: { icon: '🟢', color: 'var(--success)', bg: 'var(--success-dim)', border: 'rgba(63, 185, 80, 0.4)', text: 'HỆ THỐNG AN TOÀN' },
-    warning: { icon: '🟡', color: 'var(--warning)', bg: 'var(--warning-dim)', border: 'rgba(210, 153, 34, 0.4)', text: 'CẦN CHÚ Ý' },
-    critical: { icon: '🔴', color: 'var(--critical)', bg: 'var(--critical-dim)', border: 'rgba(255, 123, 114, 0.5)', text: 'NGUY HIỂM' },
-  }[level];
+    safe: { icon: '🟢', color: 'var(--success)', bg: 'var(--success-dim)', border: 'rgba(16, 185, 129, 0.4)', text: 'HỆ THỐNG AN TOÀN' },
+    warning: { icon: '🟡', color: 'var(--warning)', bg: 'var(--warning-dim)', border: 'rgba(245, 158, 11, 0.4)', text: 'CẦN CHÚ Ý' },
+    threat: { icon: '🚨', color: '#f87171', bg: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.4)', text: 'CẢNH BÁO MỐI ĐE DỌA' },
+    critical: { icon: '🔴', color: 'var(--critical)', bg: 'var(--critical-dim)', border: 'rgba(248, 113, 113, 0.5)', text: 'NGUY HIỂM' },
+  }[level] || { icon: '🟢', color: 'var(--success)', bg: 'var(--success-dim)', border: 'rgba(16, 185, 129, 0.4)', text: 'HỆ THỐNG AN TOÀN' };
 
   return (
     <div style={{
       background: 'var(--bg-secondary)',
       border: `1px solid ${config.border}`,
-      boxShadow: level === 'critical' ? '0 0 16px var(--critical-glow)' : 'var(--shadow-sm)',
+      boxShadow: (level === 'critical' || level === 'threat') ? '0 0 16px rgba(239, 68, 68, 0.25)' : 'var(--shadow-sm)',
       borderRadius: 'var(--radius-lg)',
       padding: '2rem',
       marginBottom: '1.5rem',
@@ -220,7 +227,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
         {unresolvedCritical.length > 0 ? (
           <div style={{
             background: 'var(--critical-dim)',
-            border: '1px solid rgba(255, 123, 114, 0.35)',
+            border: '1px solid rgba(248, 113, 113, 0.35)',
             borderRadius: 'var(--radius-sm)',
             padding: '0.75rem 1rem',
             marginBottom: '1rem',
@@ -231,14 +238,14 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
           </div>
         ) : unresolvedMedium.length > 0 ? (
           <div style={{
-            background: 'var(--warning-dim)',
-            border: '1px solid rgba(210, 153, 34, 0.35)',
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
             borderRadius: 'var(--radius-sm)',
             padding: '0.75rem 1rem',
             marginBottom: '1rem',
           }}>
-            <div style={{ color: 'var(--warning)', fontWeight: 600, fontSize: '0.9rem' }}>
-              ⚠️ {unresolvedMedium.length} cảnh báo đe dọa mức trung bình chưa xử lý
+            <div style={{ color: '#f87171', fontWeight: 600, fontSize: '0.9rem' }}>
+              🚨 {unresolvedMedium.length} mối đe dọa đang hoạt động (Threat Spikes)
             </div>
           </div>
         ) : null}
@@ -246,7 +253,7 @@ export default function HealthScoreGauge({ agents = [], incidents = [], loading 
         {/* Incidents Context List (Critical or Medium) */}
         {(unresolvedCritical.length > 0 || unresolvedMedium.length > 0) && (
           <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', textAlign: 'left' }}>
-            <div style={{ color: unresolvedCritical.length > 0 ? 'var(--critical)' : 'var(--warning)', fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.875rem' }}>
+            <div style={{ color: unresolvedCritical.length > 0 ? 'var(--critical)' : '#f87171', fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.875rem' }}>
               {unresolvedCritical.length > 0 ? '⚠️ Cần xử lý NGAY:' : '⚠️ Sự cố cần xem xét:'}
             </div>
             {(unresolvedCritical.length > 0 ? unresolvedCritical : unresolvedMedium).slice(0, 3).map(incident => {

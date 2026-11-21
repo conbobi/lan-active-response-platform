@@ -57,37 +57,37 @@
   position: relative;
   overflow: hidden;
   border-radius: 0.75rem;
-  border: 1px solid rgba(88, 166, 255, 0.2);
-  background: #11161d;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: #162032;
   padding: 1.25rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   transition: all 0.2s ease;
   min-width: 0;
 }
 
 .ai-metric-card:hover {
-  border-color: rgba(88, 166, 255, 0.4);
+  border-color: rgba(56, 189, 248, 0.45);
   transform: translateY(-1px);
 }
 
 .ai-metric-card.variant-purple {
   border-color: rgba(168, 85, 247, 0.3);
-  background: linear-gradient(180deg, rgba(168, 85, 247, 0.06) 0%, #11161d 100%);
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.08) 0%, #162032 100%);
 }
 
 .ai-metric-card.variant-green {
   border-color: rgba(16, 185, 129, 0.3);
-  background: linear-gradient(180deg, rgba(16, 185, 129, 0.06) 0%, #11161d 100%);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.08) 0%, #162032 100%);
 }
 
 .ai-metric-card.variant-yellow {
   border-color: rgba(245, 158, 11, 0.3);
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.06) 0%, #11161d 100%);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.08) 0%, #162032 100%);
 }
 
 .ai-metric-card.variant-blue {
-  border-color: rgba(59, 130, 246, 0.3);
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.06) 0%, #11161d 100%);
+  border-color: rgba(56, 189, 248, 0.3);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.08) 0%, #162032 100%);
 }
 
 /* ── Charts Row (Line Chart + MITRE Bar Chart) ── */
@@ -107,10 +107,10 @@
 
 .ai-chart-card {
   border-radius: 0.75rem;
-  border: 1px solid #2d3644;
-  background: #11161d;
+  border: 1px solid #334155;
+  background: #162032;
   padding: 1.25rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   min-width: 0 !important;
   overflow: hidden;
 }
@@ -126,9 +126,9 @@
 /* ── Main Rules Table Card & Wrapper ── */
 .ai-table-card {
   border-radius: 0.75rem;
-  border: 1px solid #2d3644;
-  background: #11161d;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  border: 1px solid #334155;
+  background: #162032;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   overflow: hidden;
   width: 100%;
   min-width: 0;
@@ -155,9 +155,9 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #a8b3bf;
-  background: #0d1319;
-  border-bottom: 1px solid #2d3644;
+  color: #cbd5e1;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
   white-space: nowrap;
 }
 
@@ -169,24 +169,24 @@
 
 .ai-dashboard-table-wrapper td {
   padding: 0.85rem 1rem;
-  border-bottom: 1px solid rgba(45, 54, 68, 0.6);
+  border-bottom: 1px solid #222f42;
   vertical-align: middle;
-  color: #e6edf3;
+  color: #f8fafc;
 }
 
 .ai-dashboard-table-wrapper tr:hover td {
-  background: #171d26;
+  background: #1e293b;
   cursor: pointer;
 }
 
 /* Filter Controls Bar */
 .ai-filter-bar {
   padding: 1rem 1.25rem;
-  border-bottom: 1px solid #2d3644;
+  border-bottom: 1px solid #334155;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  background: rgba(13, 19, 25, 0.4);
+  background: rgba(15, 23, 42, 0.6);
 }
 
 .ai-filter-row {
@@ -209,14 +209,15 @@
   font-size: 0.75rem;
   font-weight: 500;
   cursor: pointer;
-  border: 1px solid transparent;
-  background: rgba(45, 54, 68, 0.5);
-  color: #a8b3bf;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #cbd5e1;
   transition: all 0.15s ease;
 }
 
 .ai-filter-btn:hover {
-  background: #2d3644;
+  background: #263346;
+  border-color: #475569;
   color: #ffffff;
 }
 

@@ -496,8 +496,8 @@ export default function RuleDetail() {
                   </div>
                   <span style={{ fontSize: '0.75rem', color: '#8b949e', fontFamily: 'monospace' }}>{v.created_at}</span>
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#8b949e' }}>Author: {v.created_by || 'soc_analyst'}</div>
-                <pre style={{ margin: 0, padding: '0.75rem', borderRadius: '0.5rem', background: '#0a0e14', border: '1px solid #1f2630', fontSize: '0.75rem', fontFamily: "'JetBrains Mono', monospace", color: '#94a3b8', maxHeight: '12rem', overflowY: 'auto' }}>
+                <div style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>Author: {v.created_by || 'soc_analyst'}</div>
+                <pre style={{ margin: 0, padding: '0.75rem', borderRadius: '0.5rem', background: '#0f172a', border: '1px solid #334155', fontSize: '0.75rem', fontFamily: "'JetBrains Mono', monospace", color: '#cbd5e1', maxHeight: '12rem', overflowY: 'auto' }}>
                   {v.yaml_content}
                 </pre>
               </div>

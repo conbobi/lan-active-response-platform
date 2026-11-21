@@ -72,9 +72,9 @@ export default function MetricsCard({
       style={{
         borderRadius: '0.75rem',
         padding: '1.25rem',
-        backgroundColor: '#11161d',
+        backgroundColor: 'var(--bg-secondary, #162032)',
         border: `1px solid ${theme.bgHex.replace('0.1', '0.3')}`,
-        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.4)',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
         minWidth: 0
       }}
     >

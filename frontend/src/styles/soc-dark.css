@@ -4,70 +4,75 @@
    ============================================================================ */
 
 :root {
-  /* ========== BACKGROUND LAYERS (darkest → lightest) ========== */
-  --bg-primary: #0a0e14;         /* deepest — page canvas */
-  --bg-secondary: #11161d;       /* cards, panels */
-  --bg-tertiary: #171d26;        /* hover, active row */
-  --bg-elevated: #1e2530;        /* modal, dropdown, popover */
-  --bg-overlay: rgba(0, 0, 0, 0.72); /* modal backdrop */
-  --bg-input: #0d1319;           /* input field bg */
+  /* ========== BACKGROUND LAYERS (Modern Dark Slate - not pitch black) ========== */
+  --bg-primary: #0f172a;         /* deepest — page canvas (Slate 900) */
+  --bg-secondary: #162032;       /* cards, panels — elevated slate */
+  --bg-tertiary: #1e293b;        /* hover, active row — Slate 800 */
+  --bg-elevated: #263346;        /* modal, dropdown, popover */
+  --bg-overlay: rgba(15, 23, 42, 0.78); /* modal backdrop */
+  --bg-input: #111927;           /* input field bg */
 
   /* Compatibility aliases with index.css */
-  --bg: #0a0e14;
-  --bg-card: #11161d;
-  --bg-header: #11161d;
-  --bg-sidebar: #0a0e14;
+  --bg: #0f172a;
+  --bg-card: #162032;
+  --bg-header: #162032;
+  --bg-sidebar: #0f172a;
 
-  /* ========== BORDERS ========== */
-  --border-subtle: #1f2630;      /* subtle divider */
-  --border-primary: #2d3644;     /* default border */
-  --border-strong: #3d4757;      /* emphasized border */
-  --border-focus: #58a6ff;       /* focus ring */
-  --border: #2d3644;             /* index.css alias */
+  /* ========== BORDERS (Crisp & clearly defined, never blurry) ========== */
+  --border-subtle: #222f42;      /* subtle divider */
+  --border-primary: #334155;     /* default border */
+  --border-strong: #475569;      /* emphasized border */
+  --border-focus: #38bdf8;       /* focus ring */
+  --border: #334155;             /* index.css alias */
 
   /* ========== TEXT (guaranteed high contrast) ========== */
-  --text-primary: #e6edf3;       /* body, headings — contrast ~13:1 vs bg-primary */
-  --text-secondary: #a8b3bf;     /* labels, metadata — ~7.5:1 */
-  --text-tertiary: #7a8696;      /* hints, timestamps — ~4.8:1 (minimum!) */
-  --text-disabled: #525d6c;      /* ONLY for disabled inputs */
-  --text-inverse: #0a0e14;       /* text on bright badges / primary buttons */
+  --text-primary: #f8fafc;       /* body, headings — Slate 50 pure crisp white */
+  --text-secondary: #cbd5e1;     /* labels, metadata — Slate 300 bright silver */
+  --text-tertiary: #94a3b8;      /* hints, timestamps — Slate 400 legible neutral */
+  --text-disabled: #64748b;      /* ONLY for disabled inputs */
+  --text-inverse: #ffffff;       /* text on bright badges / primary buttons */
   --text-on-accent: #ffffff;
 
-  /* ========== ACCENT (Blue Team palette — desaturated, non-neon) ========== */
-  --primary: #58a6ff;            /* GitHub Primer blue */
-  --primary-hover: #79b8ff;
-  --primary-dim: rgba(88, 166, 255, 0.15);
-  --primary-glow: rgba(88, 166, 255, 0.35);
-  --primary-light: rgba(88, 166, 255, 0.15);
+  /* ========== ACCENT (Blue Team Modern Palette) ========== */
+  --primary: #38bdf8;            /* Sky / cyan blue */
+  --primary-hover: #60a5fa;
+  --primary-dim: rgba(56, 189, 248, 0.15);
+  --primary-glow: rgba(56, 189, 248, 0.35);
+  --primary-light: rgba(56, 189, 248, 0.12);
 
-  --info: #79c0ff;
-  --info-dim: rgba(121, 192, 255, 0.15);
+  --info: #38bdf8;
+  --info-dim: rgba(56, 189, 248, 0.15);
 
-  --success: #3fb950;            /* Desaturated green */
-  --success-dim: rgba(63, 185, 80, 0.15);
-  --success-glow: rgba(63, 185, 80, 0.35);
+  /* Safe / Healthy: Clean Emerald Green */
+  --success: #10b981;
+  --success-hover: #059669;
+  --success-dim: rgba(16, 185, 129, 0.15);
+  --success-glow: rgba(16, 185, 129, 0.35);
 
-  --warning: #d29922;            /* Amber */
-  --warning-dim: rgba(210, 153, 34, 0.15);
-  --warning-glow: rgba(210, 153, 34, 0.35);
+  /* Warning / Notice: Clean Warm Amber */
+  --warning: #f59e0b;
+  --warning-dim: rgba(245, 158, 11, 0.15);
+  --warning-glow: rgba(245, 158, 11, 0.35);
 
-  --error: #f85149;              /* Primer red */
-  --error-dim: rgba(248, 81, 73, 0.15);
-  --error-glow: rgba(248, 81, 73, 0.35);
+  /* Threat / Danger Alert: Distinct Reddish */
+  --error: #ef4444;
+  --error-hover: #dc2626;
+  --error-dim: rgba(239, 68, 68, 0.16);
+  --error-glow: rgba(239, 68, 68, 0.35);
 
-  --critical: #ff7b72;           /* Distinguishable coral/red for critical */
-  --critical-dim: rgba(255, 123, 114, 0.15);
-  --critical-glow: rgba(255, 123, 114, 0.35);
+  --critical: #f87171;
+  --critical-dim: rgba(248, 113, 113, 0.18);
+  --critical-glow: rgba(248, 113, 113, 0.35);
 
   /* ========== MONOSPACE (terminal aesthetic) ========== */
-  --mono-bg: rgba(110, 118, 129, 0.16);
-  --mono-text: #e6edf3;
-  --mono-border: rgba(110, 118, 129, 0.38);
+  --mono-bg: rgba(30, 41, 59, 0.7);
+  --mono-text: #f1f5f9;
+  --mono-border: rgba(148, 163, 184, 0.25);
 
   /* ========== SHADOWS (light & purposeful) ========== */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.45);
   --shadow-glow: 0 0 16px var(--primary-glow);
   --shadow-purple: 0 4px 16px var(--primary-glow);
 

@@ -6,11 +6,11 @@ export default function ValidationResultPanel({ result }) {
     return (
       <div style={{
         borderRadius: '0.75rem',
-        border: '1px solid #2d3644',
-        background: '#11161d',
+        border: '1px solid var(--border-primary, #334155)',
+        background: 'var(--bg-secondary, #162032)',
         padding: '1.5rem',
         textAlign: 'center',
-        color: '#8b949e',
+        color: 'var(--text-secondary, #cbd5e1)',
         fontSize: '0.8125rem'
       }}>
         No validation results available. Run validation using Agent B.
@@ -204,14 +204,14 @@ export default function ValidationResultPanel({ result }) {
       <div
         className="val-table-container"
         style={{
-          background: '#11161d',
-          border: '1px solid #2d3644',
+          background: 'var(--bg-secondary, #162032)',
+          border: '1px solid var(--border-primary, #334155)',
           borderRadius: '0.625rem',
           padding: '1rem',
           overflowX: 'auto'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: '#8b949e', marginBottom: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary, #cbd5e1)', marginBottom: '0.75rem' }}>
           <FiSliders size={14} color="#c084fc" />
           Statistical Confusion Matrix (Historical Benchmark Logs)
         </div>
@@ -284,13 +284,13 @@ export default function ValidationResultPanel({ result }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', maxHeight: '160px', overflowY: 'auto' }}>
             {fp_samples.slice(0, 5).map((sample, idx) => (
               <div key={idx} style={{
-                background: '#0d1117',
-                border: '1px solid #21262d',
+                background: '#0f172a',
+                border: '1px solid #334155',
                 borderRadius: '0.375rem',
                 padding: '0.375rem 0.625rem',
                 fontSize: '0.6875rem',
                 fontFamily: 'monospace',
-                color: '#e6edf3',
+                color: '#f8fafc',
                 wordBreak: 'break-all'
               }}>
                 <span style={{ color: '#58a6ff', fontWeight: 600 }}>{sample.process}</span>: {sample.cmdline}

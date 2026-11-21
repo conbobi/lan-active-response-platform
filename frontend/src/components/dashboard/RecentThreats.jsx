@@ -132,9 +132,9 @@ export default function RecentThreats({ incidents = [], agents = [], onSelectInc
           const attackType = extractAttackType(incident);
           
           const bgColor = severity === 'critical' ? 'var(--critical-dim)' :
-                         severity === 'high' ? 'var(--error-dim)' : 'var(--warning-dim)';
+                         severity === 'high' ? 'var(--error-dim)' : 'rgba(244, 63, 94, 0.15)';
           const borderColor = severity === 'critical' ? 'var(--critical)' :
-                             severity === 'high' ? 'var(--error)' : 'var(--warning)';
+                             severity === 'high' ? 'var(--error)' : '#f43f5e';
           
           return (
             <div
@@ -201,7 +201,7 @@ export default function RecentThreats({ incidents = [], agents = [], onSelectInc
                     padding: '0.2rem 0.5rem',
                     borderRadius: '4px',
                     background: borderColor,
-                    color: 'var(--text-inverse)',
+                    color: '#ffffff',
                   }}>
                     {score}
                   </span>

@@ -495,9 +495,9 @@ export default function AIDashboard() {
                   paddingBottom: '0.375rem',
                   fontSize: '0.75rem',
                   borderRadius: '0.5rem',
-                  backgroundColor: '#0d1319',
-                  border: '1px solid #2d3644',
-                  color: '#e6edf3'
+                  backgroundColor: 'var(--bg-input, #111927)',
+                  border: '1px solid var(--border-primary, #334155)',
+                  color: 'var(--text-primary, #f8fafc)'
                 }}
               />
             </div>
