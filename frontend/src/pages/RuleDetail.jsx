@@ -21,6 +21,7 @@ import StatusBadge from '../components/ai/StatusBadge';
 import SourceBadge from '../components/ai/SourceBadge';
 import MITRETags from '../components/ai/MITRETags';
 import ValidationResultPanel from '../components/ai/ValidationResultPanel';
+import './RuleDetail.css';
 
 export default function RuleDetail() {
   const { id } = useParams();
@@ -176,46 +177,51 @@ export default function RuleDetail() {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center text-gray-400 text-sm">
-        Loading rule candidate...
+      <div className="rule-detail-root" style={{ alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#8b949e', fontSize: '0.875rem' }}>
+          <div style={{ width: '1rem', height: '1rem', borderRadius: '50%', border: '2px solid #8b949e', borderTopColor: '#c084fc', animation: 'spin 1s linear infinite' }} />
+          Loading rule candidate...
+        </div>
       </div>
     );
   }
 
   if (!rule) {
     return (
-      <div className="space-y-4">
+      <div className="rule-detail-root">
         <button
           onClick={() => navigate('/ai-dashboard')}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white"
+          className="rule-detail-back-btn"
         >
-          <FiArrowLeft size={13} /> Back to AI Dashboard
+          <FiArrowLeft size={14} /> Back to AI SOC Studio
         </button>
-        <div className="rounded-xl border border-gray-800 bg-[#131722] p-8 text-center text-gray-400 text-sm">
+        <div className="rule-meta-card" style={{ padding: '2.5rem', textAlign: 'center', color: '#8b949e', fontSize: '0.875rem' }}>
           Rule candidate not found.
         </div>
       </div>
     );
   }
 
+  const sev = (rule.severity || 'medium').toLowerCase();
+
   return (
-    <div className="space-y-6 pb-12">
-      {/* ── BACK BUTTON & ACTIONS HEADER ───────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="rule-detail-root">
+      {/* ── BACK BUTTON & ACTIONS TOP BAR ───────────────────────────────── */}
+      <div className="rule-detail-top-nav">
         <button
           onClick={() => navigate('/ai-dashboard')}
-          className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-white transition w-fit"
+          className="rule-detail-back-btn"
         >
-          <FiArrowLeft size={14} /> Back to AI Dashboard
+          <FiArrowLeft size={14} /> Back to AI SOC Studio
         </button>
 
         {/* Action Buttons Top Right */}
-        <div className="flex items-center gap-2">
+        <div className="rule-detail-actions-group">
           {rule.status === 'pending' && (
             <button
               onClick={handleValidate}
               disabled={actionLoading}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20 transition disabled:opacity-50"
+              className="btn-action btn-validate"
             >
               <FiPlay size={13} />
               {actionLoading ? 'Validating...' : 'Validate Now (Agent B)'}
@@ -227,7 +233,7 @@ export default function RuleDetail() {
               <button
                 onClick={handleActivate}
                 disabled={actionLoading}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 transition disabled:opacity-50"
+                className="btn-action btn-activate"
               >
                 <FiCheckCircle size={13} />
                 Activate Rule
@@ -235,7 +241,7 @@ export default function RuleDetail() {
               <button
                 onClick={handleReject}
                 disabled={actionLoading}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 transition disabled:opacity-50"
+                className="btn-action btn-reject"
               >
                 <FiXCircle size={13} />
                 Reject
@@ -247,7 +253,7 @@ export default function RuleDetail() {
             <button
               onClick={handleDisable}
               disabled={actionLoading}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition disabled:opacity-50"
+              className="btn-action btn-disable"
             >
               <FiPower size={13} />
               Disable
@@ -256,60 +262,64 @@ export default function RuleDetail() {
         </div>
       </div>
 
-      {/* ── RULE TITLE & METADATA BAR ──────────────────────────────────── */}
-      <div className="rounded-xl border border-gray-800 bg-[#131722] p-5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h2 className="text-xl font-black text-white tracking-tight">
+      {/* ── RULE TITLE & METADATA HERO CARD ────────────────────────────── */}
+      <div className="rule-hero-card">
+        <div className="rule-hero-header">
+          <div className="rule-hero-left">
+            <div className="rule-hero-title-row">
+              <h2 className="rule-hero-title">
                 {rule.rule_name}
               </h2>
-              <SourceBadge source={rule.source} />
-              <StatusBadge status={rule.status} />
-              <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold uppercase bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                {rule.severity || 'medium'}
-              </span>
+              <div className="rule-hero-badges">
+                <SourceBadge source={rule.source} />
+                <StatusBadge status={rule.status} />
+                <span className={`rule-sev-pill sev-${sev}`}>
+                  {sev.toUpperCase()}
+                </span>
+              </div>
             </div>
-            <p className="text-xs text-gray-400 mt-1 font-mono">ID: {rule.id}</p>
+            <div className="rule-hero-subline">
+              <span className="rule-id-badge">ID: {rule.id}</span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 font-medium">MITRE:</span>
-            <MITRETags techniques={rule.mitre_techniques || []} max={5} />
+          <div className="rule-hero-right">
+            <span className="rule-mitre-label">MITRE:</span>
+            <MITRETags techniques={rule.mitre_techniques || []} max={6} />
           </div>
         </div>
 
         {/* Quick KPI stats strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-gray-800/80 text-xs">
-          <div>
-            <span className="text-gray-500">False Positive Rate:</span>
-            <div className="font-mono font-bold text-sm text-white mt-0.5">
+        <div className="rule-hero-kpi-grid">
+          <div className="rule-kpi-block">
+            <span className="rule-kpi-title">False Positive Rate</span>
+            <div className={`rule-kpi-metric ${rule.fpr != null ? (rule.fpr < 0.05 ? 'metric-good' : rule.fpr <= 0.10 ? 'metric-warn' : 'metric-bad') : ''}`}>
               {rule.fpr != null ? `${(rule.fpr * 100).toFixed(2)}%` : 'Not tested'}
             </div>
           </div>
-          <div>
-            <span className="text-gray-500">Precision:</span>
-            <div className="font-mono font-bold text-sm text-white mt-0.5">
+          <div className="rule-kpi-block">
+            <span className="rule-kpi-title">Precision</span>
+            <div className={`rule-kpi-metric ${rule.precision != null ? (rule.precision >= 0.95 ? 'metric-good' : rule.precision >= 0.85 ? 'metric-warn' : 'metric-bad') : ''}`}>
               {rule.precision != null ? `${(rule.precision * 100).toFixed(2)}%` : 'Not tested'}
             </div>
           </div>
-          <div>
-            <span className="text-gray-500">Recall:</span>
-            <div className="font-mono font-bold text-sm text-white mt-0.5">
+          <div className="rule-kpi-block">
+            <span className="rule-kpi-title">Recall</span>
+            <div className={`rule-kpi-metric ${rule.recall != null ? (rule.recall >= 0.90 ? 'metric-good' : 'metric-warn') : ''}`}>
               {rule.recall != null ? `${(rule.recall * 100).toFixed(2)}%` : 'Not tested'}
             </div>
           </div>
-          <div>
-            <span className="text-gray-500">Model Engine:</span>
-            <div className="font-mono text-sm text-purple-400 mt-0.5">
+          <div className="rule-kpi-block">
+            <span className="rule-kpi-title">Model Engine</span>
+            <div className="rule-kpi-metric metric-engine">
               {rule.model_generated || 'harvest-q6'}
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── TABS NAVIGATION ────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 border-b border-gray-800 text-xs font-semibold overflow-x-auto">
+      {/* ── TABS NAVIGATION BAR ─────────────────────────────────────────── */}
+      <div className="rule-tabs-bar">
         {[
           { key: 'overview', label: 'Overview & YAML', icon: <FiFileText size={13} /> },
           { key: 'validation', label: 'Validation Results', icon: <FiActivity size={13} /> },
@@ -320,11 +330,7 @@ export default function RuleDetail() {
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`flex items-center gap-2 px-4 py-2.5 border-b-2 transition whitespace-nowrap ${
-              activeTab === tab.key
-                ? 'border-purple-500 text-purple-400 bg-purple-500/5'
-                : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-700'
-            }`}
+            className={`rule-tab-button ${activeTab === tab.key ? 'active' : ''}`}
           >
             {tab.icon}
             {tab.label}
@@ -336,58 +342,58 @@ export default function RuleDetail() {
 
       {/* TAB 1: OVERVIEW */}
       {activeTab === 'overview' && (
-        <div className="space-y-6">
+        <div className="rule-overview-section">
           {/* YAML Viewer */}
-          <div className="rounded-xl border border-gray-800 bg-[#0d1117] shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-2.5 bg-gray-900 border-b border-gray-800 text-xs text-gray-400 font-mono">
+          <div className="rule-yaml-card">
+            <div className="rule-yaml-header">
               <span>Sigma Rule Definition (YAML)</span>
               <button
                 onClick={handleCopyYaml}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition"
+                className="btn-copy-yaml"
               >
-                {copied ? <FiCheck size={12} className="text-emerald-400" /> : <FiCopy size={12} />}
+                {copied ? <FiCheck size={12} style={{ color: '#34d399' }} /> : <FiCopy size={12} />}
                 <span>{copied ? 'Copied' : 'Copy YAML'}</span>
               </button>
             </div>
-            <pre className="p-4 text-xs font-mono text-emerald-300 leading-relaxed overflow-x-auto whitespace-pre">
+            <pre className="rule-yaml-code">
               {rule.rule_yaml}
             </pre>
           </div>
 
           {/* Metadata Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div className="rounded-xl border border-gray-800 bg-[#131722] p-4 space-y-2.5">
-              <h4 className="font-bold text-gray-300 uppercase tracking-wider text-[11px]">
+          <div className="rule-meta-columns">
+            <div className="rule-meta-card">
+              <h4 className="rule-meta-card-title">
                 Rule Provenance
               </h4>
-              <div className="flex justify-between border-b border-gray-800/60 pb-1.5">
-                <span className="text-gray-500">Created:</span>
-                <span className="text-gray-300 font-mono">{rule.created_at || 'N/A'}</span>
+              <div className="rule-meta-row">
+                <span className="rule-meta-key">Created:</span>
+                <span className="rule-meta-val val-mono">{rule.created_at || 'N/A'}</span>
               </div>
-              <div className="flex justify-between border-b border-gray-800/60 pb-1.5">
-                <span className="text-gray-500">Created By:</span>
-                <span className="text-gray-300">{rule.created_by || 'soc_analyst'}</span>
+              <div className="rule-meta-row">
+                <span className="rule-meta-key">Created By:</span>
+                <span className="rule-meta-val">{rule.created_by || 'soc_analyst'}</span>
               </div>
-              <div className="flex justify-between border-b border-gray-800/60 pb-1.5">
-                <span className="text-gray-500">AI Model:</span>
-                <span className="text-purple-400 font-mono">{rule.model_generated || 'harvest-q6'}</span>
+              <div className="rule-meta-row">
+                <span className="rule-meta-key">AI Model:</span>
+                <span className="rule-meta-val val-mono val-purple">{rule.model_generated || 'harvest-q6'}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Approved By:</span>
-                <span className="text-gray-300">{rule.approved_by || 'None'}</span>
+              <div className="rule-meta-row">
+                <span className="rule-meta-key">Approved By:</span>
+                <span className="rule-meta-val">{rule.approved_by || 'None'}</span>
               </div>
             </div>
 
-            <div className="rounded-xl border border-gray-800 bg-[#131722] p-4 space-y-2.5">
-              <h4 className="font-bold text-gray-300 uppercase tracking-wider text-[11px]">
+            <div className="rule-meta-card">
+              <h4 className="rule-meta-card-title">
                 CTI Prompt / Harvest Source
               </h4>
-              <p className="text-gray-400 leading-relaxed italic bg-gray-900/60 p-3 rounded-lg border border-gray-800">
+              <p className="rule-prompt-quote">
                 "{rule.harvest_prompt || 'No harvest prompt captured (human-authored).'}"
               </p>
               {rule.notes && (
-                <div className="mt-2 text-gray-400 text-[11px]">
-                  <strong className="text-gray-300">Notes:</strong> {rule.notes}
+                <div style={{ fontSize: '0.75rem', color: '#8b949e', marginTop: '0.25rem' }}>
+                  <strong style={{ color: '#e6edf3' }}>Notes:</strong> {rule.notes}
                 </div>
               )}
             </div>
@@ -397,20 +403,20 @@ export default function RuleDetail() {
 
       {/* TAB 2: VALIDATION RESULTS */}
       {activeTab === 'validation' && (
-        <div className="space-y-6">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', width: '100%' }}>
           <ValidationResultPanel result={rule.validation_result} />
         </div>
       )}
 
       {/* TAB 3: FALSE POSITIVE SAMPLES */}
       {activeTab === 'fp_samples' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="rule-fp-section">
+          <div className="rule-fp-top">
             <div>
-              <h4 className="text-sm font-bold text-white">
+              <h4 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 700, color: '#ffffff' }}>
                 False Positive Samples Captured by Agent B
               </h4>
-              <p className="text-xs text-gray-400">
+              <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.75rem', color: '#8b949e' }}>
                 Telemetry instances where rule alerted on normal baseline behavior (max 20 samples)
               </p>
             </div>
@@ -418,7 +424,7 @@ export default function RuleDetail() {
             <button
               onClick={handleSuggestExclusion}
               disabled={exclusionLoading || (rule.false_positive_samples || []).length === 0}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/20 transition disabled:opacity-50 w-fit"
+              className="btn-suggest-exclusion"
             >
               <FiZap size={13} />
               {exclusionLoading ? 'Analyzing...' : 'Suggest Exclusion (Agent A)'}
@@ -427,45 +433,45 @@ export default function RuleDetail() {
 
           {/* AI Exclusion Suggestion Banner */}
           {suggestedExclusion && (
-            <div className="rounded-xl border border-purple-500/40 bg-purple-500/10 p-4 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-purple-300">
-                <FiZap className="text-purple-400" />
+            <div className="rule-exclusion-box">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, color: '#d8b4fe' }}>
+                <FiZap style={{ color: '#c084fc' }} />
                 <span>Agent A Recommended Exclusions:</span>
               </div>
-              <div className="text-xs font-mono text-gray-200 bg-gray-900/80 p-3 rounded-lg border border-purple-500/20 whitespace-pre-wrap">
+              <pre className="rule-exclusion-pre">
                 {suggestedExclusion}
-              </div>
+              </pre>
             </div>
           )}
 
           {/* FP Samples Table */}
-          <div className="rounded-xl border border-gray-800 bg-[#131722] overflow-hidden shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+          <div className="rule-table-card">
+            <div style={{ overflowX: 'auto' }}>
+              <table className="rule-data-table">
                 <thead>
-                  <tr className="border-b border-gray-800 text-gray-400 bg-gray-900/40 uppercase tracking-wider">
-                    <th className="py-2.5 px-4 font-semibold">Process</th>
-                    <th className="py-2.5 px-4 font-semibold">Command Line</th>
-                    <th className="py-2.5 px-3 font-semibold">Host</th>
-                    <th className="py-2.5 px-3 font-semibold">Timestamp</th>
+                  <tr>
+                    <th>Process</th>
+                    <th>Command Line</th>
+                    <th>Host</th>
+                    <th>Timestamp</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-800/60 font-mono text-[11px]">
+                <tbody style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: '0.75rem' }}>
                   {(rule.false_positive_samples || []).length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="py-8 text-center text-gray-500 font-sans text-xs">
+                      <td colSpan={4} style={{ padding: '2.5rem', textAlign: 'center', color: '#8b949e', fontFamily: 'inherit' }}>
                         No False Positive samples recorded. Rule has 0% FPR on benchmark dataset!
                       </td>
                     </tr>
                   ) : (
                     rule.false_positive_samples.map((s, idx) => (
-                      <tr key={idx} className="hover:bg-gray-800/30">
-                        <td className="py-2.5 px-4 text-rose-300 font-bold">{s.process}</td>
-                        <td className="py-2.5 px-4 text-gray-300 max-w-md truncate" title={s.cmdline}>
+                      <tr key={idx}>
+                        <td style={{ color: '#fda4af', fontWeight: 700 }}>{s.process}</td>
+                        <td style={{ color: '#cbd5e1', maxWidth: '380px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.cmdline}>
                           {s.cmdline}
                         </td>
-                        <td className="py-2.5 px-3 text-gray-400">{s.host}</td>
-                        <td className="py-2.5 px-3 text-gray-500">{s.timestamp}</td>
+                        <td style={{ color: '#94a3b8' }}>{s.host}</td>
+                        <td style={{ color: '#64748b' }}>{s.timestamp}</td>
                       </tr>
                     ))
                   )}
@@ -478,25 +484,20 @@ export default function RuleDetail() {
 
       {/* TAB 4: VERSION HISTORY */}
       {activeTab === 'versions' && (
-        <div className="space-y-4">
-          <h4 className="text-sm font-bold text-white">Rule Version Audit Trail</h4>
-          <div className="space-y-3">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <h4 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 700, color: '#ffffff' }}>Rule Version Audit Trail</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {(rule.versions || []).map((v) => (
-              <div
-                key={v.id}
-                className="rounded-xl border border-gray-800 bg-[#131722] p-4 text-xs space-y-2"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                      v{v.version_number}
-                    </span>
-                    <span className="font-semibold text-white">{v.change_reason || 'Initial creation'}</span>
+              <div key={v.id} className="rule-version-card">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span className="rule-version-chip">v{v.version_number}</span>
+                    <span style={{ fontWeight: 600, color: '#ffffff' }}>{v.change_reason || 'Initial creation'}</span>
                   </div>
-                  <span className="text-gray-500 font-mono">{v.created_at}</span>
+                  <span style={{ fontSize: '0.75rem', color: '#8b949e', fontFamily: 'monospace' }}>{v.created_at}</span>
                 </div>
-                <div className="text-gray-400">Author: {v.created_by || 'soc_analyst'}</div>
-                <pre className="mt-2 p-3 rounded-lg bg-gray-900 border border-gray-800 text-[11px] font-mono text-gray-300 max-h-48 overflow-y-auto">
+                <div style={{ fontSize: '0.75rem', color: '#8b949e' }}>Author: {v.created_by || 'soc_analyst'}</div>
+                <pre style={{ margin: 0, padding: '0.75rem', borderRadius: '0.5rem', background: '#0a0e14', border: '1px solid #1f2630', fontSize: '0.75rem', fontFamily: "'JetBrains Mono', monospace", color: '#94a3b8', maxHeight: '12rem', overflowY: 'auto' }}>
                   {v.yaml_content}
                 </pre>
               </div>
@@ -507,25 +508,25 @@ export default function RuleDetail() {
 
       {/* TAB 5: ACTIONS LOG */}
       {activeTab === 'actions' && (
-        <div className="rounded-xl border border-gray-800 bg-[#131722] p-5 text-xs space-y-4">
-          <h4 className="font-bold text-white text-sm">Governance & Compliance Trail</h4>
-          <div className="space-y-3 font-sans">
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-900/60 border border-gray-800">
-              <FiCheck className="text-purple-400 mt-0.5" />
+        <div className="rule-meta-card" style={{ padding: '1.25rem', gap: '1rem' }}>
+          <h4 style={{ margin: 0, fontSize: '0.875rem', fontWeight: 700, color: '#ffffff' }}>Governance & Compliance Trail</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div className="rule-log-row">
+              <FiCheck style={{ color: '#c084fc', marginTop: '0.2rem', flexShrink: 0 }} />
               <div>
-                <div className="font-bold text-white">Rule Generated by Agent A</div>
-                <div className="text-gray-400 text-[11px]">
+                <div style={{ fontWeight: 700, color: '#ffffff', fontSize: '0.8125rem' }}>Rule Generated by Agent A</div>
+                <div style={{ color: '#8b949e', fontSize: '0.75rem' }}>
                   Generated via model {rule.model_generated} at {rule.created_at}
                 </div>
               </div>
             </div>
 
             {rule.validated_at && (
-              <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-900/60 border border-gray-800">
-                <FiActivity className="text-blue-400 mt-0.5" />
+              <div className="rule-log-row">
+                <FiActivity style={{ color: '#60a5fa', marginTop: '0.2rem', flexShrink: 0 }} />
                 <div>
-                  <div className="font-bold text-white">Agent B Statistical Validation</div>
-                  <div className="text-gray-400 text-[11px]">
+                  <div style={{ fontWeight: 700, color: '#ffffff', fontSize: '0.8125rem' }}>Agent B Statistical Validation</div>
+                  <div style={{ color: '#8b949e', fontSize: '0.75rem' }}>
                     Validated at {rule.validated_at}. FPR: {rule.fpr != null ? `${(rule.fpr * 100).toFixed(2)}%` : 'N/A'}, Precision: {rule.precision != null ? `${(rule.precision * 100).toFixed(2)}%` : 'N/A'}.
                   </div>
                 </div>
@@ -533,11 +534,11 @@ export default function RuleDetail() {
             )}
 
             {rule.activated_at && (
-              <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
-                <FiCheckCircle className="text-emerald-400 mt-0.5" />
+              <div className="rule-log-row log-active">
+                <FiCheckCircle style={{ color: '#34d399', marginTop: '0.2rem', flexShrink: 0 }} />
                 <div>
-                  <div className="font-bold text-emerald-300">Activated by {rule.approved_by || 'SOC Lead'}</div>
-                  <div className="text-emerald-400/80 text-[11px]">
+                  <div style={{ fontWeight: 700, color: '#6ee7b7', fontSize: '0.8125rem' }}>Activated by {rule.approved_by || 'SOC Lead'}</div>
+                  <div style={{ color: '#34d399', fontSize: '0.75rem' }}>
                     Activated into live detection rules at {rule.activated_at}
                   </div>
                 </div>
@@ -545,11 +546,11 @@ export default function RuleDetail() {
             )}
 
             {rule.disabled_at && (
-              <div className="flex items-start gap-3 p-3 rounded-lg bg-zinc-800/40 border border-zinc-700/40">
-                <FiPower className="text-zinc-400 mt-0.5" />
+              <div className="rule-log-row">
+                <FiPower style={{ color: '#94a3b8', marginTop: '0.2rem', flexShrink: 0 }} />
                 <div>
-                  <div className="font-bold text-zinc-300">Rule Disabled</div>
-                  <div className="text-zinc-500 text-[11px]">Disabled at {rule.disabled_at}</div>
+                  <div style={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.8125rem' }}>Rule Disabled</div>
+                  <div style={{ color: '#64748b', fontSize: '0.75rem' }}>Disabled at {rule.disabled_at}</div>
                 </div>
               </div>
             )}
