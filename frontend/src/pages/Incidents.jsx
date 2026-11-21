@@ -66,6 +66,11 @@ ChartJS.register(
   Filler
 );
 
+function formatTime(timestamp) {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleString();
+}
+
 export default function Incidents() {
   const {
     incidents,
