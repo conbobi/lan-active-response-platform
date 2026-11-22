@@ -77,6 +77,9 @@ if [ ! -e /etc/larp-agent/network.env ]; then
     install -m 0600 /dev/null /etc/larp-agent/network.env
     echo "[*] Điền credential riêng cho Agent vào /etc/larp-agent/network.env."
 fi
+if ! grep -q "LARP_UFW_CONTROL" /etc/larp-agent/network.env 2>/dev/null; then
+    echo "LARP_UFW_CONTROL=1" >> /etc/larp-agent/network.env
+fi
 
 cp "$INSTALL_DIR/larp-agent.service" /etc/systemd/system/larp-agent.service
 cp "$INSTALL_DIR/vulnerable-web.service" /etc/systemd/system/vulnerable-web.service
