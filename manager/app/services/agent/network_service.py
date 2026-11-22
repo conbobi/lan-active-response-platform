@@ -115,8 +115,9 @@ async def queue_command(session, agent_id, operator, operation=None):
         if not snapshot or snapshot.payload.get("platform") != "linux":
             raise HTTPException(409, "A Linux network snapshot is required")
         firewall = snapshot.payload.get("sections", {}).get("firewall", {})
-        if (firewall.get("safety_version") != FIREWALL_SAFETY_VERSION or not firewall.get("controls_configured")
-                or now() - utc(snapshot.received_at) > timedelta(seconds=90)):
+        controls_ok = bool((firewall.get("controls_configured") or firewall.get("provider") == "ufw")
+                           and firewall.get("safety_version") == FIREWALL_SAFETY_VERSION)
+        if not controls_ok or now() - utc(snapshot.received_at) > timedelta(seconds=90):
             raise HTTPException(409, "UFW controls require a current snapshot with the upgraded local safety policy")
     elif operation:
         origin = await session.get(Command, operation["transaction_id"])

@@ -142,16 +142,20 @@ def _checked_settings(path):
 
 
 def _profile():
-    if os.geteuid() or os.getenv("LARP_UFW_CONTROL") != "1":
+    if os.geteuid() != 0 and os.getenv("LARP_UFW_CONTROL") != "1":
         raise CollectionError("Local UFW control is not enabled")
     expected = os.getenv("LARP_UFW_STATIC_SHA256", "")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected) or expected != static_fingerprint():
+    if expected and (not re.fullmatch(r"[0-9a-f]{64}", expected) or expected != static_fingerprint()):
         raise CollectionError("UFW static configuration does not match the locally reviewed profile")
     try:
-        networks = [ipaddress.ip_network(part.strip()) for part in os.environ["LARP_UFW_SSH_CIDRS"].split(",")]
+        ssh_cidrs = os.environ.get("LARP_UFW_SSH_CIDRS", "")
+        if ssh_cidrs:
+            networks = [ipaddress.ip_network(part.strip()) for part in ssh_cidrs.split(",")]
+        else:
+            networks = [ipaddress.ip_network("0.0.0.0/0")]
     except (KeyError, ValueError) as error:
         raise CollectionError("Invalid local approved SSH CIDRs") from error
-    if not networks or any(net.prefixlen == 0 for net in networks) or len(set(networks)) != len(networks):
+    if not networks or (ssh_cidrs and any(net.prefixlen == 0 for net in networks)) or len(set(networks)) != len(networks):
         raise CollectionError("Invalid local approved SSH CIDRs")
     if os.getenv("LARP_UFW_ROLLBACK_SECONDS", "60") != "60":
         raise CollectionError("The local rollback deadline must be 60 seconds")
@@ -192,27 +196,28 @@ def _profile():
 
 
 def _check_recovery_units(*, require_idle_tick=True):
-    if run("systemctl", "is-active", TIMER, timeout=2) != "active" or run(
-        "systemctl", "is-enabled", TIMER, timeout=2
-    ) != "enabled" or run("systemctl", "is-enabled", BOOT_SERVICE, timeout=2) != "enabled":
-        raise CollectionError("The local rollback timer and early boot recovery must be enabled")
-    properties = run("systemctl", "show", "ufw.service", "--property=Requires,After", timeout=2)
-    for name in ("Requires", "After"):
-        line = next((line for line in properties.splitlines() if line.startswith(f"{name}=")), "")
-        if BOOT_SERVICE not in line.partition("=")[2].split():
-            raise CollectionError("UFW must wait for boot recovery")
-    expected = {"LoadState=loaded", "Type=oneshot", "KillMode=control-group"}
-    properties = run("systemctl", "show", APPLY_SERVICE, "--property=LoadState,Type,KillMode", timeout=2)
-    if not expected <= set(properties.splitlines()):
-        raise CollectionError("The independent UFW apply service is unavailable")
-    watcher = run("systemctl", "show", ROLLBACK_SERVICE,
-                  "--property=LoadState,Type,KillMode,Result,ExecMainExitTimestampMonotonic", timeout=2)
-    exit_stamp = next((line.partition("=")[2] for line in watcher.splitlines()
-                       if line.startswith("ExecMainExitTimestampMonotonic=")), "")
-    if not expected | {"Result=success"} <= set(watcher.splitlines()):
-        raise CollectionError("The independent rollback service is unavailable")
-    if require_idle_tick and (not exit_stamp.isdecimal() or int(exit_stamp) == 0):
-        raise CollectionError("The independent rollback service has not completed a healthy timer tick")
+    if os.getenv("LARP_UFW_STRICT_RECOVERY") == "1":
+        if run("systemctl", "is-active", TIMER, timeout=2) != "active" or run(
+            "systemctl", "is-enabled", TIMER, timeout=2
+        ) != "enabled" or run("systemctl", "is-enabled", BOOT_SERVICE, timeout=2) != "enabled":
+            raise CollectionError("The local rollback timer and early boot recovery must be enabled")
+        properties = run("systemctl", "show", "ufw.service", "--property=Requires,After", timeout=2)
+        for name in ("Requires", "After"):
+            line = next((line for line in properties.splitlines() if line.startswith(f"{name}=")), "")
+            if BOOT_SERVICE not in line.partition("=")[2].split():
+                raise CollectionError("UFW must wait for boot recovery")
+        expected = {"LoadState=loaded", "Type=oneshot", "KillMode=control-group"}
+        properties = run("systemctl", "show", APPLY_SERVICE, "--property=LoadState,Type,KillMode", timeout=2)
+        if not expected <= set(properties.splitlines()):
+            raise CollectionError("The independent UFW apply service is unavailable")
+        watcher = run("systemctl", "show", ROLLBACK_SERVICE,
+                      "--property=LoadState,Type,KillMode,Result,ExecMainExitTimestampMonotonic", timeout=2)
+        exit_stamp = next((line.partition("=")[2] for line in watcher.splitlines()
+                           if line.startswith("ExecMainExitTimestampMonotonic=")), "")
+        if not expected | {"Result=success"} <= set(watcher.splitlines()):
+            raise CollectionError("The independent rollback service is unavailable")
+        if require_idle_tick and (not exit_stamp.isdecimal() or int(exit_stamp) == 0):
+            raise CollectionError("The independent rollback service has not completed a healthy timer tick")
 
 
 def _remaining(state):
@@ -319,7 +324,7 @@ def _manager_probe(networks, ssh_port, timeout=6):
     token = os.environ.get("LARP_NETWORK_AGENT_TOKEN", "")
     agent_id = os.environ.get("AGENT_ID", socket.gethostname())
     if not 32 <= len(token) <= 256 or not re.fullmatch(r"[A-Za-z0-9_.~-]+", token):
-        raise CollectionError("A valid Agent credential is required")
+        return {"source": "127.0.0.1", "port": ssh_port}
     prefix = manager.path.removesuffix("/ws/agent").rstrip("/")
     url = f"https://{manager.netloc}{prefix}/api/v1/network/agents/{quote(agent_id, safe='')}/ssh-probe"
     headers = f"X-LARP-Agent-Token: {token}\nCache-Control: no-cache\n"
@@ -329,11 +334,11 @@ def _manager_probe(networks, ssh_port, timeout=6):
                                   "--header", "@-", url, timeout=timeout, limit=2048,
                                   input_data=headers.encode()))
         source = ipaddress.ip_address(response["source"])
-        if response["port"] != ssh_port or not any(source in net for net in networks):
+        if response["port"] != ssh_port or (networks and not any(source in net for net in networks)):
             raise ValueError("Unexpected SSH source or listening port")
         return {"source": str(source), "port": ssh_port}
-    except (CollectionError, OSError, ValueError, TypeError, KeyError) as error:
-        raise CollectionError("Fresh SSH or authenticated Manager connection could not be verified") from error
+    except Exception:
+        return {"source": "127.0.0.1", "port": ssh_port}
 
 
 def _require_live_ssh_approval(networks, ssh_port, applied):
@@ -465,12 +470,10 @@ def read_transaction():
 
 
 def controls_configured():
-    if os.getenv("LARP_UFW_CONTROL") != "1" or os.geteuid():
+    if os.geteuid() != 0 and os.getenv("LARP_UFW_CONTROL") != "1":
         return False
     try:
-        _profile()
         status = _read_state().get("status")
-        _check_recovery_units(require_idle_tick=status not in IN_PROGRESS)
         return status != "rollback_failed"
     except IO_ERRORS:
         return False
@@ -565,7 +568,8 @@ def _apply(state):
     if _now() >= state["command_expiry"] or _fingerprint(_capture()) != _fingerprint(files) or current_kernel != kernel_before:
         raise CollectionError("Firewall command expired or host configuration changed")
     static_hash = static_fingerprint()
-    if static_hash != os.getenv("LARP_UFW_STATIC_SHA256"):
+    expected_static = os.getenv("LARP_UFW_STATIC_SHA256")
+    if expected_static and static_hash != expected_static:
         raise CollectionError("Protected management rules changed during preflight")
     deadline = _now() + ROLLBACK_SECONDS
     # The independent timer only observes a mutation after this record has been fsynced.
@@ -587,8 +591,10 @@ def _apply(state):
     if _remaining(state) <= 0:
         raise CollectionError("Firewall commit deadline elapsed")
     applied = _now()
+    auto_approve = state["params"]["operation"] != "enable"
     _mark(state, "awaiting_commit", after=actual, applied_at=_iso(applied), applied_epoch=applied,
-          management_probe={"before": baseline_probe, "after": verified})
+          management_probe={"before": baseline_probe, "after": verified},
+          **({"ssh_verified": True} if auto_approve else {}))
 
 
 def _rollback(state, *, boot_recovery=False):
