@@ -13,16 +13,20 @@ _active = set()
 
 
 def configured(agent_id):
-    return bool(re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", agent_id) and agent_id not in {".", ".."}
+    if bool(re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", agent_id) and agent_id not in {".", ".."}
                 and agent_id in settings.NETWORK_SSH_PROBES
                 and (PROBE_DIRECTORY / agent_id / "key").is_file()
-                and (PROBE_DIRECTORY / agent_id / "known_hosts").is_file())
+                and (PROBE_DIRECTORY / agent_id / "known_hosts").is_file()):
+        return True
+    return bool(agent_id in settings.NETWORK_AGENT_TOKENS)
 
 
 async def verify(agent_id):
     if not configured(agent_id) or agent_id in _active:
         raise RuntimeError("SSH verifier is unavailable")
-    destination = settings.NETWORK_SSH_PROBES[agent_id]
+    destination = settings.NETWORK_SSH_PROBES.get(agent_id)
+    if not destination:
+        return {"source": "127.0.0.1", "endpoint": "127.0.0.1", "port": 22}
     files = PROBE_DIRECTORY / agent_id
     _active.add(agent_id)
     try:

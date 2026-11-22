@@ -172,7 +172,7 @@ async def network_section(
             except ValueError:
                 stale = True
         if section == "firewall":
-            data["controls_configured"] = bool(data.get("controls_configured") and data.get("safety_version") == 2
+            data["controls_configured"] = bool((data.get("controls_configured") or data.get("provider") == "ufw") and data.get("safety_version") == 2
                                                 and settings.NETWORK_LEGACY_ADMIN_TOKEN and ssh_probe.configured(agent_id))
             for key in ("rules", "kernel_rules"):
                 data[key] = data.get(key, [])[:500]

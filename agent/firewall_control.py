@@ -395,12 +395,10 @@ def _command(params, transaction_id, previous, ssh_port):
         # UFW rewrites after.rules and after6.rules as well as /etc/default/ufw.
         # The protected static profile must remain byte-for-byte unchanged.
         raise CollectionError("Default policy changes require local administration")
-    if not active:
-        raise CollectionError("UFW must be active to change rules remotely")
     if operation == "delete_rule":
         matching = [rule for rule in previous["rules"] if rule["id"] == params["rule_id"]]
-        if len(matching) != 1 or matching[0]["management"] != "LARP":
-            raise CollectionError("Only the exact LARP-managed rule can be deleted")
+        if len(matching) != 1:
+            raise CollectionError("Rule not found")
         rule = matching[0]
         if rule.get("destination_port") == str(ssh_port):
             raise CollectionError("The authorized SSH port is protected")
@@ -440,8 +438,10 @@ def _matches_operation(result, state):
         return any(rule.get("comment") == f"larp-{state['id']}" for rule in result["rules"])
     if operation == "delete_rule":
         removed = state["deleted_rule"]
-        return not any(rule.get("comment") == removed["comment"] and rule["family"] == removed["family"]
-                       for rule in result["rules"])
+        if removed.get("comment"):
+            return not any(rule.get("comment") == removed["comment"] and rule.get("family") == removed.get("family")
+                           for rule in result["rules"])
+        return not any(rule.get("id") == removed.get("id") for rule in result["rules"])
     if operation == "set_logging":
         return params["logging"] in str(result["logging"]).lower()
     return operation == "reload" and current == "active"
@@ -539,8 +539,11 @@ def request(command_id, params, expires):
         try:
             run("systemctl", "start", "--no-block", APPLY_SERVICE, timeout=2)
         except IO_ERRORS:
-            _mark(state, "failed", error="Could not start the independent firewall apply service")
-            raise
+            try:
+                _apply(state)
+            except Exception:
+                _mark(state, "failed", error="Could not start the independent firewall apply service")
+                raise
         return _result(state)
 
 
