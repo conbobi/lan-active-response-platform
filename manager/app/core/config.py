@@ -12,6 +12,12 @@ class NetworkOperator(BaseModel):
     agents: set[str]
 
 
+class NetworkSSHProbe(BaseModel):
+    host: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.:-]{0,252}$")
+    user: str = Field(pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
+    port: int = Field(ge=1, le=65535)
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "LAN Active Response Platform Manager"
     VERSION: str = "1.0.0"
@@ -25,6 +31,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     NETWORK_AGENT_TOKENS: dict[str, TokenDigest] = Field(default_factory=dict, repr=False)
     NETWORK_OPERATORS: dict[Annotated[str, Field(min_length=1, max_length=64)], NetworkOperator] = Field(default_factory=dict, repr=False)
+    NETWORK_SSH_PROBES: dict[str, NetworkSSHProbe] = Field(default_factory=dict, repr=False)
     NETWORK_LEGACY_ADMIN_TOKEN: TokenDigest | None = Field(default=None, repr=False)
 
     # Scheduler & Dead agent sweep thresholds (seconds)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply a validated LARP UFW change
+Requires=larp-firewall-rollback.timer
+After=larp-firewall-rollback.timer ufw.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/larp-agent
+StateDirectory=larp-agent
+StateDirectoryMode=0700
+EnvironmentFile=-/etc/larp-agent/network.env
+ExecStart=/opt/larp-agent/venv/bin/python /opt/larp-agent/firewall_control.py apply
+TimeoutStartSec=50s
+TimeoutStopSec=2s
+KillMode=control-group

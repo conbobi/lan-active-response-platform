@@ -16,7 +16,7 @@ from app.models.base import Base
 from app.models.command import Command
 from app.models.network_snapshot import NetworkSnapshot
 from app.schemas.enums import CommandStatus
-from app.services.agent import network_service
+from app.services.agent import network_service, ssh_probe
 from app.websocket import agent_ws
 
 AGENT = "aws-test"
@@ -44,7 +44,7 @@ def snapshot(**kwargs):
     timestamp = datetime.now(timezone.utc).isoformat()
     return {"agent_id": AGENT, "schema_version": 1, "timestamp": timestamp, "collected_at": timestamp,
             "snapshot_id": SNAPSHOT_ID, "platform": "linux", "status": "ok", "sections": {
-                "firewall": {"provider": "ufw", "status": "active", "controls_configured": True, "rules": []},
+                "firewall": {"provider": "ufw", "status": "active", "controls_configured": True, "safety_version": 2, "rules": []},
                 "ports": {"rows": [{"src_ip": "0.0.0.0", "src_port": 22, "protocol": "TCP"}], "total": 1},
                 "overview": {"firewall_status": "active", "external_reachability": "unverified",
                              "aws_security_group": "Unknown / Not integrated"},
@@ -73,6 +73,7 @@ async def network_client(tmp_path, monkeypatch):
         "admin-a": NetworkOperator(role="admin", agents={AGENT}, token_sha256=digest(ADMIN_TOKEN)),
     })
     monkeypatch.setattr(settings, "NETWORK_LEGACY_ADMIN_TOKEN", digest(LEGACY_TOKEN))
+    monkeypatch.setattr(ssh_probe, "configured", lambda agent_id: agent_id == AGENT)
     try:
         yield TestClient(app), factory
     finally:
@@ -81,7 +82,8 @@ async def network_client(tmp_path, monkeypatch):
 
 
 def heartbeat(ws):
-    ws.send_json({"type": "HEARTBEAT", "payload": {"agent_id": AGENT, "hostname": AGENT, "platform": "linux"}})
+    ws.send_json({"type": "HEARTBEAT", "payload": {"agent_id": AGENT, "hostname": AGENT, "platform": "linux",
+                                                    "firewall_safety_version": 2}})
     response = ws.receive_json()
     assert response["status"] == "ack", response
     return response
@@ -95,6 +97,8 @@ def test_unauthorized_operator_and_legacy_bypass(network_client):
     assert client.post(route("firewall/actions"), headers=header(ANALYST_TOKEN), json=operation).status_code == 403
     assert client.post(route("firewall/actions", OTHER), headers=header(ADMIN_TOKEN), json=operation).status_code == 403
     assert client.post("/api/v1/commands/", json={"action": "network_firewall"}).status_code == 401
+    assert client.post("/api/v1/commands/", headers=header(ADMIN_TOKEN),
+                       json={"action": "unisolate", "agent_id": OTHER}).status_code == 401
     result = client.post("/api/v1/commands/", headers=header(LEGACY_TOKEN),
                          json={"id": "injection-test", "agent_id": AGENT, "action": "network_firewall", "payload": {}})
     assert result.status_code == 400
@@ -198,3 +202,44 @@ async def test_expired_command_is_never_delivered(network_client):
     async with factory() as session:
         command = await session.scalar(select(Command).where(Command.id == stale))
         assert command.status == CommandStatus.TIMEOUT
+
+
+def test_ssh_probe_requires_enrolled_live_agent_and_checks_recovery(network_client, monkeypatch):
+    client, _ = network_client
+    assert client.get(route("ssh-probe"), headers=header(ADMIN_TOKEN)).status_code == 401
+    identity = {"x-larp-agent-token": AGENT_TOKEN}
+    assert client.get(route("ssh-probe"), headers=identity).status_code == 503
+
+    async def fresh_probe(agent_id):
+        assert agent_id == AGENT
+        return {"source": "192.0.2.9", "endpoint": "192.0.2.10", "port": 2222}
+
+    monkeypatch.setattr(ssh_probe, "verify", fresh_probe)
+    with client.websocket_connect(f"/ws/agent?agent_id={AGENT}", headers=identity) as ws:
+        heartbeat(ws)
+        assert client.get(route("ssh-probe"), headers=identity).json()["port"] == 2222
+        monkeypatch.setattr(ssh_probe, "configured", lambda _: False)
+        result = client.post(route("firewall/actions"), headers=header(ADMIN_TOKEN),
+                             json={"operation": "enable", "confirmed": True, "reason": "Maintenance"})
+        assert result.status_code == 503
+        for direction in ("incoming", "outgoing"):
+            result = client.post(route("firewall/actions"), headers=header(ADMIN_TOKEN), json={
+                "operation": "set_policy", "direction": direction, "action": "deny",
+                "confirmed": True, "reason": "Maintenance",
+            })
+            assert result.status_code == 409
+
+
+async def test_old_firewall_commands_are_never_replayed(network_client):
+    client, factory = network_client
+    async with factory.begin() as session:
+        session.add(Command(id="b" * 32, agent_id=AGENT, action=network_service.FIREWALL,
+                            issued_at=datetime.now(timezone.utc), max_retries=0, payload={
+                                "params": {"operation": "enable"},
+                            }))
+    with client.websocket_connect(f"/ws/agent?agent_id={AGENT}", headers={"x-larp-agent-token": AGENT_TOKEN}) as ws:
+        assert heartbeat(ws)["network_command"] is None
+    async with factory() as session:
+        cmd = await session.get(Command, "b" * 32)
+        assert cmd.status == CommandStatus.FAILED
+        assert "obsolete" in cmd.error_message

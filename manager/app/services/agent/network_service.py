@@ -22,6 +22,7 @@ from app.services.detection.network_reputation_service import KNOWN_PREFIXES
 
 REFRESH = "network_refresh"
 FIREWALL = "network_firewall"
+FIREWALL_SAFETY_VERSION = 2
 ACTIONS = (REFRESH, FIREWALL)
 COMMAND_TTL = 45
 RESULT_TTL = 180
@@ -113,14 +114,17 @@ async def queue_command(session, agent_id, operator, operation=None):
         snapshot = await session.get(NetworkSnapshot, agent_id)
         if not snapshot or snapshot.payload.get("platform") != "linux":
             raise HTTPException(409, "A Linux network snapshot is required")
-        if not snapshot.payload.get("sections", {}).get("firewall", {}).get("controls_configured"):
-            raise HTTPException(409, "UFW controls require local enrollment")
+        firewall = snapshot.payload.get("sections", {}).get("firewall", {})
+        if (firewall.get("safety_version") != FIREWALL_SAFETY_VERSION or not firewall.get("controls_configured")
+                or now() - utc(snapshot.received_at) > timedelta(seconds=90)):
+            raise HTTPException(409, "UFW controls require a current snapshot with the upgraded local safety policy")
     elif operation:
         origin = await session.get(Command, operation["transaction_id"])
         if not origin or origin.agent_id != agent_id or origin.action != FIREWALL or not origin.payload.get("action_id"):
             raise HTTPException(404, "Firewall transaction not found")
         action = await session.get(ResponseAction, origin.payload["action_id"])
-        if not action or action.status != "rollback_scheduled" or origin.status != CommandStatus.SUCCESS:
+        if (not action or action.status != "rollback_scheduled" or origin.status != CommandStatus.SUCCESS
+                or origin.payload.get("firewall_safety_version") != FIREWALL_SAFETY_VERSION):
             raise HTTPException(409, "Firewall transaction is not awaiting confirmation")
 
     latest = await session.scalar(select(Command).where(
@@ -146,7 +150,7 @@ async def queue_command(session, agent_id, operator, operation=None):
     stamp = now()
     payload = {"expires_at": (stamp + timedelta(seconds=COMMAND_TTL)).isoformat(), "params": operation or {}}
     if operation:
-        payload["action_id"] = action_id
+        payload.update(action_id=action_id, firewall_safety_version=FIREWALL_SAFETY_VERSION)
         action = ResponseAction(id=action_id, agent_id=agent_id, action_type=FIREWALL, status="pending",
                                 action_params=dict(operation, command_id=command_id, operator=operator))
         session.add(action)
@@ -160,16 +164,26 @@ async def queue_command(session, agent_id, operator, operation=None):
     return {"command_id": command_id, "action_id": action_id, "status": "pending"}
 
 
-async def pull_network_command(session, agent_id):
+async def pull_network_command(session, agent_id, *, reported_safety=None):
     await expire_commands(session, agent_id)
     query = select(Command).where(Command.agent_id == agent_id, Command.action.in_(ACTIONS),
                                   Command.status == CommandStatus.PENDING).order_by(Command.issued_at).limit(1)
     cmd = await session.scalar(query.with_for_update(skip_locked=True))
     if not cmd:
         return None
+    version = cmd.payload.get("firewall_safety_version")
+    if cmd.action == FIREWALL:
+        snapshot = await session.get(NetworkSnapshot, agent_id)
+        safety = (snapshot.payload.get("sections", {}).get("firewall", {}) if snapshot else {}).get("safety_version")
+        if (version != FIREWALL_SAFETY_VERSION or safety != FIREWALL_SAFETY_VERSION
+                or reported_safety != FIREWALL_SAFETY_VERSION):
+            cmd.status = CommandStatus.FAILED
+            cmd.error_message = "Command uses an obsolete firewall safety policy"
+            await _update_action(session, cmd, "failed", error=cmd.error_message)
+            return None
     cmd.send_to_agent()
     return {"agent_id": agent_id, "schema_version": 1, "command_id": cmd.id, "action": cmd.action,
-            "expires_at": cmd.payload["expires_at"], "params": cmd.payload["params"]}
+            "expires_at": cmd.payload["expires_at"], "params": cmd.payload["params"], "firewall_safety_version": version}
 
 
 async def acknowledge(session, agent_id, payload):

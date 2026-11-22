@@ -1,0 +1,20 @@
+[Unit]
+Description=Restore uncommitted LARP UFW configuration before UFW starts
+DefaultDependencies=no
+RequiresMountsFor=/opt/larp-agent /var/lib/larp-agent
+After=local-fs.target
+Before=ufw.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/larp-agent
+StateDirectory=larp-agent
+StateDirectoryMode=0700
+ExecStart=/opt/larp-agent/venv/bin/python /opt/larp-agent/firewall_control.py recover-boot
+TimeoutStartSec=15s
+RemainAfterExit=yes
+
+[Install]
+RequiredBy=ufw.service

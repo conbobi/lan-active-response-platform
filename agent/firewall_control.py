@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
-import http.client
 import ipaddress
 import json
 import os
@@ -16,14 +15,20 @@ import stat
 import sys
 import tempfile
 import time
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import psutil
 
+from firewall_management import discover_ssh_port, manager_url, validate_anchors
 from network_events import atomic_json, state_directory
 from network_sources import CollectionError, read_setting, run, run_json, ufw_snapshot
 
 TIMER = "larp-firewall-rollback.timer"
+ROLLBACK_SERVICE = "larp-firewall-rollback.service"
+APPLY_SERVICE = "larp-firewall-apply.service"
+BOOT_SERVICE = "larp-firewall-recover.service"
+SAFETY_VERSION = 2
+ROLLBACK_SECONDS = 60
 CONFIG_FILES = tuple(Path(entry) for entry in (
     "/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules", "/etc/ufw/user6.rules",
 ))
@@ -33,9 +38,9 @@ STATIC_FILES = tuple(Path("/etc/ufw") / name for name in (
 EXPECTED_CONFIG = {"MANAGE_BUILTINS": "no", "IPV6": "yes", "IPT_SYSCTL": "/etc/ufw/sysctl.conf", "IPT_MODULES": ""}
 IN_PROGRESS = {"queued", "applying", "awaiting_commit", "rolling_back"}
 HEX_ID = re.compile(r"[0-9a-f]{32}")
-MUTABLE_CONFIG_FILES = {"add_rule": {2, 3}, "delete_rule": {2, 3}, "enable": {1}, "disable": {1},
-                             "reload": set(), "set_policy": {0}, "set_logging": {1}}
-IO_ERRORS = (CollectionError, OSError, ValueError, http.client.HTTPException)
+MUTABLE_CONFIG_FILES = {"add_rule": {2, 3}, "delete_rule": {2, 3}, "enable": {1, 2, 3}, "disable": {1},
+                             "reload": {1, 2, 3}, "set_logging": {1, 2, 3}}
+IO_ERRORS = (CollectionError, OSError, ValueError)
 
 
 def _state_path():
@@ -43,12 +48,12 @@ def _state_path():
 
 
 @contextmanager
-def firewall_lock():
+def firewall_lock(*, blocking=True):
     directory = state_directory()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(directory / "firewall.lock", os.O_NOFOLLOW | os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(fd, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         yield
 
 
@@ -101,6 +106,8 @@ def _fingerprint(data):
 
 
 def _restore(data):
+    if set(data) != {str(path) for path in CONFIG_FILES}:
+        raise CollectionError("Saved UFW files do not match the recovery scope")
     for name, item in data.items():
         path = Path(name)
         descriptor, filename = tempfile.mkstemp(prefix=".larp-ufw-", dir=path.parent)
@@ -121,6 +128,19 @@ def _restore(data):
             temporary.unlink(missing_ok=True)
 
 
+def _checked_settings(path):
+    values = {}
+    for line in _trusted_read(path)[0].decode().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r'([A-Z_][A-Z0-9_]*)=(?:"([A-Za-z0-9_./-]*)"|([A-Za-z0-9_./-]+))', line)
+        if not match or match[1] in values:
+            raise CollectionError("UFW shell settings contain a duplicate, expansion or nonstandard value")
+        values[match[1]] = match[2] if match[2] is not None else match[3]
+    return values
+
+
 def _profile():
     if os.geteuid() or os.getenv("LARP_UFW_CONTROL") != "1":
         raise CollectionError("Local UFW control is not enabled")
@@ -129,18 +149,78 @@ def _profile():
         raise CollectionError("UFW static configuration does not match the locally reviewed profile")
     try:
         networks = [ipaddress.ip_network(part.strip()) for part in os.environ["LARP_UFW_SSH_CIDRS"].split(",")]
-        port = int(os.getenv("LARP_UFW_SSH_PORT", "22"))
-        timeout = int(os.getenv("LARP_UFW_ROLLBACK_SECONDS", "90"))
     except (KeyError, ValueError) as error:
-        raise CollectionError("Invalid local SSH or rollback configuration") from error
-    if not networks or any(net.prefixlen == 0 for net in networks) or not 1 <= port <= 65535 or not 60 <= timeout <= 300:
-        raise CollectionError("Invalid local SSH or rollback configuration")
+        raise CollectionError("Invalid local approved SSH CIDRs") from error
+    if not networks or any(net.prefixlen == 0 for net in networks) or len(set(networks)) != len(networks):
+        raise CollectionError("Invalid local approved SSH CIDRs")
+    if os.getenv("LARP_UFW_ROLLBACK_SECONDS", "60") != "60":
+        raise CollectionError("The local rollback deadline must be 60 seconds")
+    defaults = _checked_settings(CONFIG_FILES[0])
+    _checked_settings(CONFIG_FILES[1])
     for key, value in EXPECTED_CONFIG.items():
-        if read_setting(str(CONFIG_FILES[0]), key) != value:
+        if defaults.get(key) != value:
             raise CollectionError(f"UFW requires {key}={value} for scoped rollback")
-    if read_setting(str(CONFIG_FILES[0]), "DEFAULT_OUTPUT_POLICY") != "ACCEPT":
-        raise CollectionError("Management requires default outgoing ACCEPT")
-    return networks, port, timeout
+    for path in STATIC_FILES[:-1]:
+        content, mode = _trusted_read(path)
+        if path.suffix == ".init":
+            if mode & 0o111:
+                raise CollectionError("Executable UFW hooks require local administration")
+        else:
+            family = "ufw6" if "6." in path.name else "ufw"
+            section = "before" if path.name.startswith("before") else "after"
+            allowed = {f"{family}-{section}-{direction}" for direction in ("input", "output", "forward")}
+            if path.name == "before.rules":
+                allowed.add("ufw-not-local")
+            for line in content.decode().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line in {"*filter", "COMMIT"}:
+                    continue
+                tokens = shlex.split(line)
+                if line.startswith(":") and tokens[0][1:] in allowed and tokens[1:] == ["-", "[0:0]"]:
+                    continue
+                if len(tokens) > 2 and tokens[0] == "-A" and tokens[1] in allowed:
+                    continue
+                raise CollectionError("Mixed or independent UFW rules require local administration")
+    if any(line.strip() and not line.lstrip().startswith(("#", ";"))
+           for line in _trusted_read(STATIC_FILES[-1])[0].decode().splitlines()):
+        raise CollectionError("Active UFW-specific sysctl assignments require local administration")
+    port = discover_ssh_port(networks)
+    v4, v6 = (_trusted_read(path)[0].decode() for path in (STATIC_FILES[0], STATIC_FILES[1]))
+    validate_anchors(defaults.get("DEFAULT_OUTPUT_POLICY"), v4, v6, networks, port,
+                     manager_url().port or 443)
+    return networks, port, ROLLBACK_SECONDS
+
+
+def _check_recovery_units(*, require_idle_tick=True):
+    if run("systemctl", "is-active", TIMER, timeout=2) != "active" or run(
+        "systemctl", "is-enabled", TIMER, timeout=2
+    ) != "enabled" or run("systemctl", "is-enabled", BOOT_SERVICE, timeout=2) != "enabled":
+        raise CollectionError("The local rollback timer and early boot recovery must be enabled")
+    properties = run("systemctl", "show", "ufw.service", "--property=Requires,After", timeout=2)
+    for name in ("Requires", "After"):
+        line = next((line for line in properties.splitlines() if line.startswith(f"{name}=")), "")
+        if BOOT_SERVICE not in line.partition("=")[2].split():
+            raise CollectionError("UFW must wait for boot recovery")
+    expected = {"LoadState=loaded", "Type=oneshot", "KillMode=control-group"}
+    properties = run("systemctl", "show", APPLY_SERVICE, "--property=LoadState,Type,KillMode", timeout=2)
+    if not expected <= set(properties.splitlines()):
+        raise CollectionError("The independent UFW apply service is unavailable")
+    watcher = run("systemctl", "show", ROLLBACK_SERVICE,
+                  "--property=LoadState,Type,KillMode,Result,ExecMainExitTimestampMonotonic", timeout=2)
+    exit_stamp = next((line.partition("=")[2] for line in watcher.splitlines()
+                       if line.startswith("ExecMainExitTimestampMonotonic=")), "")
+    if not expected | {"Result=success"} <= set(watcher.splitlines()):
+        raise CollectionError("The independent rollback service is unavailable")
+    if require_idle_tick and (not exit_stamp.isdecimal() or int(exit_stamp) == 0):
+        raise CollectionError("The independent rollback service has not completed a healthy timer tick")
+
+
+def _remaining(state):
+    if _boot() != state["boot_id"]:
+        return 0
+    if state.get("deadline_mono") is None:
+        return 0
+    return min(state["deadline"] - _now(), state["deadline_mono"] - time.monotonic())
 
 
 def _kernel_scope(active=None, recovery=False):
@@ -154,6 +234,7 @@ def _kernel_scope(active=None, recovery=False):
         raise CollectionError("Existing EDR containment is active")
     entries = run_json("nft", "-j", "list", "ruleset")["nftables"]
     builtin = {"INPUT", "OUTPUT", "FORWARD"}
+    jumps = {}
     for entry in entries:
         item = next((entry[k] for k in ("table", "chain", "rule", "set", "map", "flowtable") if k in entry), None)
         if not item:
@@ -161,7 +242,9 @@ def _kernel_scope(active=None, recovery=False):
         table = item.get("table") or item.get("name")
         family = item.get("family")
         if table == "nat" and family in {"ip", "ip6"}:
-            continue  # UFW stock filter profile leaves guest NAT independently managed.
+            if "chain" in entry and item.get("hook") and item.get("type") != "nat":
+                raise CollectionError("Independent filtering hook in the NAT table")
+            continue
         if table != "filter" or family not in {"ip", "ip6"}:
             raise CollectionError(f"Independent firewall policy present ({family}/{table})")
         chain = item.get("chain") or (item.get("name") if "chain" in entry else None)
@@ -172,9 +255,20 @@ def _kernel_scope(active=None, recovery=False):
             jump = expressions[0].get("jump") if len(expressions) == 1 else None
             if not isinstance(jump, dict) or not jump.get("target", "").startswith("ufw"):
                 raise CollectionError("Independent filtering rules are present")
+            jumps.setdefault((family, chain), []).append(jump["target"])
+        if "rule" in entry and chain in {"ufw-before-logging-input", "ufw6-before-logging-input",
+                                         "ufw-before-logging-output", "ufw6-before-logging-output"}:
+            if any(set(expr) - {"match", "limit", "log", "counter", "return"} for expr in item.get("expr", [])):
+                raise CollectionError("An earlier UFW hook could block management traffic")
         if "chain" in entry and chain in builtin and item.get("policy") != "accept":
             if (active is False and not recovery) or (chain == "OUTPUT" and not recovery):
                 raise CollectionError("An independent default policy could affect management")
+    if active:
+        for family, prefix in (("ip", "ufw"), ("ip6", "ufw6")):
+            for direction in ("input", "output"):
+                expected = [f"{prefix}-before-logging-{direction}", f"{prefix}-before-{direction}"]
+                if jumps.get((family, direction.upper()), [])[:2] != expected:
+                    raise CollectionError("Protected management chains are not reached first")
     return entries
 
 
@@ -192,8 +286,7 @@ def _kernel_fingerprint(entries):
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
-def _check_ssh_rules(networks, ssh_port):
-    approved = set()
+def _check_user_rules(ssh_port):
     for version, path in ((4, CONFIG_FILES[2]), (6, CONFIG_FILES[3])):
         text = _trusted_read(path)[0].decode()
         if any(line.startswith("*") and line != "*filter" for line in text.splitlines()):
@@ -219,27 +312,28 @@ def _check_ssh_rules(networks, ssh_port):
                 continue
             if action != "ACCEPT":
                 raise CollectionError("A UFW rule could block the authorized SSH port")
-            if fields.get("-s") and "-i" not in fields and "-d" not in fields:
-                approved.add(ipaddress.ip_network(fields["-s"], strict=False))
-    if not set(networks) <= approved:
-        raise CollectionError("The locally enrolled SSH CIDRs require explicit UFW allow rules")
 
 
-def _manager_probe():
-    manager = urlsplit(os.environ.get("MANAGER_URL", ""))
+def _manager_probe(networks, ssh_port, timeout=6):
+    manager = manager_url()
     token = os.environ.get("LARP_NETWORK_AGENT_TOKEN", "")
     agent_id = os.environ.get("AGENT_ID", socket.gethostname())
-    if manager.scheme != "wss" or not manager.hostname or not token or manager.username:
-        raise CollectionError("A TLS Manager URL and Agent credential are required")
-    connection = http.client.HTTPSConnection(manager.hostname, manager.port or 443, timeout=4)
+    if not 32 <= len(token) <= 256 or not re.fullmatch(r"[A-Za-z0-9_.~-]+", token):
+        raise CollectionError("A valid Agent credential is required")
+    prefix = manager.path.removesuffix("/ws/agent").rstrip("/")
+    url = f"https://{manager.netloc}{prefix}/api/v1/network/agents/{quote(agent_id, safe='')}/ssh-probe"
+    headers = f"X-LARP-Agent-Token: {token}\nCache-Control: no-cache\n"
     try:
-        prefix = manager.path.removesuffix("/ws/agent").rstrip("/")
-        connection.request("GET", f"{prefix}/api/v1/network/agents/{quote(agent_id, safe='')}/probe",
-                           headers={"X-LARP-Agent-Token": token, "Cache-Control": "no-cache"})
-        if connection.getresponse().status != 204:
-            raise CollectionError("Authenticated Manager probe failed")
-    finally:
-        connection.close()
+        response = json.loads(run("curl", "--disable", "--globoff", "--proto", "=https", "--fail",
+                                  "--silent", "--show-error", "--max-time", str(timeout),
+                                  "--header", "@-", url, timeout=timeout, limit=2048,
+                                  input_data=headers.encode()))
+        source = ipaddress.ip_address(response["source"])
+        if response["port"] != ssh_port or not any(source in net for net in networks):
+            raise ValueError("Unexpected SSH source or listening port")
+        return {"source": str(source), "port": ssh_port}
+    except (CollectionError, OSError, ValueError, TypeError, KeyError) as error:
+        raise CollectionError("Fresh SSH or authenticated Manager connection could not be verified") from error
 
 
 def _require_live_ssh_approval(networks, ssh_port, applied):
@@ -269,7 +363,7 @@ def _require_live_ssh_approval(networks, ssh_port, applied):
 def _command(params, transaction_id, previous, ssh_port):
     operation = params.get("operation")
     exact_keys = {
-        "enable": set(), "disable": set(), "reload": set(), "set_logging": {"logging"},
+        "enable": set(), "disable": set(), "reload": {1, 2, 3}, "set_logging": {"logging"},
         "set_policy": {"action", "direction"}, "add_rule": {"action", "protocol", "port"},
         "delete_rule": {"rule_id"},
     }
@@ -298,12 +392,9 @@ def _command(params, transaction_id, previous, ssh_port):
         return ["logging", params["logging"]]
     action = params.get("action")
     if operation == "set_policy":
-        direction = params["direction"]
-        if direction not in {"incoming", "outgoing", "routed"} or action not in {"allow", "deny", "reject"}:
-            raise CollectionError("Invalid default policy")
-        if direction == "outgoing" and action != "allow":
-            raise CollectionError("Outgoing policy must preserve Manager and DNS connectivity")
-        return ["default", action, direction]
+        # UFW rewrites after.rules and after6.rules as well as /etc/default/ufw.
+        # The protected static profile must remain byte-for-byte unchanged.
+        raise CollectionError("Default policy changes require local administration")
     if not active:
         raise CollectionError("UFW must be active to change rules remotely")
     if operation == "delete_rule":
@@ -351,13 +442,6 @@ def _matches_operation(result, state):
         removed = state["deleted_rule"]
         return not any(rule.get("comment") == removed["comment"] and rule["family"] == removed["family"]
                        for rule in result["rules"])
-    if operation == "set_policy":
-        direction = params["direction"]
-        configured = result.get("configured_defaults", result["defaults"]).get(direction)
-        effective = result["defaults"].get(direction)
-        return configured == params["action"] and effective in {
-            params["action"], "disabled" if direction == "routed" else params["action"]
-        }
     if operation == "set_logging":
         return params["logging"] in str(result["logging"]).lower()
     return operation == "reload" and current == "active"
@@ -365,7 +449,7 @@ def _matches_operation(result, state):
 
 def _result(state):
     result = {key: state[key] for key in ("id", "status", "expires_at", "error", "ssh_verified", "operation",
-                                          "applied_at", "updated_at") if key in state}
+                                          "applied_at", "updated_at", "management_probe", "commit_probe") if key in state}
     for field in ("before", "after"):
         if field in state:
             snapshot = state[field]
@@ -381,7 +465,15 @@ def read_transaction():
 
 
 def controls_configured():
-    return os.getenv("LARP_UFW_CONTROL") == "1" and os.geteuid() == 0
+    if os.getenv("LARP_UFW_CONTROL") != "1" or os.geteuid():
+        return False
+    try:
+        _profile()
+        status = _read_state().get("status")
+        _check_recovery_units(require_idle_tick=status not in IN_PROGRESS)
+        return status != "rollback_failed"
+    except IO_ERRORS:
+        return False
 
 
 def _mark(state, status, **fields):
@@ -416,69 +508,87 @@ def request(command_id, params, expires):
             if operation == "rollback":
                 _mark(state, "rolling_back", recent_commands=recent)
             else:
-                _profile()
-                if not state.get("ssh_verified") or _now() >= state["deadline"]:
+                networks, ssh_port, _ = _profile()
+                if state.get("version") != SAFETY_VERSION or not state.get("ssh_verified") or _remaining(state) <= 0:
                     raise CollectionError("Fresh SSH verification or deadline is missing")
                 if _fingerprint(_capture()) != state["after_hash"]:
                     raise CollectionError("UFW configuration changed during the transaction")
                 kernel = _kernel_scope(state["after"]["status"] == "active")
                 if _kernel_fingerprint(kernel) != state["after_kernel_hash"]:
                     raise CollectionError("UFW kernel rules changed during the transaction")
-                _manager_probe()
-                if _now() >= min(expires, state["deadline"]):
-                    raise CollectionError("Firewall confirmation expired")
                 snapshot = ufw_snapshot()
                 if not _matches_operation(snapshot, state):
                     raise CollectionError("The current UFW state did not verify")
-                _mark(state, "committed", after=snapshot, recent_commands=recent)
+                remaining = min(expires - _now(), _remaining(state))
+                if remaining <= 0:
+                    raise CollectionError("Firewall confirmation expired")
+                verified = _manager_probe(networks, ssh_port, min(6, remaining))
+                if _now() >= expires or _remaining(state) <= 0:
+                    raise CollectionError("Firewall confirmation expired")
+                _mark(state, "committed", after=snapshot, recent_commands=recent, commit_probe=verified)
             return _result(state)
         if state.get("id") == command_id:
             return _result(state)
         if state.get("status") in IN_PROGRESS or state.get("status") == "rollback_failed":
             raise CollectionError("An earlier firewall transaction requires completion or local recovery")
-        _, _, timeout = _profile()
-        if run("systemctl", "is-active", TIMER) != "active" or run("systemctl", "is-enabled", TIMER) != "enabled":
-            raise CollectionError("The independent UFW rollback timer must be active and enabled")
-        deadline = _now() + timeout
-        _mark({"id": command_id, "params": params, "command_expiry": expires, "boot_id": _boot(),
-               "deadline": deadline, "expires_at": _iso(deadline), "recent_commands": recent}, "queued")
-        return _result(_read_state())
+        _profile()
+        _check_recovery_units()
+        state = {"id": command_id, "params": params, "command_expiry": expires, "boot_id": _boot(),
+                 "version": SAFETY_VERSION, "recent_commands": recent}
+        _mark(state, "queued")
+        try:
+            run("systemctl", "start", "--no-block", APPLY_SERVICE, timeout=2)
+        except IO_ERRORS:
+            _mark(state, "failed", error="Could not start the independent firewall apply service")
+            raise
+        return _result(state)
 
 
 def _apply(state):
     networks, ssh_port, _ = _profile()
+    _check_recovery_units()
     previous = ufw_snapshot()
-    if previous["status"] not in {"active", "inactive"}:
-        raise CollectionError("UFW state is unknown")
+    persisted = read_setting(str(CONFIG_FILES[1]), "ENABLED")
+    if (previous["status"], persisted) not in {("active", "yes"), ("inactive", "no")}:
+        raise CollectionError("Runtime and boot-time UFW state must agree before making changes")
     kernel_before = _kernel_fingerprint(_kernel_scope(previous["status"] == "active"))
-    _check_ssh_rules(networks, ssh_port)
+    _check_user_rules(ssh_port)
     files = _capture()
     args = _command(state["params"], state["id"], previous, ssh_port)
     if state["params"]["operation"] == "delete_rule":
         state["deleted_rule"] = next(rule for rule in previous["rules"] if rule["id"] == state["params"]["rule_id"])
-    _manager_probe()
-    run("ufw", "--dry-run", *args, timeout=8)
+    baseline_probe = _manager_probe(networks, ssh_port)
     current_kernel = _kernel_fingerprint(_kernel_scope(previous["status"] == "active"))
     if _now() >= state["command_expiry"] or _fingerprint(_capture()) != _fingerprint(files) or current_kernel != kernel_before:
         raise CollectionError("Firewall command expired or host configuration changed")
-    _mark(state, "applying", backup=files, before=previous, static_hash=static_fingerprint(),
-          before_kernel_hash=kernel_before)
+    static_hash = static_fingerprint()
+    if static_hash != os.getenv("LARP_UFW_STATIC_SHA256"):
+        raise CollectionError("Protected management rules changed during preflight")
+    deadline = _now() + ROLLBACK_SECONDS
+    # The independent timer only observes a mutation after this record has been fsynced.
+    _mark(state, "applying", backup=files, before=previous, static_hash=static_hash, before_kernel_hash=kernel_before,
+          deadline=deadline, deadline_mono=time.monotonic() + ROLLBACK_SECONDS, expires_at=_iso(deadline),
+          ssh_port=ssh_port, ssh_networks=[str(network) for network in networks],
+          management_probe={"before": baseline_probe})
     try:
-        run("ufw", *args, timeout=12)
+        run("ufw", *args, timeout=8)
     finally:
         _mark(state, "applying", after_hash=_fingerprint(_capture()),
               after_kernel_hash=_kernel_fingerprint(_kernel_scope(recovery=True)))
     actual = ufw_snapshot()
     _kernel_scope(actual["status"] == "active")
-    _check_ssh_rules(networks, ssh_port)
+    _check_user_rules(ssh_port)
     if not _matches_operation(actual, state):
         raise CollectionError("Requested firewall state could not be verified")
-    _manager_probe()
+    verified = _manager_probe(networks, ssh_port)
+    if _remaining(state) <= 0:
+        raise CollectionError("Firewall commit deadline elapsed")
     applied = _now()
-    _mark(state, "awaiting_commit", after=actual, applied_at=_iso(applied), applied_epoch=applied)
+    _mark(state, "awaiting_commit", after=actual, applied_at=_iso(applied), applied_epoch=applied,
+          management_probe={"before": baseline_probe, "after": verified})
 
 
-def _rollback(state):
+def _rollback(state, *, boot_recovery=False):
     if static_fingerprint() != state["static_hash"]:
         raise CollectionError("Static UFW files changed after apply")
     current = _capture()
@@ -498,53 +608,114 @@ def _rollback(state):
             raise CollectionError("UFW files changed during rollback. Local recovery is required.")
     elif expected and _fingerprint(current) not in {expected, _fingerprint(backup)}:
         raise CollectionError("UFW was changed independently. Local recovery is required.")
-    if not expected:
-        mutable = MUTABLE_CONFIG_FILES[state["params"]["operation"]]
+    if not expected and not state.get("rollback_started"):
+        mutable = MUTABLE_CONFIG_FILES.get(state["params"]["operation"], set())
         if any(current[str(path)] != state["backup"][str(path)]
                for index, path in enumerate(CONFIG_FILES) if index not in mutable):
             raise CollectionError("Unrelated UFW files changed during an interrupted apply")
-    current_kernel = _kernel_fingerprint(_kernel_scope(recovery=True))
+    current_kernel = None if boot_recovery else _kernel_fingerprint(_kernel_scope(recovery=True))
     expected_kernel = state.get("after_kernel_hash")
-    if expected_kernel and _boot() == state["boot_id"] and not state.get("rollback_started") and current_kernel not in {
+    if not boot_recovery and expected_kernel and _boot() == state["boot_id"] and not state.get("rollback_started") and current_kernel not in {
         expected_kernel, state.get("before_kernel_hash")
     }:
         raise CollectionError("UFW kernel rules changed independently. Local recovery is required.")
     _mark(state, "rolling_back", rollback_started=True, rollback_source=state.get("rollback_source", current))
-    run("ufw", "--force", "disable", timeout=12)
+    if boot_recovery:
+        _restore(state["backup"])
+        _mark(state, "boot_restored")
+        return
+    run("ufw", "--force", "disable", timeout=8)
     _restore(state["backup"])
     if state["before"]["status"] == "active":
-        run("ufw", "--force", "enable", timeout=12)
+        run("ufw", "--force", "enable", timeout=8)
+        # UFW regenerates its user rule files during enable. Restore the original bytes after loading.
+        _restore(state["backup"])
     actual = ufw_snapshot()
     if actual["status"] != state["before"]["status"] or _fingerprint(_capture()) != _fingerprint(state["backup"]):
         raise CollectionError("Restored UFW configuration did not verify")
     _mark(state, "rolled_back", after=actual)
 
 
+def apply_worker():
+    with firewall_lock():
+        state = _read_state()
+        if state.get("status") != "queued":
+            return
+        if state.get("version") != SAFETY_VERSION or _now() >= state["command_expiry"] or _boot() != state["boot_id"]:
+            _mark(state, "failed", error="Firewall command expired or belongs to an older boot or policy")
+            return
+        try:
+            _apply(state)
+        except IO_ERRORS as error:
+            next_status = "rolling_back" if state.get("backup") else "failed"
+            _mark(state, next_status, error=str(error)[:480])
+
+
+def _recover(state):
+    try:
+        _rollback(state)
+    except IO_ERRORS as error:
+        _mark(state, "rollback_failed", error=str(error)[:480])
+
+
+def _watch_transaction(state):
+    status = state.get("status")
+    if status == "queued":
+        if _boot() != state["boot_id"] or _now() >= state["command_expiry"] or state.get("version") != SAFETY_VERSION:
+            _mark(state, "failed", error="Unapplied firewall command expired or belongs to an older boot or policy")
+        return
+    if status == "boot_restored":
+        actual = ufw_snapshot()
+        if actual["status"] == state["before"]["status"]:
+            _mark(state, "rolled_back", after=actual)
+        else:
+            _mark(state, "rollback_failed", error="Restored UFW files did not produce the previous runtime state")
+        return
+    if status == "awaiting_commit":
+        remaining = _remaining(state)
+        if remaining > 0:
+            try:
+                nets = [ipaddress.ip_network(net) for net in state["ssh_networks"]]
+                _manager_probe(nets, state["ssh_port"], min(6, remaining))
+            except IO_ERRORS as error:
+                _mark(state, "rolling_back", error=str(error)[:480])
+            else:
+                if _remaining(state) > 0:
+                    return
+        _recover(state)
+    elif status in {"applying", "rolling_back"}:
+        _recover(state)
+
+
 def worker():
+    try:
+        with firewall_lock(blocking=False):
+            _watch_transaction(_read_state())
+    except BlockingIOError:
+        # systemd owns the whole apply cgroup. A stalled writer cannot outlive its rollback deadline.
+        state = _read_state()
+        if state.get("status") == "applying" and _remaining(state) <= 0:
+            run("systemctl", "stop", APPLY_SERVICE, timeout=4)
+            with firewall_lock(blocking=False):
+                _watch_transaction(_read_state())
+
+
+def recover_boot():
     with firewall_lock():
         state = _read_state()
         status = state.get("status")
-        if status == "queued":
-            if _now() >= state["command_expiry"] or _boot() != state["boot_id"]:
-                _mark(state, "failed", error="Firewall command expired before execution")
-                return
-            try:
-                _apply(state)
-                return
-            except IO_ERRORS as error:
-                if not state.get("backup"):
-                    _mark(state, "failed", error=str(error)[:480])
-                    return
-                state["error"] = str(error)[:480]
-        elif status == "awaiting_commit":
-            if _now() < state["deadline"] and _boot() == state["boot_id"]:
-                return
-        elif status not in {"applying", "rolling_back"}:
+        if not state or state.get("boot_id") == _boot():
             return
-        try:
-            _rollback(state)
-        except IO_ERRORS as error:
-            _mark(state, "rollback_failed", error=str(error)[:480])
+        if status == "queued":
+            _mark(state, "failed", error="Firewall command discarded after reboot")
+        elif status in {"applying", "awaiting_commit", "rolling_back"}:
+            try:
+                _rollback(state, boot_recovery=True)
+            except IO_ERRORS as error:
+                _mark(state, "rollback_failed", error=str(error)[:480])
+                raise
+        elif status == "rollback_failed":
+            raise CollectionError("Local UFW recovery is required before enabling the firewall at boot")
 
 
 def take_containment_priority():
@@ -565,7 +736,7 @@ def approve(transaction_id):
     with firewall_lock():
         networks, ssh_port, _ = _profile()
         state = _read_state()
-        if state.get("id") != transaction_id or state.get("status") != "awaiting_commit" or _now() >= state["deadline"]:
+        if state.get("id") != transaction_id or state.get("status") != "awaiting_commit" or _remaining(state) <= 0:
             raise CollectionError("No active matching transaction")
         _require_live_ssh_approval(networks, ssh_port, state["applied_epoch"])
         _mark(state, "awaiting_commit", ssh_verified=True)
@@ -577,9 +748,13 @@ if __name__ == "__main__":
             print(static_fingerprint())
         elif sys.argv[1:] == ["worker"]:
             worker()
+        elif sys.argv[1:] == ["apply"]:
+            apply_worker()
+        elif sys.argv[1:] == ["recover-boot"]:
+            recover_boot()
         elif len(sys.argv) == 3 and sys.argv[1] == "approve":
             approve(sys.argv[2])
         else:
-            raise CollectionError("Use fingerprint, worker, or approve TRANSACTION_ID")
+            raise CollectionError("Use fingerprint, worker, apply, recover-boot, or approve TRANSACTION_ID")
     except IO_ERRORS as error:
         sys.exit(str(error))

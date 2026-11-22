@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import websockets
 
-from firewall_control import controls_configured, read_transaction, request, IN_PROGRESS, IO_ERRORS
+from firewall_control import controls_configured, read_transaction, request, IN_PROGRESS, IO_ERRORS, SAFETY_VERSION
 from network_monitor import NetworkMonitor
 from network_sources import CollectionError
 
@@ -43,7 +43,8 @@ class NetworkChannel:
         payload = await asyncio.to_thread(self.monitor.collect, self.agent_id, full, command_id)
         firewall = payload.get("sections", {}).get("firewall")
         if firewall is not None:
-            firewall.update(controls_configured=controls_configured(), transaction=await asyncio.to_thread(read_transaction))
+            firewall.update(controls_configured=await asyncio.to_thread(controls_configured),
+                            safety_version=SAFETY_VERSION, transaction=await asyncio.to_thread(read_transaction))
         if len(json.dumps(payload, ensure_ascii=False).encode()) > SNAPSHOT_SIZE:
             payload["status"] = "partial"
             for key in ("ports", "connections", "events", "nat", "firewall", "routes", "neighbors", "policy"):
@@ -62,6 +63,8 @@ class NetworkChannel:
             return None
         if command["action"] != "network_firewall":
             raise CollectionError("Unsupported network command")
+        if command.get("firewall_safety_version") != SAFETY_VERSION:
+            raise CollectionError("Unsupported firewall safety policy")
         params = command["params"]
         if not isinstance(params, dict):
             raise CollectionError("Invalid firewall parameters")

@@ -12,7 +12,7 @@ from app.models.command import Command
 from app.models.network_snapshot import NetworkSnapshot
 from app.repositories.network_repository import NetworkRepository
 from app.schemas.network import FirewallRequest, NetworkQueued, NetworkView
-from app.services.agent import network_service
+from app.services.agent import network_service, ssh_probe
 from app.websocket.connection_manager import connection_manager
 
 router = APIRouter(prefix="/network", tags=["network"])
@@ -85,6 +85,21 @@ async def network_probe(agent_id: str, x_larp_agent_token: str | None = Header(N
     return Response(status_code=204)
 
 
+@router.get("/agents/{agent_id}/ssh-probe", include_in_schema=False)
+async def network_ssh_probe(agent_id: str, x_larp_agent_token: str | None = Header(None)):
+    if not authenticate_agent(agent_id, x_larp_agent_token):
+        raise HTTPException(401, "Valid Agent credential required")
+    if not _network_online(agent_id):
+        raise HTTPException(503, "Authenticated Agent WebSocket is disconnected")
+    try:
+        result = await ssh_probe.verify(agent_id)
+    except (RuntimeError, OSError):
+        raise HTTPException(503, "External SSH verification failed") from None
+    if not _network_online(agent_id):
+        raise HTTPException(503, "Authenticated Agent WebSocket is disconnected")
+    return result
+
+
 @router.get("/agents/{agent_id}/commands/{command_id}")
 async def network_command_status(agent_id: str, command_id: str, session=Depends(get_session),
                                  _operator=Depends(require_network_read)):
@@ -108,8 +123,10 @@ async def firewall_action(agent_id: str, request: FirewallRequest, session=Depen
                           operator=Depends(require_network_admin)):
     if not _network_online(agent_id):
         raise HTTPException(409, "Agent is offline or is not enrolled for network telemetry")
-    if not settings.NETWORK_LEGACY_ADMIN_TOKEN:
-        raise HTTPException(503, "Legacy administrative routes must be protected before enabling UFW controls")
+    if request.operation == "set_policy":
+        raise HTTPException(409, "Default policy changes require local administration")
+    if request.operation != "rollback" and (not settings.NETWORK_LEGACY_ADMIN_TOKEN or not ssh_probe.configured(agent_id)):
+        raise HTTPException(503, "Protected administrative APIs and an external SSH verifier are required")
     return await network_service.queue_command(session, agent_id, operator[0], request.model_dump(exclude_none=True))
 
 
@@ -155,7 +172,8 @@ async def network_section(
             except ValueError:
                 stale = True
         if section == "firewall":
-            data["controls_configured"] = bool(data.get("controls_configured") and settings.NETWORK_LEGACY_ADMIN_TOKEN)
+            data["controls_configured"] = bool(data.get("controls_configured") and data.get("safety_version") == 2
+                                                and settings.NETWORK_LEGACY_ADMIN_TOKEN and ssh_probe.configured(agent_id))
             for key in ("rules", "kernel_rules"):
                 data[key] = data.get(key, [])[:500]
         if section in {"groups", "connections", "ports", "events", "interfaces", "routes", "policy", "neighbors", "nat"}:

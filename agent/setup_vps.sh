@@ -23,7 +23,6 @@ apt-get install -y --no-install-recommends \
     python3-venv \
     build-essential \
     libyara-dev \
-    ufw \
     iptables \
     iproute2 \
     nftables \
@@ -74,20 +73,14 @@ echo " [4/5] Đăng ký Systemd Services & Cấu hình Network Telemetry..."
 echo "=============================================================================="
 mkdir -p /etc/larp-agent
 chmod 700 /etc/larp-agent
-if [ ! -f /etc/larp-agent/network.env ]; then
-    echo "[*] Khởi tạo cấu hình Network / Firewall Telemetry tại /etc/larp-agent/network.env..."
-    CURRENT_HOST=$(hostname 2>/dev/null || echo "ip-172-31-32-238")
-    cat << EOF > /etc/larp-agent/network.env
-AGENT_ID=${CURRENT_HOST}
-MANAGER_URL=wss://edr.alwayready.id.vn/ws/agent
-LARP_NETWORK_AGENT_TOKEN=larp-token-vps-172-db4d769ecc13846b3c80469b41951d4a8e96fc57c10883e3
-EOF
-    chmod 600 /etc/larp-agent/network.env
+if [ ! -e /etc/larp-agent/network.env ]; then
+    install -m 0600 /dev/null /etc/larp-agent/network.env
+    echo "[*] Điền credential riêng cho Agent vào /etc/larp-agent/network.env."
 fi
 
 cp "$INSTALL_DIR/larp-agent.service" /etc/systemd/system/larp-agent.service
 cp "$INSTALL_DIR/vulnerable-web.service" /etc/systemd/system/vulnerable-web.service
-install -m 0644 "$INSTALL_DIR/larp-firewall-rollback.service" "$INSTALL_DIR/larp-firewall-rollback.timer" /etc/systemd/system/
+install -m 0644 "$INSTALL_DIR"/larp-firewall-*.service "$INSTALL_DIR"/larp-firewall-rollback.timer /etc/systemd/system/
 
 systemctl daemon-reload
 

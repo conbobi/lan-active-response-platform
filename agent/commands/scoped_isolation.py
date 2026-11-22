@@ -1,4 +1,4 @@
-"""Preserve the host firewall when isolating an enrolled endpoint."""
+"""Preserve the host firewall when isolating an endpoint."""
 import ipaddress
 from pathlib import Path
 import socket
@@ -12,7 +12,7 @@ TABLE = "larp_containment"
 
 def _isolation_addresses(manager_url, peer):
     manager = urlsplit(manager_url)
-    port = manager.port or 443
+    port = manager.port or (443 if manager.scheme == "wss" else 80)
     addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(manager.hostname, port, type=socket.SOCK_STREAM)}
     if isinstance(peer, tuple):
         addresses.add(ipaddress.ip_address(peer[0]))

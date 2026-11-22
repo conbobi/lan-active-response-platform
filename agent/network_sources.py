@@ -2,10 +2,12 @@
 import hashlib
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
 import re
 import selectors
 import shlex
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -32,9 +34,10 @@ def run(name, *args, timeout=4, limit=2_000_000, input_data=None):
             input_file.write(input_data)
             input_file.seek(0)
         with subprocess.Popen(
-            [executable, *args], shell=False, stdin=input_file if input_data else subprocess.DEVNULL,
+            [executable, *args], shell=False, start_new_session=True, stdin=input_file if input_data else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={"PATH": SEARCH_PATH, "LC_ALL": "C"},
         ) as process:
+            complete = False
             try:
                 buffers = {"output": bytearray(), "error": bytearray()}
                 deadline = time.monotonic() + timeout
@@ -56,15 +59,18 @@ def run(name, *args, timeout=4, limit=2_000_000, input_data=None):
                                 raise CollectionError(f"{name}: output limit exceeded")
                             buffers[key.data].extend(chunk)
                 result = buffers["output"].decode("utf-8", "replace").strip()
-                if process.wait(timeout=max(0.01, deadline - time.monotonic())):
+                exit_code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                complete = True
+                if exit_code:
                     error = buffers["error"].decode("utf-8", "replace").strip()
                     raise CollectionError(f"{name}: {(error or result)[:400] or 'command failed'}")
                 return result
             except subprocess.TimeoutExpired as error:
                 raise CollectionError(f"{name}: timed out") from error
             finally:
-                if process.poll() is None:
-                    process.kill()
+                if not complete:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
 
 
 def run_json(name, *args):

@@ -203,8 +203,9 @@ def local_state(tmp_path, monkeypatch):
 
 
 def test_duplicate_delivery_and_expiry(local_state, monkeypatch):
-    monkeypatch.setattr(control, "_profile", lambda: ([], 22, 90))
-    monkeypatch.setattr(control, "run", lambda name, option, *_: "active" if option == "is-active" else "enabled")
+    monkeypatch.setattr(control, "_profile", lambda: ([], 22, 60))
+    monkeypatch.setattr(control, "_check_recovery_units", lambda: None)
+    monkeypatch.setattr(control, "run", lambda *_, **__: "")
     params = {"operation": "enable", "reason": "approval", "confirmed": True}
     first = control.request("a" * 32, params, 130)
     assert control.request("a" * 32, params, 130) == first
@@ -225,12 +226,15 @@ def test_worker_rolls_back_after_connectivity_failure(local_state, monkeypatch):
             configuration["enabled"] = "yes"
         if args == ("--force", "disable"):
             configuration["enabled"] = "no"
-    def probe():
+    def probe(*_):
         if configuration["enabled"] == "yes":
             raise CollectionError("Manager unreachable")
-    monkeypatch.setattr(control, "_profile", lambda: ([], 22, 90))
+    monkeypatch.setattr(control, "_profile", lambda: ([], 22, 60))
+    monkeypatch.setattr(control, "_check_recovery_units", lambda: None)
     monkeypatch.setattr(control, "_kernel_scope", lambda *_, **__: [])
-    monkeypatch.setattr(control, "_check_ssh_rules", lambda *_: None)
+    monkeypatch.setattr(control, "_check_user_rules", lambda *_: None)
+    monkeypatch.setattr(control, "read_setting", lambda *_: configuration["enabled"])
+    monkeypatch.setenv("LARP_UFW_STATIC_SHA256", "approved")
     monkeypatch.setattr(control, "_capture", lambda: copy.deepcopy(configuration))
     monkeypatch.setattr(control, "_restore", configuration.update)
     monkeypatch.setattr(control, "static_fingerprint", lambda: "approved")
@@ -238,14 +242,14 @@ def test_worker_rolls_back_after_connectivity_failure(local_state, monkeypatch):
     monkeypatch.setattr(control, "ufw_snapshot", lambda: active if configuration["enabled"] == "yes" else inactive)
     monkeypatch.setattr(control, "run", run_command)
     control._write_state({"id": "a" * 32, "status": "queued", "boot_id": "boot", "deadline": 190,
-                          "params": {"operation": "enable"}, "command_expiry": 130})
+                          "params": {"operation": "enable"}, "command_expiry": 130, "version": control.SAFETY_VERSION})
+    control.apply_worker()
     control.worker()
     state = control.read_transaction()
     assert state["status"] == "rolled_back"
     assert state["error"] == "Manager unreachable"
     assert configuration["enabled"] == "no"
-    assert commands == [("ufw", "--dry-run", "--force", "enable"), ("ufw", "--force", "enable"),
-                        ("ufw", "--force", "disable")]
+    assert commands == [("ufw", "--force", "enable"), ("ufw", "--force", "disable")]
 
 
 def test_expired_transaction_recovery_refuses_overwriting_external_change(local_state, monkeypatch):

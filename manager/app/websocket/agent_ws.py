@@ -809,7 +809,9 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                     elif msg_type == "HEARTBEAT":
                         response_payload, agent_id = await _handle_heartbeat(agent_id, data, session)
                         if authenticated:
-                            response_payload["network_command"] = await network_service.pull_network_command(session, agent_id)
+                            response_payload["network_command"] = await network_service.pull_network_command(
+                                session, agent_id, reported_safety=payload.get("firewall_safety_version")
+                            )
                     elif handler := MESSAGE_HANDLERS.get(msg_type):
                         response_payload = await handler(agent_id, data, session)
                     else:

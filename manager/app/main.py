@@ -102,11 +102,7 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
         if not network and (not read or (action_path and request.method != "OPTIONS")):
             kind, _, token = request.headers.get("authorization", "").partition(" ")
             is_valid_legacy = token_matches(token, settings.NETWORK_LEGACY_ADMIN_TOKEN)
-            is_admin_operator = any(
-                op.role == "admin" and token_matches(token, op.token_sha256)
-                for op in settings.NETWORK_OPERATORS.values()
-            )
-            if kind.lower() != "bearer" or (not is_valid_legacy and not is_admin_operator):
+            if kind.lower() != "bearer" or not is_valid_legacy:
                 return JSONResponse({"detail": "Legacy administration requires its administrator token"}, status_code=401)
     response = await call_next(request)
     if network:

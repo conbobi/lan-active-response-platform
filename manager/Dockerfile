@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 # Install system dependencies required for asyncpg and PostgreSQL compilation
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libpq-dev curl && \
+    apt-get install -y --no-install-recommends gcc libpq-dev curl openssh-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

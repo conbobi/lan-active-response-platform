@@ -2,9 +2,9 @@
 Description=Check for pending LARP UFW transactions
 
 [Timer]
-OnBootSec=5s
-OnUnitInactiveSec=5s
-AccuracySec=1s
+OnBootSec=2s
+OnUnitInactiveSec=1s
+AccuracySec=100ms
 Unit=larp-firewall-rollback.service
 
 [Install]

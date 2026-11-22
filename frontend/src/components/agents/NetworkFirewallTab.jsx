@@ -5,7 +5,6 @@ import toast from 'react-hot-toast';
 import {
   applyAgentFirewallAction, getAgentNetwork, refreshAgentNetwork,
 } from '../../api/network';
-import { DEFAULT_SOC_ADMIN_TOKEN } from '../../api/api';
 import './NetworkFirewallTab.css';
 
 const tabs = [
@@ -269,12 +268,12 @@ function Firewall({ view, selectAction, busy, tick }) {
       View the kernel inventory for other policies.
     </p>}
     {controls ? <div className="network-controls">
-      {['enable', 'disable', 'reload', 'add_rule', 'set_logging', 'set_policy'].map(operation => <button key={operation}
+      {['enable', 'disable', 'reload', 'add_rule', 'set_logging'].map(operation => <button key={operation}
         type="button" className="btn btn-secondary" disabled={locked || awaiting || ['queued', 'applying', 'rolling_back'].includes(transaction?.status)
           || (operation === 'enable' && data.status !== 'inactive')
           || (['disable', 'reload', 'add_rule'].includes(operation) && data.status !== 'active')}
         onClick={() => selectAction({ operation })}>{operationLabels[operation]}</button>)}
-    </div> : admin && data.provider && <p className="network-muted">Firewall controls require a locally enrolled UFW endpoint.</p>}
+    </div> : admin && data.provider && <p className="network-muted">Firewall controls require protected SSH rules, a local rollback timer and an external SSH verifier.</p>}
     {transaction?.id && <div className="network-panel network-stack" role="status">
       <strong>Transaction {transaction.id} · {transaction.status.replaceAll('_', ' ')}</strong>
       {transaction.error && <p>{transaction.error}</p>}
@@ -325,18 +324,10 @@ function EventCounts({ data }) {
 }
 
 export default function NetworkFirewallTab({ agent }) {
-  const [token, setToken] = useState(() => localStorage.getItem('larp_network_token') || DEFAULT_SOC_ADMIN_TOKEN);
+  const [token, setToken] = useState('');
   const [draftToken, setDraftToken] = useState('');
+  useEffect(() => { localStorage.removeItem('larp_network_token'); }, []);
 
-  const handleSetToken = (val) => {
-    const clean = (val || '').trim();
-    setToken(clean);
-    if (clean) {
-      localStorage.setItem('larp_network_token', clean);
-    } else {
-      localStorage.removeItem('larp_network_token');
-    }
-  };
   const [tab, setTab] = useState('overview');
   const [section, setSection] = useState('overview');
   const [view, setView] = useState(null);
@@ -443,21 +434,19 @@ export default function NetworkFirewallTab({ agent }) {
       {token && <button className="btn btn-secondary" type="button" disabled={!view?.online || busy}
         onClick={() => enqueue()}><FiRefreshCw size={14} /> Refresh</button>}
       {token && <button className="btn btn-secondary" type="button" onClick={() => {
-        handleSetToken(''); setView(null); setError(''); setCommand(null);
+        setToken(''); setView(null); setError(''); setCommand(null);
       }}>Clear access</button>}
     </div>
     {!token && <form className="network-controls" onSubmit={event => {
       event.preventDefault();
-      handleSetToken(draftToken);
+      setToken(draftToken.trim());
       setDraftToken('');
     }}>
       <label>Network access token<input type="password" value={draftToken} onChange={e => setDraftToken(e.target.value)}
-        placeholder="Nhập token hoặc bấm nút bên dưới" autoComplete="off" /></label>
+        autoComplete="off" required /></label>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         <button type="submit" className="btn btn-primary" disabled={!draftToken.trim()}>Open Network &amp; Firewall</button>
-        <button type="button" className="btn btn-secondary" onClick={() => handleSetToken(DEFAULT_SOC_ADMIN_TOKEN)}>
-          Dùng SOC Admin Token (Mặc định)
-        </button>
+
       </div>
     </form>}
     {token && <>

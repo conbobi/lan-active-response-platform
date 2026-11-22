@@ -19,8 +19,7 @@ from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
 from web_log_monitor import web_log_monitor_task
 from network_channel import NetworkChannel, TOKEN as NETWORK_TOKEN, websocket_auth
-from commands.scoped_isolation import scoped_isolation
-from network_sources import CollectionError
+from firewall_control import SAFETY_VERSION
 
 
 def _resolve_manager_url() -> str:
@@ -133,6 +132,7 @@ def collect_stats():
     return {
         "agent_id": AGENT_ID,
         "platform": platform.system().lower(),
+        "firewall_safety_version": SAFETY_VERSION if NETWORK else None,
         "cpu": get_container_cpu_percent(),
         "ram": get_container_memory_percent(),
         "disk": get_container_disk_percent(),
@@ -600,11 +600,6 @@ async def send_ws_json_no_wait(websocket, message):
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
     params = cmd.get("payload", {})
-    if NETWORK and action in {"isolate", "unisolate"}:
-        try:
-            return await asyncio.to_thread(scoped_isolation, action, MANAGER_URL, websocket.remote_address)
-        except (CollectionError, OSError, ValueError) as error:
-            return {"status": "failed", "message": str(error)}
     handler = COMMAND_HANDLERS.get(action)
     if not handler:
         return {"status": "error", "message": f"Unknown action '{action}'"}

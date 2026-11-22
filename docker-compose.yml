@@ -34,6 +34,7 @@ services:
       - NETWORK_AGENT_TOKENS
       - NETWORK_OPERATORS
       - NETWORK_LEGACY_ADMIN_TOKEN
+      - NETWORK_SSH_PROBES
       - DEBUG=${LARP_MANAGER_DEBUG:-false}
     depends_on:
       db:
