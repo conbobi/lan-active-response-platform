@@ -48,7 +48,13 @@ Trên máy của bạn, chạy script tự động với IP public của VPS:
 cd ~/Mon_hoc/Do_an_tot_nghiep/larp/agent
 bash deploy_to_vps.sh <IP_PUBLIC_VPS>
 ```
-*Script sẽ tự động dùng khóa `~/.ssh/key-debian-aws.pem`, rsync toàn bộ code lên VPS và tự chạy `setup_vps.sh`.*
+Script dùng khóa `~/.ssh/key-debian-aws.pem` để đồng bộ mã nguồn và chạy
+`setup_vps.sh`. Cần có `rsync` trên cả máy cá nhân lẫn VPS. Trên VPS Debian
+mới, cài `rsync` trước khi chạy script lần đầu.
+
+```bash
+sudo apt-get update && sudo apt-get install -y rsync
+```
 
 ---
 

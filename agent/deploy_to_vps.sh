@@ -25,8 +25,23 @@ fi
 
 chmod 400 "$KEY_FILE" 2>/dev/null || true
 
-echo "[1/3] Kiểm tra kết nối SSH tới $VPS_USER@$VPS_HOST..."
-if ! ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" "echo '[+] Kết nối SSH thành công!'" ; then
+if ! command -v rsync >/dev/null 2>&1; then
+    echo "[-] Máy đang chạy script chưa cài rsync." >&2
+    exit 1
+fi
+
+echo "[1/3] Kiểm tra SSH và rsync trên $VPS_USER@$VPS_HOST..."
+if ssh -i "$KEY_FILE" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+    "$VPS_USER@$VPS_HOST" "command -v rsync >/dev/null 2>&1 || exit 127"; then
+    echo "[+] SSH và rsync trên VPS đã sẵn sàng!"
+else
+    ssh_status=$?
+    if [ "$ssh_status" -eq 127 ]; then
+        echo "[-] SSH thành công nhưng VPS chưa có rsync trong PATH." >&2
+        printf 'Cài rsync trên VPS bằng lệnh sau, rồi chạy lại script:\n  ssh -t -i %q %q %q\n' \
+            "$KEY_FILE" "$VPS_USER@$VPS_HOST" 'sudo apt-get update && sudo apt-get install -y rsync' >&2
+        exit 1
+    fi
     echo "[-] Không thể kết nối SSH tới $VPS_HOST:22."
     echo "    Gợi ý:"
     echo "    1. Kiểm tra lại IP public hiện tại của máy ảo AWS EC2."
