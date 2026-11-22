@@ -84,6 +84,7 @@ export default function Agents({ initialTab }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const [selectedAgentTab, setSelectedAgentTab] = useState('Overview');
 
   // Groups logic
   const {
@@ -424,10 +425,26 @@ export default function Agents({ initialTab }) {
                             variant="ghost"
                             size="sm"
                             iconLeft={<FiEye size={13} />}
-                            onClick={() => setSelectedAgent(agent)}
+                            onClick={() => {
+                              setSelectedAgent(agent);
+                              setSelectedAgentTab('Overview');
+                            }}
                             title="View Details"
                           >
                             Details
+                          </Button>
+
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            iconLeft={<FiShield size={13} color="var(--primary)" />}
+                            onClick={() => {
+                              setSelectedAgent(agent);
+                              setSelectedAgentTab('Network & Firewall');
+                            }}
+                            title="Mở quản lý Network & Firewall cho Endpoint này"
+                          >
+                            Firewall
                           </Button>
 
                           <Button
@@ -636,6 +653,7 @@ export default function Agents({ initialTab }) {
           agent={selectedAgent}
           onClose={() => setSelectedAgent(null)}
           onDeleteAgent={handleDeleteAgent}
+          initialTab={selectedAgentTab}
         />
       )}
 

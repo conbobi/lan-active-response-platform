@@ -137,42 +137,39 @@ mỗi credential. Giữ token gốc bí mật và chỉ đưa SHA-256 vào Manag
 python3 -c 'import hashlib, secrets; value=secrets.token_urlsafe(48); print(value); print(hashlib.sha256(value.encode()).hexdigest())'
 ```
 
-Thêm vào môi trường Manager hoặc vào tệp `.env` của Docker Compose với
-quyền truy cập hạn chế. Thay các giá trị SHA-256 mẫu bằng digest thực.
+Thêm vào môi trường Manager hoặc vào tệp `.env` của Docker Compose (đã cấu hình sẵn trong dự án):
 
 ```dotenv
-NETWORK_AGENT_TOKENS='{"aws-debian-01":"<sha256-agent-token>"}'
-NETWORK_OPERATORS='{"soc-reader":{"token_sha256":"<sha256-reader-token>","role":"analyst","agents":["aws-debian-01"]},"soc-admin":{"token_sha256":"<sha256-admin-token>","role":"admin","agents":["aws-debian-01"]}}'
-NETWORK_LEGACY_ADMIN_TOKEN=<sha256-legacy-admin-token>
+NETWORK_AGENT_TOKENS='{"ip-172-31-32-238": "a3b1d109854ae8d23040793f11374aaabb11014746b3bf49701d0a8bab78fa3f", "aws-debian-01": "d576510fc793221db0256cb74fd4ac484fc1739899fb0cef3a1c790698dbd484", "my-desktop": "edfb86a94df7190ce23ab4c6bfc3b04530709afe92ba0c71fc7cf0ab46d13e30"}'
+NETWORK_OPERATORS='{"soc-admin": {"token_sha256": "011d070f33c53a87cc6376535d470ed8ccf019527f16d68d84a5cd4edece8d78", "role": "admin", "agents": ["ip-172-31-32-238", "aws-debian-01", "my-desktop"]}, "soc-reader": {"token_sha256": "a0065f84f08797257645db4c02e3e9f5bc7f462cfaccca1d135b0e4f9f1390ef", "role": "analyst", "agents": ["ip-172-31-32-238", "aws-debian-01", "my-desktop"]}}'
+NETWORK_LEGACY_ADMIN_TOKEN=6884edc739038179c2c588e38dcbbdb7c2b14c31f4a1c5eb7aee3894477f1097
 LARP_MANAGER_DEBUG=false
 ```
 
-`NETWORK_LEGACY_ADMIN_TOKEN` bắt buộc để bật thao tác UFW trên dashboard.
-Khi cấu hình biến này, các API ghi cũ và API đọc lệnh/audit cũ yêu cầu
-`Authorization: Bearer <legacy-admin-token>`. Cấu hình các client quản trị
-cũ hoặc reverse proxy có xác thực để gửi credential này khi cần.
-Cơ chế thu thập qua WebSocket vẫn hoạt động. Với triển khai chỉ đọc, có thể
-bỏ qua biến đó. Credential dashboard Network dùng theo vai trò và phạm vi
-Agent đã khai báo, được giữ trong bộ nhớ của tab đang mở.
+Các Token bí mật tương ứng:
+- **SOC Admin Token (Dùng trên Dashboard)**: `larp-token-soc-admin-3bcddf770e95f201fa77f157d9d4ab6237a63fd16098c2eb` (giao diện đã tự động nạp sẵn)
+- **VPS Agent Token (`ip-172-31-32-238`)**: `larp-token-vps-172-db4d769ecc13846b3c80469b41951d4a8e96fc57c10883e3`
+- **AWS Debian Agent Token (`aws-debian-01`)**: `larp-token-aws-debian-2908d361b405b178bacfe1232b5a07a295d250e6ba5bea38`
+- **Desktop Agent Token (`my-desktop`)**: `larp-token-desktop-cc032846c9f2f308900e4289f3139e3a767e0c99c9d36254`
 
-Trên Debian 13, sau khi đồng bộ mã nguồn, chạy bằng tài khoản có quyền sudo.
+Trên Debian VPS, sau khi đồng bộ mã nguồn, chạy bằng tài khoản có quyền sudo:
 
 ```bash
 cd ~/agent
 sudo bash setup_vps.sh
 sudo install -d -m 0700 /etc/larp-agent
-sudoedit /etc/larp-agent/network.env
+sudo nano /etc/larp-agent/network.env
 sudo chmod 0600 /etc/larp-agent/network.env
 sudo systemctl restart larp-agent.service
 sudo journalctl -u larp-agent.service -n 50 --no-pager
 ```
 
-Nội dung cấu hình Agent cho chế độ đọc.
+Nội dung cấu hình tệp `/etc/larp-agent/network.env` trên VPS:
 
 ```dotenv
-AGENT_ID=aws-debian-01
+AGENT_ID=ip-172-31-32-238
 MANAGER_URL=wss://edr.alwayready.id.vn/ws/agent
-LARP_NETWORK_AGENT_TOKEN=<agent-token>
+LARP_NETWORK_AGENT_TOKEN=larp-token-vps-172-db4d769ecc13846b3c80469b41951d4a8e96fc57c10883e3
 ```
 
 Từ thư mục gốc của repo trên Manager.

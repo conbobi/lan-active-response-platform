@@ -13,7 +13,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 
 const TABS = ['Overview', '🚨 Active Threats', 'CPU/RAM', 'Info', 'Network & Firewall', 'Mitigations'];
 
-export default function AgentDetailModal({ agent, onClose, onDeleteAgent }) {
+export default function AgentDetailModal({ agent, onClose, onDeleteAgent, initialTab = 'Overview' }) {
     const { history, loading } = useAgentHistory(agent?.id);
     const {
         actions,
@@ -22,7 +22,7 @@ export default function AgentDetailModal({ agent, onClose, onDeleteAgent }) {
         handleUndo,
         handleUndoAll,
     } = useActions({ agentId: agent?.id });
-    const [tab, setTab] = useState('Overview');
+    const [tab, setTab] = useState(initialTab);
     if (!agent) return null;
 
     const isDead = ['dead', 'offline', 'inactive'].includes(String(agent.status || '').toLowerCase());

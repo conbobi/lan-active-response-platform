@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FiEye, FiSlash, FiLock, FiServer, FiTrash2 } from 'react-icons/fi';
+import { FiEye, FiSlash, FiLock, FiServer, FiTrash2, FiShield } from 'react-icons/fi';
 import Badge from './Badge';
 
 export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onCleanupOffline }) {
@@ -99,7 +99,30 @@ export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onClean
                     </div>
                   </td>
                   <td>
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>See Agent details</span>
+                    <button
+                      type="button"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.25rem 0.6rem',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        background: 'rgba(97, 0, 255, 0.1)',
+                        border: '1px solid rgba(97, 0, 255, 0.25)',
+                        color: 'var(--primary)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewAgent && onViewAgent(a, 'Network & Firewall');
+                      }}
+                      title="Mở quản trị Network & Firewall cho agent này"
+                    >
+                      <FiShield size={12} /> Network &amp; Firewall
+                    </button>
                   </td>
                   <td>
                     <div className="table-actions">

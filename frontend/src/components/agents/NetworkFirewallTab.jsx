@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import {
   applyAgentFirewallAction, getAgentNetwork, refreshAgentNetwork,
 } from '../../api/network';
+import { DEFAULT_SOC_ADMIN_TOKEN } from '../../api/api';
 import './NetworkFirewallTab.css';
 
 const tabs = [
@@ -324,8 +325,18 @@ function EventCounts({ data }) {
 }
 
 export default function NetworkFirewallTab({ agent }) {
-  const [token, setToken] = useState('');
+  const [token, setToken] = useState(() => localStorage.getItem('larp_network_token') || DEFAULT_SOC_ADMIN_TOKEN);
   const [draftToken, setDraftToken] = useState('');
+
+  const handleSetToken = (val) => {
+    const clean = (val || '').trim();
+    setToken(clean);
+    if (clean) {
+      localStorage.setItem('larp_network_token', clean);
+    } else {
+      localStorage.removeItem('larp_network_token');
+    }
+  };
   const [tab, setTab] = useState('overview');
   const [section, setSection] = useState('overview');
   const [view, setView] = useState(null);
@@ -432,17 +443,22 @@ export default function NetworkFirewallTab({ agent }) {
       {token && <button className="btn btn-secondary" type="button" disabled={!view?.online || busy}
         onClick={() => enqueue()}><FiRefreshCw size={14} /> Refresh</button>}
       {token && <button className="btn btn-secondary" type="button" onClick={() => {
-        setToken(''); setView(null); setError(''); setCommand(null);
+        handleSetToken(''); setView(null); setError(''); setCommand(null);
       }}>Clear access</button>}
     </div>
     {!token && <form className="network-controls" onSubmit={event => {
       event.preventDefault();
-      setToken(draftToken.trim());
+      handleSetToken(draftToken);
       setDraftToken('');
     }}>
       <label>Network access token<input type="password" value={draftToken} onChange={e => setDraftToken(e.target.value)}
-        autoComplete="off" required /></label>
-      <button type="submit" className="btn btn-primary" disabled={!draftToken.trim()}>Open Network &amp; Firewall</button>
+        placeholder="Nhập token hoặc bấm nút bên dưới" autoComplete="off" /></label>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <button type="submit" className="btn btn-primary" disabled={!draftToken.trim()}>Open Network &amp; Firewall</button>
+        <button type="button" className="btn btn-secondary" onClick={() => handleSetToken(DEFAULT_SOC_ADMIN_TOKEN)}>
+          Dùng SOC Admin Token (Mặc định)
+        </button>
+      </div>
     </form>}
     {token && <>
       <nav className="network-controls" aria-label="Network views">{tabs.map(([value, label]) => <button
@@ -451,11 +467,28 @@ export default function NetworkFirewallTab({ agent }) {
       {subSections[tab] && <nav className="network-controls" aria-label={`${tab} views`}>{subSections[tab].map(([value, label]) => <button
         key={value} type="button" className={`filter-tab ${section === value ? 'active' : ''}`} onClick={() => changeSection(value)}>{label}</button>)}</nav>}
       {loading && !view && <p role="status">Loading network data…</p>}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert" style={{ color: 'var(--error)' }}>{error}</p>}
       {command && <p className="network-panel" role="status">Command {command.command_id} · {command.status}{command.error ? ` · ${command.error}` : ''}</p>}
       {view?.status === 'unsupported' && <p>Network telemetry is unsupported for this operating system.</p>}
-      {view?.status === 'unenrolled' && <p>This Agent is not enrolled for network telemetry.</p>}
-      {view?.status === 'unavailable' && <p>Waiting for the first network snapshot.</p>}
+      {view?.status === 'unenrolled' && (
+        <div style={{ padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)' }}>
+          <strong style={{ color: 'var(--error)' }}>Agent chưa được kích hoạt Network Telemetry</strong>
+          <p style={{ margin: '0.4rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            Agent <code>{agent.id}</code> chưa được cấu hình token trong <code>NETWORK_AGENT_TOKENS</code> trên Manager.
+          </p>
+        </div>
+      )}
+      {view?.status === 'unavailable' && (
+        <div style={{ padding: '1.25rem', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: 'var(--radius-md)' }}>
+          <strong style={{ color: 'var(--warning)', display: 'block', marginBottom: '0.4rem' }}>Đang chờ bản tin snapshot mạng từ Agent...</strong>
+          <p style={{ margin: '0 0 0.5rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            Agent <code>{agent.id}</code> đã được đăng ký trên Manager, nhưng Agent chưa gửi bản tin <code>NETWORK_SNAPSHOT</code> nào về hệ thống.
+          </p>
+          <p style={{ margin: 0, color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
+            💡 Hướng dẫn: Đảm bảo trên máy chủ Agent tệp <code>/etc/larp-agent/network.env</code> đã có <code>LARP_NETWORK_AGENT_TOKEN</code> và dịch vụ <code>larp-agent.service</code> đang hoạt động.
+          </p>
+        </div>
+      )}
       {available && <>
         {Object.entries(data.errors || {}).map(([source, issue]) => <p key={source} className="network-muted">{source} · {issue}</p>)}
         {section === 'overview' && <Overview data={data} timestamp={view.collected_at} />}

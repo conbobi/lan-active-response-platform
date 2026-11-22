@@ -86,6 +86,7 @@ export default function Dashboard() {
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedAgent, setSelectedAgent] = useState(null);
+    const [selectedAgentTab, setSelectedAgentTab] = useState('Overview');
     const [selectedIncident, setSelectedIncident] = useState(null);
     const [isolatingId, setIsolatingId] = useState(null);
 
@@ -489,7 +490,10 @@ export default function Dashboard() {
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
                 <AgentTable
                     agents={agents}
-                    onViewAgent={setSelectedAgent}
+                    onViewAgent={(agent, tab = 'Overview') => {
+                        setSelectedAgent(agent);
+                        setSelectedAgentTab(tab);
+                    }}
                     onDeleteAgent={handleDeleteAgent}
                     onCleanupOffline={handleCleanupOffline}
                 />
@@ -506,6 +510,7 @@ export default function Dashboard() {
                     agent={selectedAgent}
                     onClose={() => setSelectedAgent(null)}
                     onDeleteAgent={handleDeleteAgent}
+                    initialTab={selectedAgentTab}
                 />
             )}
             {selectedIncident && (
