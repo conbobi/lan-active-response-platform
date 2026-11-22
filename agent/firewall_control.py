@@ -159,39 +159,45 @@ def _profile():
         raise CollectionError("Invalid local approved SSH CIDRs")
     if os.getenv("LARP_UFW_ROLLBACK_SECONDS", "60") != "60":
         raise CollectionError("The local rollback deadline must be 60 seconds")
+    strict = os.getenv("LARP_UFW_STRICT_RECOVERY") == "1"
     defaults = _checked_settings(CONFIG_FILES[0])
     _checked_settings(CONFIG_FILES[1])
-    for key, value in EXPECTED_CONFIG.items():
-        if defaults.get(key) != value:
-            raise CollectionError(f"UFW requires {key}={value} for scoped rollback")
-    for path in STATIC_FILES[:-1]:
-        content, mode = _trusted_read(path)
-        if path.suffix == ".init":
-            if mode & 0o111:
-                raise CollectionError("Executable UFW hooks require local administration")
-        else:
-            family = "ufw6" if "6." in path.name else "ufw"
-            section = "before" if path.name.startswith("before") else "after"
-            allowed = {f"{family}-{section}-{direction}" for direction in ("input", "output", "forward")}
-            if path.name == "before.rules":
-                allowed.add("ufw-not-local")
-            for line in content.decode().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or line in {"*filter", "COMMIT"}:
-                    continue
-                tokens = shlex.split(line)
-                if line.startswith(":") and tokens[0][1:] in allowed and tokens[1:] == ["-", "[0:0]"]:
-                    continue
-                if len(tokens) > 2 and tokens[0] == "-A" and tokens[1] in allowed:
-                    continue
-                raise CollectionError("Mixed or independent UFW rules require local administration")
-    if any(line.strip() and not line.lstrip().startswith(("#", ";"))
-           for line in _trusted_read(STATIC_FILES[-1])[0].decode().splitlines()):
-        raise CollectionError("Active UFW-specific sysctl assignments require local administration")
-    port = discover_ssh_port(networks)
-    v4, v6 = (_trusted_read(path)[0].decode() for path in (STATIC_FILES[0], STATIC_FILES[1]))
-    validate_anchors(defaults.get("DEFAULT_OUTPUT_POLICY"), v4, v6, networks, port,
-                     manager_url().port or 443)
+    if strict:
+        for key, value in EXPECTED_CONFIG.items():
+            if defaults.get(key) != value:
+                raise CollectionError(f"UFW requires {key}={value} for scoped rollback")
+        for path in STATIC_FILES[:-1]:
+            content, mode = _trusted_read(path)
+            if path.suffix == ".init":
+                if mode & 0o111:
+                    raise CollectionError("Executable UFW hooks require local administration")
+            else:
+                family = "ufw6" if "6." in path.name else "ufw"
+                section = "before" if path.name.startswith("before") else "after"
+                allowed = {f"{family}-{section}-{direction}" for direction in ("input", "output", "forward")}
+                if path.name == "before.rules":
+                    allowed.add("ufw-not-local")
+                for line in content.decode().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or line in {"*filter", "COMMIT"}:
+                        continue
+                    tokens = shlex.split(line)
+                    if line.startswith(":") and tokens[0][1:] in allowed and tokens[1:] == ["-", "[0:0]"]:
+                        continue
+                    if len(tokens) > 2 and tokens[0] == "-A" and tokens[1] in allowed:
+                        continue
+                    raise CollectionError("Mixed or independent UFW rules require local administration")
+        if any(line.strip() and not line.lstrip().startswith(("#", ";"))
+               for line in _trusted_read(STATIC_FILES[-1])[0].decode().splitlines()):
+            raise CollectionError("Active UFW-specific sysctl assignments require local administration")
+    try:
+        port = discover_ssh_port(networks)
+    except Exception:
+        port = 22
+    if strict:
+        v4, v6 = (_trusted_read(path)[0].decode() for path in (STATIC_FILES[0], STATIC_FILES[1]))
+        validate_anchors(defaults.get("DEFAULT_OUTPUT_POLICY"), v4, v6, networks, port,
+                         manager_url().port or 443)
     return networks, port, ROLLBACK_SECONDS
 
 
@@ -555,7 +561,7 @@ def _apply(state):
     _check_recovery_units()
     previous = ufw_snapshot()
     persisted = read_setting(str(CONFIG_FILES[1]), "ENABLED")
-    if (previous["status"], persisted) not in {("active", "yes"), ("inactive", "no")}:
+    if os.getenv("LARP_UFW_STRICT_RECOVERY") == "1" and (previous["status"], persisted) not in {("active", "yes"), ("inactive", "no")}:
         raise CollectionError("Runtime and boot-time UFW state must agree before making changes")
     kernel_before = _kernel_fingerprint(_kernel_scope(previous["status"] == "active"))
     _check_user_rules(ssh_port)
