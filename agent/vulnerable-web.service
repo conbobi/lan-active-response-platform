@@ -21,3 +21,4 @@ Environment=WEB_ACCESS_LOG=/var/log/vulnerable_web/access.log
 
 [Install]
 WantedBy=multi-user.target
+

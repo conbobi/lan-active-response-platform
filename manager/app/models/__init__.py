@@ -29,6 +29,7 @@ from app.models.ai_analysis import AIAnalysis
 from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
 from app.models.web_access_log import WebAccessLog
+from app.models.network_snapshot import NetworkSnapshot
 
 __all__ = [
     "Base",

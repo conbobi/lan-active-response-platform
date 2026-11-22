@@ -32,3 +32,21 @@ export const getProtocols = async (filters = {}) => {
 export const getFlowDetail = async (flowId) => {
   return api.get(`/network/${flowId}`);
 };
+
+function agentNetworkPath(agentId, section) {
+  return `/network/agents/${encodeURIComponent(agentId)}/${section}`;
+}
+
+const networkAuth = (token) => ({ headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
+
+export function getAgentNetwork(agentId, section, token, params = {}, signal) {
+  return api.get(agentNetworkPath(agentId, section), { ...networkAuth(token), params, signal });
+}
+
+export function refreshAgentNetwork(agentId, token) {
+  return api.post(agentNetworkPath(agentId, 'refresh'), null, networkAuth(token));
+}
+
+export function applyAgentFirewallAction(agentId, token, body) {
+  return api.post(agentNetworkPath(agentId, 'firewall/actions'), body, networkAuth(token));
+}

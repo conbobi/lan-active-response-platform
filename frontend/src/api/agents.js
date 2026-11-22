@@ -22,7 +22,6 @@ export const getAgents = async () => {
     cpu: agent.cpu || 0,
     ram: agent.ram || 0,
     disk: agent.disk || 0,
-    firewall: !agent.is_isolated, // hoặc dùng trường khác nếu có
     isProbe: agent.is_probe,
     is_isolated: agent.is_isolated,
     last_seen: agent.last_seen,

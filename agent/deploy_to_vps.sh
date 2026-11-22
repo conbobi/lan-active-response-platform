@@ -48,3 +48,4 @@ ssh -t -i "$KEY_FILE" -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" \
     "cd ~/agent && sudo bash setup_vps.sh"
 
 echo "[✓] Triển khai hoàn tất trên VPS!"
+

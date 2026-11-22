@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.response_action import ResponseAction
+from app.core.network_security import is_reserved_action
 from app.models.command import Command
 from app.schemas.enums import CommandStatus, AgentStatus
 from app.repositories.response_action_repository import ResponseActionRepository
@@ -56,6 +57,8 @@ class ResponseActionService:
         """
         Tạo và áp dụng response action với snapshot bảo toàn trạng thái.
         """
+        if is_reserved_action(action_type):
+            raise BadRequestError("Use the authenticated network action endpoint")
         action_params = action_params or {}
         now = datetime.now(timezone.utc)
 

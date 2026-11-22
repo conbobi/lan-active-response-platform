@@ -81,7 +81,8 @@ function TabButton({ active, onClick, icon, label, count, countTone = 'default' 
 export default function ProcessTree({ embedded = false }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryAgent = searchParams.get('agent') || searchParams.get('agent_id');
-  const queryPid = searchParams.get('pid');
+  const requestedPid = searchParams.get('pid');
+  const requestedStart = searchParams.get('started');
 
   const { agents } = useAgents();
   const [selectedAgent, setSelectedAgent] = useState('');
@@ -100,6 +101,19 @@ export default function ProcessTree({ embedded = false }) {
     handleKillProcess,
     handleKillProcessTree,
   } = useProcessTree(selectedAgent);
+
+  const queryPid = useMemo(() => {
+    if (!requestedPid || !requestedStart) return requestedPid;
+    if (!processTree || selectedAgent !== queryAgent) return null;
+    const nodes = [...(processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]))];
+    while (nodes.length) {
+      const node = nodes.pop();
+      if (Number(node.pid) === Number(requestedPid) && node.process_start_time != null &&
+        Math.abs(Number(node.process_start_time) - Number(requestedStart)) < 0.01) return requestedPid;
+      nodes.push(...(node.children || []));
+    }
+    return null;
+  }, [requestedPid, requestedStart, queryAgent, selectedAgent, processTree]);
 
   const [expandedPids, setExpandedPids] = useState(new Set());
   const [killTarget, setKillTarget] = useState(null);
@@ -406,6 +420,9 @@ export default function ProcessTree({ embedded = false }) {
       )}
 
       {/* ===== Focus PID alert ===== */}
+      {requestedPid && requestedStart && !queryPid && processTree && !loading && (
+        <p role="status">The observed process instance is no longer in the current Process Tree.</p>
+      )}
       {queryPid && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',

@@ -12,6 +12,7 @@ class ProcessInfo(Base):
     agent_id: Mapped[str] = mapped_column(String(64), ForeignKey("agents.id"), nullable=False)
     pid: Mapped[int] = mapped_column(Integer, nullable=False)
     parent_pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    process_start_time: Mapped[Optional[float]] = mapped_column(Float(53), nullable=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     exe: Mapped[str] = mapped_column(String(512), default="")
     exe_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)

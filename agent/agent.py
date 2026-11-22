@@ -3,11 +3,14 @@ import asyncio
 import json
 import os
 import re
+import platform
 import socket
 import subprocess
 import psutil
 import websockets
 from datetime import datetime, timezone
+from functools import partial
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from commands import COMMAND_HANDLERS
 import time
 from fim import FileIntegrityMonitor
@@ -15,6 +18,9 @@ from auth_monitor import global_auth_monitor
 from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
 from web_log_monitor import web_log_monitor_task
+from network_channel import NetworkChannel, TOKEN as NETWORK_TOKEN, websocket_auth
+from commands.scoped_isolation import scoped_isolation
+from network_sources import CollectionError
 
 
 def _resolve_manager_url() -> str:
@@ -41,6 +47,7 @@ def _resolve_manager_url() -> str:
 MANAGER_URL = _resolve_manager_url()
 
 AGENT_ID = os.getenv("AGENT_ID", socket.gethostname())
+NETWORK = NetworkChannel(AGENT_ID) if NETWORK_TOKEN else None
 
 ws_request_lock = asyncio.Lock()
 ws_send_lock = asyncio.Lock()
@@ -125,6 +132,7 @@ def get_mac_address():
 def collect_stats():
     return {
         "agent_id": AGENT_ID,
+        "platform": platform.system().lower(),
         "cpu": get_container_cpu_percent(),
         "ram": get_container_memory_percent(),
         "disk": get_container_disk_percent(),
@@ -210,7 +218,7 @@ def collect_process_info():
     """
     processes = []
     try:
-        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent','status']):
+        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent', 'status', 'create_time']):
             try:
                 info = proc.info
                 status = info.get('status')
@@ -235,6 +243,7 @@ def collect_process_info():
                 processes.append({
                     "pid": pid,
                     "parent_pid": ppid,
+                    "process_start_time": info.get("create_time"),
                     "name": name,
                     "exe": exe,
                     "exe_path": exe,
@@ -591,6 +600,11 @@ async def send_ws_json_no_wait(websocket, message):
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
     params = cmd.get("payload", {})
+    if NETWORK and action in {"isolate", "unisolate"}:
+        try:
+            return await asyncio.to_thread(scoped_isolation, action, MANAGER_URL, websocket.remote_address)
+        except (CollectionError, OSError, ValueError) as error:
+            return {"status": "failed", "message": str(error)}
     handler = COMMAND_HANDLERS.get(action)
     if not handler:
         return {"status": "error", "message": f"Unknown action '{action}'"}
@@ -609,6 +623,8 @@ async def send_stats(websocket):
             if response and isinstance(response, dict):
                 if response.get("status") == "ack":
                     last_heartbeat_ack_time = time.time()
+                if NETWORK and response.get("network_command"):
+                    NETWORK.deliver(response["network_command"])
                 if "pending_commands" in response:
                     for cmd in response["pending_commands"]:
                         ack_payload = await execute_command(websocket, cmd)
@@ -774,17 +790,16 @@ async def watchdog_task():
             os._exit(1)
 
 def get_manager_ws_url():
-    url = _resolve_manager_url()
-    sep = "&" if "?" in url else "?"
-    if "agent_id=" not in url:
-        url = f"{url}{sep}agent_id={AGENT_ID}"
-    return url
+    url = urlsplit(MANAGER_URL)
+    query = [(key, value) for key, value in parse_qsl(url.query) if key != "agent_id"]
+    return urlunsplit(url._replace(query=urlencode([*query, ("agent_id", AGENT_ID)])))
 
 async def main_agent():
     global last_heartbeat_ack_time
     retry_delay = 2
     max_delay = 15
     ws_url = get_manager_ws_url()
+    enrollment = websocket_auth(ws_url)
 
     try:
         global_dns_sniffer.start_background_sniffer()
@@ -799,19 +814,24 @@ async def main_agent():
                 open_timeout=10,
                 ping_interval=15,
                 ping_timeout=15,
+                **enrollment,
             ) as ws:
                 print(f"[{AGENT_ID}] Successfully connected to {ws_url}", flush=True)
                 retry_delay = 2  # Reset exponential backoff upon successful connection
                 last_heartbeat_ack_time = time.time()  # Reset watchdog timer upon connect
-                await asyncio.gather(
-                    send_stats(ws),
-                    send_risk_telemetry(ws),
-                    send_process_list(ws),
-                    send_flow_stats(ws),
-                    send_fim_alerts(ws),
-                    web_log_monitor_task(ws),
-                    watchdog_task(),
-                )
+                workers = [
+                    send_stats(ws), send_risk_telemetry(ws), send_process_list(ws), send_flow_stats(ws),
+                    send_fim_alerts(ws), web_log_monitor_task(ws), watchdog_task(),
+                ]
+                if NETWORK:
+                    workers.append(NETWORK.run(partial(send_ws_json_no_wait, ws)))
+                tasks = [asyncio.create_task(worker) for worker in workers]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
         except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError, OSError) as e:
             print(f"[{AGENT_ID}] Connection lost/refused: {e}. Reconnecting in {retry_delay}s...", flush=True)
         except Exception as e:

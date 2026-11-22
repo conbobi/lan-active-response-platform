@@ -86,6 +86,7 @@ class ProcessTreeService:
         return {
             "pid": proc.pid,
             "parent_pid": proc.parent_pid,
+            "process_start_time": getattr(proc, "process_start_time", None),
             "name": proc.name,
             "exe": proc.exe or getattr(proc, "exe_path", "") or "",
             "cmdline": proc.cmdline or "",

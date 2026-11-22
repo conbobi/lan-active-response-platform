@@ -15,7 +15,10 @@ export const subscribeLoading = () => () => { };
 api.interceptors.response.use(
     (res) => res.data,
     (err) => {
-        const message = err.response?.data?.detail || err.response?.data?.error || err.message || 'Something went wrong';
+        const detail = err.response?.data?.detail;
+        const message = Array.isArray(detail)
+            ? detail.map(item => item.msg).filter(Boolean).join(' · ')
+            : detail || err.response?.data?.error || err.message || 'Something went wrong';
         return Promise.reject(new Error(message));
     }
 );

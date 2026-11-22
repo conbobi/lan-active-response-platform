@@ -1,11 +1,20 @@
 import logging
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from app.core.database import async_engine
 from app.models.base import Base
 # Import all models to ensure they are registered with Base.metadata
 import app.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_process_instance_column(connection):
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("ALTER TABLE process_info ADD COLUMN IF NOT EXISTS process_start_time DOUBLE PRECISION"))
+        return
+    columns = inspect(connection).get_columns("process_info")
+    if all(column["name"] != "process_start_time" for column in columns):
+        connection.execute(text("ALTER TABLE process_info ADD COLUMN process_start_time DOUBLE PRECISION"))
 
 
 async def init_db() -> None:

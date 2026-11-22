@@ -5,7 +5,8 @@ from app.repositories.command_repository import CommandRepository
 from app.schemas.command import CommandCreate
 from app.schemas.command_ack import CommandAckDTO
 from app.schemas.enums import CommandStatus
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.network_security import is_reserved_action
 from app.services.core.base import AbstractService
 from app.services.core.command_dispatcher import command_dispatcher
 
@@ -17,6 +18,8 @@ class CommandService(AbstractService[CommandRepository]):
         self.session = session
 
     async def issue_command(self, dto: CommandCreate) -> Command:
+        if is_reserved_action(dto.action):
+            raise BadRequestError("Use the authenticated network action endpoint")
         cmd = Command(
             id=dto.id,
             agent_id=dto.agent_id,
@@ -31,12 +34,14 @@ class CommandService(AbstractService[CommandRepository]):
 
     async def get_command(self, command_id: str) -> Command:
         cmd = await self.repository.get(command_id)
-        if not cmd:
+        if not cmd or is_reserved_action(cmd.action):
             raise NotFoundError(f"Command '{command_id}' not found.")
         return cmd
 
     async def list_commands(self, skip: int = 0, limit: int = 100) -> List[Command]:
-        return await self.repository.list(skip=skip, limit=limit)
+        from sqlalchemy import select
+        statement = select(Command).where(~Command.action.startswith("network_", autoescape=True)).offset(skip).limit(limit)
+        return list((await self.session.scalars(statement)).all())
 
     async def process_ack(self, ack_data: CommandAckDTO) -> Command:
         cmd = await command_dispatcher.verify_execution(ack_data, self.session)

@@ -14,6 +14,10 @@ StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=MANAGER_URL=wss://edr.alwayready.id.vn/ws/agent
+EnvironmentFile=-/etc/larp-agent/network.env
+StateDirectory=larp-agent
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
+

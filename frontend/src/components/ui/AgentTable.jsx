@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { FiEye, FiSlash, FiLock, FiUnlock, FiServer, FiTrash2 } from 'react-icons/fi';
+import { useState } from 'react';
+import { FiEye, FiSlash, FiLock, FiServer, FiTrash2 } from 'react-icons/fi';
 import Badge from './Badge';
 
 export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onCleanupOffline }) {
@@ -99,9 +99,7 @@ export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onClean
                     </div>
                   </td>
                   <td>
-                    {a.firewall
-                      ? <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 600 }}>Active</span>
-                      : <span style={{ color: 'var(--error)', fontSize: '0.8rem' }}>Off</span>}
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>See Agent details</span>
                   </td>
                   <td>
                     <div className="table-actions">

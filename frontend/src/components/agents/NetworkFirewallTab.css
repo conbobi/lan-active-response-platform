@@ -1,0 +1,65 @@
+.network-stack {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+.network-stack p { margin: 0; }
+.network-heading { justify-content: space-between; }
+.network-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.network-controls label,
+.network-stack label:not(.network-check) {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+.network-controls input:not([type="checkbox"]),
+.network-controls select,
+.network-confirm textarea,
+.network-confirm select {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  max-width: 100%;
+}
+.network-stack .network-check { display: flex; align-items: center; gap: 0.35rem; }
+.network-muted { color: var(--text-secondary); font-size: 0.85rem; }
+.network-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 0.7rem;
+  margin: 0;
+}
+.network-cards > div,
+.network-panel {
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  padding: 0.65rem;
+  overflow-wrap: anywhere;
+}
+.network-cards dt { color: var(--text-secondary); font-size: 0.8rem; }
+.network-cards dd { margin: 0.2rem 0 0; font-weight: 600; }
+.network-copy { display: inline-flex; align-items: center; gap: 0.25rem; }
+.network-copy .modal-close { width: 24px; height: 24px; }
+.network-table-scroll { overflow: auto; max-height: 55vh; min-width: 0; }
+.network-table td, .network-table th { white-space: nowrap; }
+.network-table td pre { white-space: pre-wrap; max-width: 360px; max-height: 280px; overflow: auto; }
+.network-table th { position: sticky; top: 0; background: var(--bg-elevated); z-index: 1; }
+.network-table th .filter-tab { font-size: inherit; padding: 0; }
+.network-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgb(0 0 0 / 60%);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.network-confirm-box { max-width: 32rem; }

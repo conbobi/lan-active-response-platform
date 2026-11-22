@@ -31,6 +31,10 @@ services:
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU
       - OLLAMA_URL=http://ollama:11434
       - AI_MODEL=sec-q6
+      - NETWORK_AGENT_TOKENS
+      - NETWORK_OPERATORS
+      - NETWORK_LEGACY_ADMIN_TOKEN
+      - DEBUG=${LARP_MANAGER_DEBUG:-false}
     depends_on:
       db:
         condition: service_healthy

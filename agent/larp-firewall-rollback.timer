@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for pending LARP UFW transactions
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+Unit=larp-firewall-rollback.service
+
+[Install]
+WantedBy=timers.target

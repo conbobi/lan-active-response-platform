@@ -37,6 +37,8 @@ from app.repositories.auth_event_repository import AuthEventRepository
 from app.models.web_access_log import WebAccessLog
 from app.repositories.web_access_log_repository import WebAccessLogRepository
 from app.core.database import AsyncSessionLocal
+from app.core.network_security import authenticate_agent, is_enrolled
+from app.services.agent import network_service
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,7 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
                 agent_id=target_agent_id,
                 pid=pid,
                 parent_pid=parent_pid,
+                process_start_time=safe_float(proc_item.get("process_start_time"), None),
                 name=safe_str(proc_item.get("name"), 128, "unknown"),
                 exe=safe_str(
                     proc_item.get("exe") or proc_item.get("path"), 512
@@ -150,6 +153,8 @@ async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) ->
     active_agent_id = dto.agent_id or agent_id
     agent_svc = AgentService(session)
     await agent_svc.process_heartbeat(dto)
+    if str(dto.platform).lower() in {"windows", "darwin"}:
+        await network_service.mark_unsupported(session, active_agent_id, dto.platform.lower())
 
     pending_cmds = await command_dispatcher.pull_pending_commands(active_agent_id, session)
     response_payload = {
@@ -429,6 +434,10 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
 async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     dto = CommandAckDTO(**payload)
+    from app.models.command import Command
+    existing = await session.get(Command, dto.command_id)
+    if existing and (existing.agent_id != agent_id or existing.action in network_service.ACTIONS):
+        return {"status": "error", "message": "Invalid command acknowledgement"}
     cmd = await command_dispatcher.verify_execution(dto, session)
     if not cmd:
         logger.warning(f"Command ack received for unknown command '{dto.command_id}' on agent '{agent_id}'")
@@ -743,47 +752,85 @@ async def agent_websocket_endpoint(websocket: WebSocket):
     Receives JSON messages, dispatches to appropriate services, and returns responses or commands.
     """
     agent_id = websocket.query_params.get("agent_id", "unknown")
+    enrolled = is_enrolled(agent_id)
+    authenticated = enrolled and authenticate_agent(agent_id, websocket.headers.get("x-larp-agent-token"))
+    if enrolled and not authenticated:
+        await websocket.close(code=1008)
+        return
     await connection_manager.connect(agent_id, websocket)
+    if authenticated:
+        previous = connection_manager.authenticated_connections.get(agent_id)
+        connection_manager.authenticated_connections[agent_id] = websocket
+        if previous is not None:
+            try:
+                await previous.close(code=1008)
+            except (RuntimeError, WebSocketDisconnect):
+                logger.debug("Previous Agent socket already closed")
 
     try:
         while True:
-            try:
-                raw_text = await websocket.receive_text()
-            except Exception as e:
-                logger.warning(f"WebSocket receive error: {e}")
+            raw_text = await websocket.receive_text()
+            if authenticated and connection_manager.authenticated_connections.get(agent_id) is not websocket:
                 break
-
+            if len(raw_text) > 2_000_000 and raw_text.lstrip().startswith('{"type": "NETWORK_'):
+                await websocket.close(code=1009)
+                break
             try:
                 data = json.loads(raw_text)
             except json.JSONDecodeError:
                 await websocket.send_json({"error": "Invalid JSON format"})
                 continue
-
-            msg_type = data.get("type", "").upper()
-            handler = MESSAGE_HANDLERS.get(msg_type)
+            if not isinstance(data, dict) or not isinstance(data.get("payload", {}), dict):
+                await websocket.send_json({"error": "Invalid message envelope"})
+                continue
+            payload = data.get("payload", {})
+            claims = [claim for claim in (payload.get("agent_id"), data.get("agent_id")) if claim is not None]
+            if any(not isinstance(claim, str) or (authenticated and claim != agent_id)
+                   or (not authenticated and is_enrolled(claim)) for claim in claims):
+                await websocket.close(code=1008)
+                break
+            msg_type = str(data.get("type", "")).upper()
+            network_message = msg_type in {"NETWORK_SNAPSHOT", "NETWORK_ACK", "NETWORK_TRANSACTION"}
+            if network_message and (not authenticated or connection_manager.authenticated_connections.get(agent_id) is not websocket):
+                await websocket.close(code=1008)
+                break
 
             async with AsyncSessionLocal() as session:
                 try:
-                    if not handler:
-                        response_payload = {"error": f"Unknown message type '{msg_type}'"}
+                    if msg_type == "NETWORK_SNAPSHOT":
+                        await network_service.store_snapshot(session, agent_id, payload)
+                        response_payload = None
+                    elif msg_type == "NETWORK_ACK":
+                        await network_service.acknowledge(session, agent_id, payload)
+                        response_payload = None
+                    elif msg_type == "NETWORK_TRANSACTION":
+                        await network_service.record_transaction(session, agent_id, payload.get("transaction", {}))
+                        response_payload = None
                     elif msg_type == "HEARTBEAT":
-                        response_payload, agent_id = await handler(agent_id, data, session)
-                    else:
+                        response_payload, agent_id = await _handle_heartbeat(agent_id, data, session)
+                        if authenticated:
+                            response_payload["network_command"] = await network_service.pull_network_command(session, agent_id)
+                    elif handler := MESSAGE_HANDLERS.get(msg_type):
                         response_payload = await handler(agent_id, data, session)
-
+                    else:
+                        response_payload = {"error": f"Unknown message type '{msg_type}'"}
                     await session.commit()
                     if response_payload:
                         await websocket.send_json(response_payload)
-                    logger.info(f"Successfully processed WS msg '{msg_type}' for agent '{agent_id}'")
-                except ValidationError as ve:
+                except (ValidationError, ValueError) as error:
                     await session.rollback()
-                    logger.error(f"WebSocket validation error: {ve}")
-                    await websocket.send_json({"error": "Validation error", "details": ve.errors()})
-                except Exception as e:
+                    logger.warning("Invalid %s for Agent '%s': %s", msg_type, agent_id, type(error).__name__)
+                    if not network_message:
+                        await websocket.send_json({"error": "Validation error"})
+                except Exception:
                     await session.rollback()
-                    logger.error(f"Error processing WS message: {e}", exc_info=True)
-                    await websocket.send_json({"error": str(e)})
-
-    except WebSocketDisconnect:
-        connection_manager.disconnect(agent_id)
-        logger.info(f"Agent '{agent_id}' disconnected from WebSocket.")
+                    logger.exception("Failed to process %s for Agent '%s'", msg_type, agent_id)
+                    if not network_message:
+                        await websocket.send_json({"error": "Message processing failed"})
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info("Agent '%s' disconnected from WebSocket.", agent_id)
+    finally:
+        if connection_manager.active_connections.get(agent_id) is websocket:
+            connection_manager.disconnect(agent_id)
+        if connection_manager.authenticated_connections.get(agent_id) is websocket:
+            connection_manager.authenticated_connections.pop(agent_id, None)

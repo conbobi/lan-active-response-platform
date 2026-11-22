@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply or recover a LARP UFW firewall transaction
+After=network.target ufw.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/larp-agent
+StateDirectory=larp-agent
+StateDirectoryMode=0700
+Environment=MANAGER_URL=wss://edr.alwayready.id.vn/ws/agent
+EnvironmentFile=-/etc/larp-agent/network.env
+ExecStart=/opt/larp-agent/venv/bin/python /opt/larp-agent/firewall_control.py worker
+TimeoutStartSec=120

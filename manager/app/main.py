@@ -5,7 +5,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.initializers.init_db import init_db
+from app.core.network_security import token_matches
+from app.initializers.init_db import ensure_process_instance_column, init_db
 from app.routers.v1 import api_router
 from app.websocket.agent_ws import agent_websocket_endpoint
 from app.websocket.dashboard_ws import router as dashboard_ws_router
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(ensure_process_instance_column)
         logger.info(f"[STARTUP] ✓ Tables ready: {len(Base.metadata.tables)} tables")
     except Exception as e:
         logger.error(f"[STARTUP] ✗ Failed to create tables: {e}")
@@ -89,6 +91,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def protect_sensitive_legacy_apis(request: Request, call_next):
+    """Keep unauthenticated legacy control routes outside enrolled deployments."""
+    network = request.url.path.startswith(f"{settings.API_V1_STR}/network/agents/")
+    if settings.NETWORK_LEGACY_ADMIN_TOKEN and request.url.path.startswith("/api/"):
+        read = request.method in {"GET", "HEAD", "OPTIONS"}
+        action_path = any(part in request.url.path.split("/") for part in {"actions", "commands"})
+        if not network and (not read or (action_path and request.method != "OPTIONS")):
+            kind, _, token = request.headers.get("authorization", "").partition(" ")
+            if kind.lower() != "bearer" or not token_matches(token, settings.NETWORK_LEGACY_ADMIN_TOKEN):
+                return JSONResponse({"detail": "Legacy administration requires its administrator token"}, status_code=401)
+    response = await call_next(request)
+    if network:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
+
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):

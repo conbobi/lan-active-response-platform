@@ -15,6 +15,7 @@ class ConnectionManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance.active_connections: Dict[str, WebSocket] = {}
+            cls._instance.authenticated_connections: Dict[str, WebSocket] = {}
         return cls._instance
 
     @classmethod

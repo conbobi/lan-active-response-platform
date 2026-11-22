@@ -6,6 +6,7 @@ from app.repositories.command_repository import CommandRepository
 from app.schemas.command_ack import CommandAckDTO
 from app.schemas.enums import CommandStatus
 from app.models.command import Command
+from app.core.network_security import is_reserved_action
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class CommandDispatcher:
     async def pull_pending_commands(self, agent_id: str, session: AsyncSession) -> List[Command]:
         """Pull and mark pending commands for a specific agent."""
         repo = CommandRepository(session)
-        pending = await repo.get_pending_by_agent(agent_id)
+        pending = [cmd for cmd in await repo.get_pending_by_agent(agent_id) if not is_reserved_action(cmd.action)]
         for cmd in pending:
             cmd.send_to_agent()
         await session.flush()
@@ -42,7 +43,7 @@ class CommandDispatcher:
         """Verify command execution acknowledgement from agent."""
         repo = CommandRepository(session)
         cmd = await repo.get(ack_data.command_id)
-        if not cmd:
+        if not cmd or is_reserved_action(cmd.action):
             logger.warning(f"Ack received for unknown command '{ack_data.command_id}'.")
             return None
 

@@ -24,7 +24,7 @@ from app.core.exceptions import (
 logger = logging.getLogger(__name__)
 
 # Actions không thể rollback — process đã chết
-UNROLLBACKABLE_ACTIONS = {"kill_process", "kill_process_tree"}
+UNROLLBACKABLE_ACTIONS = {"kill_process", "kill_process_tree", "network_firewall"}
 
 
 

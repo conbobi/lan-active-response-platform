@@ -25,6 +25,8 @@ apt-get install -y --no-install-recommends \
     libyara-dev \
     ufw \
     iptables \
+    iproute2 \
+    nftables \
     procps \
     net-tools \
     curl \
@@ -46,7 +48,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
     cp -r "$SCRIPT_DIR"/commands/* "$INSTALL_DIR/commands/" 2>/dev/null || true
     cp -r "$SCRIPT_DIR"/vulnerable_web/* "$INSTALL_DIR/vulnerable_web/" 2>/dev/null || true
     cp "$SCRIPT_DIR"/requirements.txt "$INSTALL_DIR/" 2>/dev/null || true
-    cp "$SCRIPT_DIR"/*.service "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR"/*.service "$SCRIPT_DIR"/*.timer "$INSTALL_DIR/"
 fi
 
 # Chuẩn bị file log cho web & auth monitoring
@@ -72,12 +74,13 @@ echo " [4/5] Đăng ký Systemd Services (larp-agent & vulnerable-web)..."
 echo "=============================================================================="
 cp "$INSTALL_DIR/larp-agent.service" /etc/systemd/system/larp-agent.service
 cp "$INSTALL_DIR/vulnerable-web.service" /etc/systemd/system/vulnerable-web.service
+install -m 0644 "$INSTALL_DIR/larp-firewall-rollback.service" "$INSTALL_DIR/larp-firewall-rollback.timer" /etc/systemd/system/
 
 systemctl daemon-reload
 
-echo "[*] Kích hoạt và khởi động dịch vụ Vulnerable Web (port 5000)..."
-systemctl enable vulnerable-web
-systemctl restart vulnerable-web
+if [ "${LARP_START_VULNERABLE_WEB:-0}" = "1" ]; then
+    systemctl start vulnerable-web
+fi
 
 echo "[*] Kích hoạt và khởi động dịch vụ LARP EDR Linux Agent..."
 systemctl enable larp-agent
@@ -104,3 +107,4 @@ echo " - Xem log Agent:         journalctl -u larp-agent -f"
 echo " - Xem log Web App:       journalctl -u vulnerable-web -f"
 echo " - Xem log HTTP Access:   tail -f /var/log/vulnerable_web/access.log"
 echo "=============================================================================="
+
