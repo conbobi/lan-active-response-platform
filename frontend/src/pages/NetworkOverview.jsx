@@ -185,9 +185,9 @@ export default function NetworkOverview() {
         <ConnectionDetail
           conn={selected}
           onClose={() => setSelected(null)}
-          onBlockIP={() => alert(`Block IP ${selected.dst_ip}: Đang gửi lệnh cách ly firewall`)}
-          onKillProcess={() => navigate(`/investigate?tab=process&agent=${encodeURIComponent(selected.agent_id)}&pid=${selected.pid}`)}
-          onInvestigate={() => navigate(`/investigate?tab=process&agent=${encodeURIComponent(selected.agent_id)}&pid=${selected.pid}`)}
+          onInvestigate={selected.pid && selected.process_start_time
+            ? () => navigate(`/investigate?tab=process&agent=${encodeURIComponent(selected.agent_id)}&pid=${selected.pid}&started=${selected.process_start_time}`)
+            : null}
         />
       )}
     </div>

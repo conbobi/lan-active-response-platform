@@ -14,7 +14,7 @@ class NetworkConnectionRule(RiskRule):
     description = "Scores uncommon destinations and threat intelligence matches."
     category = "network"
 
-    DEFAULT_SUSPICIOUS_PORTS = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445, 9001, 8443}
+    DEFAULT_SUSPICIOUS_PORTS = {23, 445, 1337, 4444, 4445, 5555, 6667, 8080, 8443, 9001, 9002, 31337}
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
         ports = set(self.config.get("suspicious_ports", self.DEFAULT_SUSPICIOUS_PORTS))

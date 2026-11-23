@@ -174,9 +174,10 @@ export const useGroups = ({ autoFetch = true } = {}) => {
   };
 
   const handleBatchIsolate = async (groupId, reason, autoRollbackSecs = 300) => {
+    if (!window.confirm(`Xác nhận cô lập nhóm ${groupId}?`)) return;
     setActionLoading(true);
     try {
-      const res = await executeGroupAction(groupId, 'isolate', { reason }, autoRollbackSecs);
+      const res = await executeGroupAction(groupId, 'isolate', { reason, confirmed: true }, autoRollbackSecs);
       await fetchGroupDetail(groupId);
       await fetchGroups();
       return res;

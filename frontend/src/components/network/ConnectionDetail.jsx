@@ -1,13 +1,10 @@
 import React from 'react';
-import OSILayer from './OSILayer';
 
 const RISK_BADGE = {
   high:   'bg-red-600 text-white',
   medium: 'bg-orange-600 text-white',
   low:    'bg-green-600 text-white',
 };
-
-const C2_PORTS = [4444, 4445, 5555, 1337, 31337, 9001, 9002];
 
 function Section({ title, children }) {
   return (
@@ -30,10 +27,10 @@ function Field({ label, value, mono, small, highlight }) {
   );
 }
 
-export default function ConnectionDetail({ conn, onClose, onBlockIP, onKillProcess, onInvestigate }) {
+export default function ConnectionDetail({ conn, onClose, onInvestigate }) {
   if (!conn) return null;
   
-  const isC2Port = C2_PORTS.includes(conn.dst_port);
+  const socket = conn.socket_evidence;
   const reasons = conn.reasons || (conn.reason ? [conn.reason] : []);
   
   return (
@@ -60,30 +57,19 @@ export default function ConnectionDetail({ conn, onClose, onBlockIP, onKillProce
       <Section title="📦 Process Context">
         <Field label="Name" value={conn.process_name} mono />
         <Field label="PID" value={conn.pid} mono />
+        <Field label="Attribution" value={socket?.attribution_reason || socket?.attribution} />
+        {socket?.holders?.map((holder) => (
+          <Field key={holder.pid} label={`Holder PID ${holder.pid}`} value={holder.process_name} mono />
+        ))}
       </Section>
       
-      <Section title="🎯 Destination">
-        <Field label="IP" value={conn.dst_ip} mono />
-        <Field label="Port" value={conn.dst_port} mono highlight={isC2Port} />
-        <Field label="Protocol" value={conn.protocol} mono />
+      <Section title="Socket">
+        <Field label="Local" value={`${conn.src_ip}:${conn.src_port}`} mono />
+        <Field label="Remote" value={`${conn.dst_ip}:${conn.dst_port}`} mono />
+        <Field label="State" value={[conn.protocol, socket?.status, socket?.direction].filter(Boolean).join(' · ')} />
+        {socket?.overlay && <Field label="Overlay" value={socket.overlay} />}
       </Section>
-      
-      <Section title="🔍 OSI Breakdown">
-        <OSILayer layer="L3" label="Network" value={`${conn.dst_ip}/24`} />
-        <OSILayer 
-          layer="L4" 
-          label="Transport" 
-          value={`${conn.protocol}:${conn.dst_port}`}
-          note={isC2Port ? '⚠ Cổng C2 phổ biến' : null}
-          warning={isC2Port}
-        />
-        <OSILayer 
-          layer="L7" 
-          label="Application" 
-          value={isC2Port ? 'Unknown (raw TCP)' : 'HTTP/TLS'}
-        />
-      </Section>
-      
+
       {reasons.length > 0 && (
         <Section title="📊 Why Flagged">
           <ul className="text-sm space-y-1">
@@ -97,26 +83,13 @@ export default function ConnectionDetail({ conn, onClose, onBlockIP, onKillProce
         </Section>
       )}
       
-      <div className="mt-auto p-4 border-t space-y-2 bg-gray-50">
-        <button
-          onClick={onBlockIP}
-          className="w-full bg-red-600 hover:bg-red-700 text-white py-2 rounded text-sm font-medium"
-        >
-          🚫 Block IP
-        </button>
-        <button
-          onClick={onKillProcess}
-          className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 rounded text-sm font-medium"
-        >
-          🛑 Kill Process
-        </button>
-        <button
-          onClick={onInvestigate}
-          className="w-full border border-gray-300 hover:bg-gray-100 py-2 rounded text-sm font-medium"
-        >
-          🔍 Full Investigation
-        </button>
-      </div>
+      {onInvestigate && (
+        <div className="mt-auto p-4 border-t bg-gray-50">
+          <button onClick={onInvestigate} className="w-full border rounded py-2 text-sm">
+            View verified process in tree
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

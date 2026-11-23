@@ -18,9 +18,11 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
   }, [isOpen, process]);
 
   if (!process) return null;
+  const verifiedTarget = process.process_start_time > 0 && (process.parent_pid ?? process.ppid) > 0 &&
+    (process.exe_path || process.exe || '').startsWith('/');
 
   async function handleConfirm() {
-    if (loading) return; // Guard double-click
+    if (loading || !verifiedTarget) return;
     setLoading(true);
     setError(null);
     try {
@@ -54,7 +56,8 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
           ⚠️ Hành động không thể hoàn tác
         </div>
         <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary, #64748b)' }}>
-          Process sẽ bị kill ngay lập tức trên agent <strong>{agentId}</strong>. Không thể khôi phục.
+          {verifiedTarget ? <>Agent <strong>{agentId}</strong> sẽ kiểm tra lại danh tính process trước khi kết thúc.</>
+            : 'Thiếu thời điểm khởi chạy, PPID hoặc đường dẫn executable đã quan sát.'}
         </div>
       </div>
 
@@ -190,7 +193,7 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
         <Button
           variant="danger"
           onClick={handleConfirm}
-          disabled={loading}
+          disabled={loading || !verifiedTarget}
         >
           {loading ? "⏳ Đang kill..." : "☠️ Xác nhận Kill"}
         </Button>

@@ -284,7 +284,7 @@ export default function Dashboard() {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                 <span style={{ fontWeight: 800, color: isHighOrCriticalThreat ? 'var(--critical)' : '#f87171', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
                                     {isHighOrCriticalThreat ? '🔴 CRITICAL THREAT ACTIVE: ' : '🚨 ACTIVE THREAT DETECTED: '}
-                                    {criticalActiveIncident.title || 'LOLBin Reverse Shell / C2'}
+                                    {criticalActiveIncident.title || 'High Risk Incident'}
                                 </span>
                                 <span style={{
                                     fontSize: '0.75rem',

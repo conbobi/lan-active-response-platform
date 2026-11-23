@@ -62,6 +62,7 @@ async def flow_detail(
         'id': flow.id,
         'process_name': flow.process_name or 'unknown',
         'pid': flow.pid,
+        'socket_evidence': flow.socket_evidence,
         'src_ip': flow.src_ip,
         'src_port': flow.src_port,
         'dst_ip': flow.dst_ip,

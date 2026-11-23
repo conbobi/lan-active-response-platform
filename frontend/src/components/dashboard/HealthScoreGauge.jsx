@@ -14,6 +14,7 @@ function getTimeAgo(timestamp) {
 }
 
 function extractAttackType(incident) {
+  if (incident.detection_evidence?.classification) return incident.detection_evidence.classification;
   if (incident.parent_process?.name && incident.culprit_process?.name) {
     return `${incident.parent_process.name} → ${incident.culprit_process.name}`;
   }
@@ -27,7 +28,7 @@ function extractAttackType(incident) {
     const rules = incident.factors_breakdown.map(f => f.rule);
     if (rules.includes('living_off_land')) return 'LOLBin Abuse';
     if (rules.includes('credential_dumping')) return 'Credential Dumping';
-    if (rules.includes('c2_communication') || rules.includes('http_beaconing') || rules.includes('dns_tunneling')) return 'C2 Communication';
+    if (rules.includes('c2_communication') || rules.includes('http_beaconing') || rules.includes('dns_tunneling')) return 'Possible C2 Communication';
     if (rules.includes('ml_behavioral_anomaly')) return 'Behavioral Anomaly';
     if (rules.includes('suspicious_process')) return 'Suspicious Process';
   }
@@ -38,7 +39,7 @@ function extractAttackType(incident) {
   }
   if (factors.living_off_land) return 'LOLBin Abuse';
   if (factors.credential_dumping) return 'Credential Dumping';
-  if (factors.c2_communication) return 'C2 Communication';
+  if (factors.c2_communication) return 'Possible C2 Communication';
   if (factors.suspicious_process) return 'Suspicious Process';
   if (factors.ml_behavioral_anomaly) return 'Behavioral Anomaly';
   return incident.title || incident.description || 'Unknown Attack';

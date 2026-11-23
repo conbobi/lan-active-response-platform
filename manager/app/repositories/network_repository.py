@@ -4,6 +4,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.flow import Flow
 from app.models.threat_indicator import ThreatIndicator
+from app.services.detection.network_shell import detect_network_shell
+from app.services.detection.risk_rules.network_connection_rule import NetworkConnectionRule
 
 
 class NetworkRepository:
@@ -25,7 +27,6 @@ class NetworkRepository:
     ) -> List[Dict[str, Any]]:
         since = self._time_filter(time_range)
 
-        SUSPICIOUS_PORTS = [4444, 4445, 5555, 1337, 31337, 9001, 9002]
         SUSPICIOUS_PROCS = [
             'msbuild.exe', 'certutil.exe', 'rundll32.exe',
             'regsvr32.exe', 'mshta.exe', 'wmic.exe',
@@ -52,13 +53,24 @@ class NetworkRepository:
         for f in flows:
             risk_level = 'low'
             reasons = []
+            socket = f.socket_evidence or {}
+            match = detect_network_shell({**socket, "protocol": f.protocol, "src_ip": f.src_ip,
+                                          "src_port": f.src_port, "dst_ip": f.dst_ip, "dst_port": f.dst_port})
+            holders = socket.get("holders")
+            holder = None
+            if isinstance(holders, list):
+                holder = next((proc for proc in holders[:16] if isinstance(proc, dict) and proc.get("pid") == f.pid), None)
 
-            if f.dst_port in SUSPICIOUS_PORTS:
-                risk_level = 'high'
-                reasons.append(f'Port {f.dst_port} thường là C2')
+            if match:
+                risk_level = match["severity"]
+                reasons.append(match["classification"])
+                holder = match["process"]
+            elif f.dst_port in NetworkConnectionRule.DEFAULT_SUSPICIOUS_PORTS and socket.get("direction") != "inbound":
+                reasons.append(f'Uncommon destination port {f.dst_port}')
 
             if f.process_name and f.process_name.lower() in SUSPICIOUS_PROCS:
-                risk_level = 'high'
+                if risk_level == 'low':
+                    risk_level = 'medium'
                 reasons.append(f'{f.process_name} không nên connect mạng')
 
             if f.dst_ip in ioc_ips:
@@ -71,13 +83,21 @@ class NetworkRepository:
             if risk and risk_level != risk:
                 continue
 
+            name = (f.process_name or "unknown") if not match else "unknown"
+            pid = f.pid if not match else None
+            if holder:
+                name = holder.get("name") or holder.get("process_name") or "unknown"
+                pid = holder["pid"]
             out.append({
                 'id': f.id,
-                'process_name': f.process_name or 'unknown',
-                'pid': f.pid,
+                'process_name': name,
+                'pid': pid,
+                'process_start_time': holder.get("process_start_time") if holder else None,
+                'socket_evidence': socket or None,
                 'dst_ip': f.dst_ip,
                 'dst_port': f.dst_port,
                 'src_ip': f.src_ip,
+                'src_port': f.src_port,
                 'protocol': f.protocol,
                 'agent_id': f.agent_id,
                 'risk_level': risk_level,
@@ -87,11 +107,11 @@ class NetworkRepository:
                 'bytes_sent': f.bytes_sent,
             })
 
-        # Dedupe theo process+dst, giữ cái mới nhất
         seen = set()
         deduped = []
         for item in out:
-            key = (item['process_name'], item['dst_ip'], item['dst_port'])
+            key = tuple(item[field] for field in ('agent_id', 'protocol', 'src_ip', 'src_port', 'dst_ip', 'dst_port',
+                                                  'pid', 'process_start_time'))
             if key not in seen:
                 seen.add(key)
                 deduped.append(item)

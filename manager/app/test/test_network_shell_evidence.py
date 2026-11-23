@@ -232,3 +232,30 @@ async def test_failed_kill_ack_requires_verified_pid_exit_and_is_audited():
         assert audit.event == "failed"
         assert audit.metadata_["target_pid"] == 809
         assert audit.metadata_["result"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_network_view_uses_same_behavior_evidence_and_weak_port_signal():
+    from app.models.threat_indicator import ThreatIndicator
+    from app.repositories.network_repository import NetworkRepository
+
+    engine = create_engine("sqlite://")
+    for model in (Agent, Flow, ThreatIndicator):
+        model.__table__.create(engine)
+    with Session(engine) as database:
+        weak = event(process(name="curl"), src_port=31001)
+        strong = event(process(socket_fds=[0, 1], stdio_fds=[0, 1], interactive=True), dst_port=29090)
+        now = datetime.now(timezone.utc)
+        for flow_id, sampled in (("weak", weak), ("strong", strong)):
+            database.add(Flow(
+                id=flow_id, src_ip=sampled["src_ip"], src_port=sampled["src_port"],
+                dst_ip=sampled["dst_ip"], dst_port=sampled["dst_port"], protocol="TCP",
+                start_time=now, socket_evidence=sampled,
+            ))
+        database.commit()
+        repo = NetworkRepository(DatabaseSession(database))
+        low, = await repo.get_suspicious(risk="low")
+        high, = await repo.get_suspicious(risk="high")
+        assert low["id"] == "weak" and "C2" not in low["reason"]
+        assert high["id"] == "strong" and high["pid"] == 809
+        assert high["process_start_time"] == 809.0

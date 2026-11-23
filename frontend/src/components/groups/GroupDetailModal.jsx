@@ -104,7 +104,7 @@ export default function GroupDetailModal({
     try {
       const res = await executeGroupAction(currentGroup.id, {
         action_type: 'isolate',
-        action_params: { reason },
+        action_params: { reason, confirmed: true },
         auto_rollback_seconds: autoRollbackSeconds,
       });
 
@@ -118,7 +118,7 @@ export default function GroupDetailModal({
           showToast(`Cô lập thất bại: ${firstError}`, 'error', 8000);
         }
       } else {
-        showToast(`Đã cô lập thành công nhóm ${currentGroup.name}!`, 'success', 5000);
+        showToast(`Đã gửi yêu cầu cô lập nhóm ${currentGroup.name}.`, 'success', 5000);
       }
 
       setIsolateModalOpen(false);

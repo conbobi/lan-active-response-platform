@@ -78,7 +78,7 @@ def _process(row, sample_started):
     if not row.get("inode"):
         return {"pid": None, "attribution": "unverified_socket"}
     target = f"socket:[{row['inode']}]"
-    candidates = []
+    candidates = {}
     socket_changed = False
     for pid_val, fd_val in row["owners"]:
         try:
@@ -97,15 +97,16 @@ def _process(row, sample_started):
                 except psutil.AccessDenied:
                     exe, owner = None, None
             if psutil.Process(pid).create_time() == start and os.readlink(link) == target:
-                candidates.append({
+                candidates[pid] = {
                     "pid": pid, "process_start_time": start, "process_name": name[:120],
                     "exe_path": exe[:500] if exe else None, "process_owner": owner, "attribution": "inode_verified"
-                })
+                }
         except (psutil.Error, OSError):
             continue
     if candidates:
-        non_root = [c for c in candidates if c.get("process_owner") and c["process_owner"] not in {"root", "sshd"}]
-        return non_root[-1] if non_root else candidates[-1]
+        if len({pid for pid, _ in row["owners"]}) > 1:
+            return {"pid": None, "attribution": "shared_socket", "holders": list(candidates.values())}
+        return next(iter(candidates.values()))
     if socket_changed:
         return {"pid": None, "attribution": "socket_changed"}
     if len(row["owners"]) > 1:
