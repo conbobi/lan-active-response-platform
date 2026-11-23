@@ -64,6 +64,44 @@ def test_socket_activated_ssh_keeps_real_listener_port(monkeypatch):
 
 
 @pytest.fixture
+def ufw_user_files(tmp_path, monkeypatch):
+    files = [tmp_path / name for name in ("user.rules", "user6.rules")]
+    monkeypatch.setattr(control, "CONFIG_FILES", [None, None, *files])
+    monkeypatch.setattr(control, "_trusted_read", lambda path: (path.read_bytes(), 0o600))
+    for path, prefix in zip(files, ("ufw", "ufw6")):
+        path.write_text(
+            "*filter\n"
+            f":{prefix}-user-input - [0:0]\n"
+            f"-A {prefix}-user-input -p tcp --dport 22 -j ACCEPT\n"
+            f"-A {prefix}-user-input -p tcp --dport 80 -j ACCEPT\n"
+            f"-A {prefix}-user-input -p tcp --dport 443 -j ACCEPT\n"
+            f'-A {prefix}-after-logging-input -j LOG --log-prefix "[UFW BLOCK] " -m limit --limit 3/min --limit-burst 10\n'
+            f"-I {prefix}-logging-deny -m conntrack --ctstate INVALID -j RETURN -m limit --limit 3/min --limit-burst 10\n"
+            f'-A {prefix}-logging-allow -j LOG --log-prefix "[UFW ALLOW] " -m limit --limit 3/min --limit-burst 10\n'
+            "COMMIT\n"
+        )
+    return files
+
+
+def test_default_ufw_logging_allows_enable_preflight(ufw_user_files):
+    control._check_user_rules(22)
+
+
+@pytest.mark.parametrize(("rule", "error"), [
+    ("-A ufw-before-logging-input -j DROP", "Unexpected chain"),
+    ("-I ufw-before-logging-input -j DROP", "Unexpected rule"),
+    ("-A ufw-user-unknown -j ACCEPT", "Unexpected chain"),
+    ("-A ufw-user-output -p tcp --dport 443 -j DROP", "outbound or forwarding"),
+    ("-A ufw-user-input -p tcp --dport 22 -j DROP", "authorized SSH port"),
+])
+def test_ufw_preflight_still_rejects_custom_rules(ufw_user_files, rule, error):
+    path = ufw_user_files[0]
+    path.write_text(path.read_text().replace("COMMIT", f"{rule}\nCOMMIT"))
+    with pytest.raises(CollectionError, match=error):
+        control._check_user_rules(22)
+
+
+@pytest.fixture
 def host(tmp_path, monkeypatch):
     monkeypatch.setenv("STATE_DIRECTORY", str(tmp_path / "state"))
     monkeypatch.setenv("LARP_UFW_STATIC_SHA256", "pinned")

@@ -47,7 +47,7 @@ default.mkdir()
 for name in ("before.rules", "before6.rules", "after.rules", "after6.rules",
              "before.init", "after.init", "user.rules", "user6.rules"):
     shutil.copyfile(Path("/usr/share/ufw") / name, config / name)
-(config / "ufw.conf").write_text("ENABLED=no\nLOGLEVEL=off\n")
+(config / "ufw.conf").write_text("ENABLED=no\nLOGLEVEL=low\n")
 (config / "sysctl.conf").write_text("# isolated test; no sysctl changes\n")
 shutil.copyfile("/etc/default/ufw", default / "ufw")
 runtime_path = scratch / "run"
@@ -110,6 +110,7 @@ with ExitStack() as cleanup:
     validate_anchors("ACCEPT", (config / "before.rules").read_text(), (config / "before6.rules").read_text(),
                      [network], 2222, 443)
 
+    run("ufw", "allow", "80/tcp")  # Generates both user files while UFW is inactive.
     before = control._capture()
     clean = run("nft", "-j", "list", "ruleset")
     assert ufw_snapshot()["status"] == "inactive"

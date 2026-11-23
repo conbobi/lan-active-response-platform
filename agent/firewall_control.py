@@ -297,22 +297,58 @@ def _kernel_fingerprint(entries):
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
+def _generated_user_rules(prefix):
+    # UFW writes these logging and rate-limit rules alongside its inbound rules.
+    limit = ("-m", "limit", "--limit", "3/min", "--limit-burst", "10")
+    invalid = ("-m", "conntrack", "--ctstate", "INVALID")
+    log_allow = ("-j", "LOG", "--log-prefix", "[UFW ALLOW] ")
+    log_block = ("-j", "LOG", "--log-prefix", "[UFW BLOCK] ")
+    audit_invalid = ("-j", "LOG", "--log-prefix", "[UFW AUDIT INVALID] ")
+    audit = ("-j", "LOG", "--log-prefix", "[UFW AUDIT] ")
+    new_connection = ("-m", "conntrack", "--ctstate", "NEW")
+    rules = {
+        ("-I", f"{prefix}-logging-deny", *invalid, "-j", "RETURN", *limit),
+        ("-A", f"{prefix}-user-limit", "-m", "limit", "--limit", "3/minute",
+         "-j", "LOG", "--log-prefix", "[UFW LIMIT BLOCK] "),
+        ("-A", f"{prefix}-user-limit", "-j", "REJECT"),
+        ("-A", f"{prefix}-user-limit-accept", "-j", "ACCEPT"),
+    }
+    for rate in ((), limit):
+        rules.add(("-A", f"{prefix}-logging-allow", *log_allow, *rate))
+        rules.add(("-A", f"{prefix}-logging-deny", *log_block, *rate))
+        rules.add(("-A", f"{prefix}-logging-deny", *invalid, *audit_invalid, *rate))
+    for direction in ("input", "output", "forward"):
+        after = f"{prefix}-after-logging-{direction}"
+        before = f"{prefix}-before-logging-{direction}"
+        for rate in ((), limit):
+            rules.add(("-A", after, *log_allow, *rate))
+            rules.add(("-A", after, *log_block, *rate))
+        for match in ((), limit, (*new_connection, *limit)):
+            rules.add(("-I", before, *audit, *match))
+        rules.add(("-I", f"{prefix}-user-logging-{direction}", "-j", "RETURN"))
+    return rules
+
+
 def _check_user_rules(ssh_port):
-    for version, path in ((4, CONFIG_FILES[2]), (6, CONFIG_FILES[3])):
-        text = _trusted_read(path)[0].decode()
-        if any(line.startswith("*") and line != "*filter" for line in text.splitlines()):
-            raise CollectionError("UFW user files must contain only filter rules")
-        for line in text.splitlines():
-            if not line.startswith("-A "):
+    for prefix, path in (("ufw", CONFIG_FILES[2]), ("ufw6", CONFIG_FILES[3])):
+        generated_rules = _generated_user_rules(prefix)
+        content = _trusted_read(path)[0].decode()
+        for line_number, line in enumerate(content.splitlines(), 1):
+            line = line.strip()
+            if not line or line.startswith(("#", ":")) or line in {"*filter", "COMMIT"}:
                 continue
+            if line.startswith("*"):
+                raise CollectionError("UFW user files must contain only filter rules")
             args = shlex.split(line)
-            chain = args[1]
-            if not chain.startswith(("ufw-user-", "ufw6-user-")):
-                raise CollectionError("Unexpected chain in the UFW user configuration")
-            if re.fullmatch(r"ufw6?-user-(output|forward)", chain):
-                raise CollectionError("Custom outbound or forwarding rules require local administration")
-            if not re.fullmatch(r"ufw6?-user-input", chain):
+            if tuple(args) in generated_rules:
                 continue
+            if len(args) < 3 or args[0] != "-A":
+                raise CollectionError(f"Unexpected rule in the UFW user configuration ({path}:{line_number})")
+            chain = args[1]
+            if chain in {f"{prefix}-user-output", f"{prefix}-user-forward"}:
+                raise CollectionError("Custom outbound or forwarding rules require local administration")
+            if chain != f"{prefix}-user-input":
+                raise CollectionError(f"Unexpected chain in the UFW user configuration ({path}:{line_number})")
             fields = dict(zip(args[2::2], args[3::2]))
             if len(args[2:]) % 2 or set(fields) - {"-p", "-m", "-s", "-d", "-i", "--dport", "-j", "--comment"}:
                 raise CollectionError("Complex UFW rules require local administration")
