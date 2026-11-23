@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Set
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import AsyncSessionLocal
 
 from app.models.incident import Incident
 from app.models.process_info import ProcessInfo
@@ -25,30 +26,50 @@ class AITriageService:
     and root cause analysis grounded in endpoint telemetry.
     """
 
-    async def analyze_incident(self, incident_id: str, session: AsyncSession) -> Optional[AIAnalysis]:
-        """Run AI triage on an incident and persist results into ai_analysis table."""
+    async def analyze_incident(self, incident_id: str, session: Optional[AsyncSession] = None) -> Optional[AIAnalysis]:
+        """
+        Run AI triage on an incident and persist results into ai_analysis table.
+        Decoupled 3-phase execution:
+          Phase 1: DB Read Context (Short Session)
+          Phase 2: LLM Call (No DB session held across network I/O)
+          Phase 3: DB Write Result (Short Session)
+        """
+        # Phase 1: Pull incident and telemetry context
+        async def _fetch_context(s: AsyncSession):
+            inc = await s.get(Incident, incident_id)
+            if not inc:
+                return None, [], [], {}
+            ev = getattr(inc, "detection_evidence", None)
+            pt = []
+            fl = []
+            fc = {}
+            if not isinstance(ev, dict) or not ev:
+                pt = (await self._get_process_tree(s, inc.agent_id))[:20]
+                fl = (await self._get_recent_flows(s, inc.agent_id, inc.created_at, minutes=15))[:10]
+                if not (getattr(inc, "notes", None) or "").startswith(("rule_id:", "risk_source:")):
+                    fc = await self._get_risk_factors(
+                        s, inc.agent_id, inc.created_at, inc.description,
+                    )
+            return inc, pt, fl, fc
+
+        if session is not None:
+            incident, process_tree, flows, factors = await _fetch_context(session)
+            # Release read transaction if active
+            try:
+                await session.commit()
+            except Exception:
+                pass
+        else:
+            async with AsyncSessionLocal() as s:
+                incident, process_tree, flows, factors = await _fetch_context(s)
+
+        if not incident:
+            logger.warning(f"Incident {incident_id} not found for AI triage")
+            return None
+
+        # Phase 2: Call AI LLM without holding any active database connections
         result = None
         try:
-            # 1. Pull incident
-            incident = await session.get(Incident, incident_id)
-            if not incident:
-                logger.warning(f"Incident {incident_id} not found for AI triage")
-                return None
-
-            # 2. Pull context
-            evidence = getattr(incident, "detection_evidence", None)
-            process_tree = []
-            flows = []
-            factors = {}
-            if not isinstance(evidence, dict) or not evidence:
-                process_tree = (await self._get_process_tree(session, incident.agent_id))[:20]
-                flows = (await self._get_recent_flows(session, incident.agent_id, incident.created_at, minutes=15))[:10]
-                if not (getattr(incident, "notes", None) or "").startswith(("rule_id:", "risk_source:")):
-                    factors = await self._get_risk_factors(
-                        session, incident.agent_id, incident.created_at, incident.description,
-                    )
-
-            # 3. Build prompt
             prompt = self._build_prompt(
                 incident=incident,
                 process_tree=process_tree,
@@ -57,17 +78,14 @@ class AITriageService:
                 mitre_kb_ids=list(mitre_kb.valid_ids()),
             )
 
-            # 4. Call AI
-            logger.info(f"Calling Foundation-Sec AI triage for incident {incident_id}...")
+            logger.info(f"Calling Foundation-Sec AI triage for incident {incident_id} (0 DB connections held)...")
             result = await ai_client.generate(
                 prompt=prompt,
                 system=self._system_prompt(),
             )
 
-            # 5. Parse JSON from answer
             parsed = self._parse_json_answer(result.get("answer", ""))
 
-            # 6. Validate MITRE IDs (reject hallucinated)
             raw_techs = parsed.get("mitre_techniques", [])
             if not isinstance(raw_techs, list):
                 raw_techs = []
@@ -77,7 +95,6 @@ class AITriageService:
             for t in raw_techs:
                 if isinstance(t, dict):
                     tech_id = str(t.get("id", "")).strip().upper()
-                    # Rule 3: Chỉ gán nhãn T1071 nếu tiến trình ĐÃ BỊ COI LÀ ĐÁNG NGỜ
                     if tech_id.startswith("T1071"):
                         is_suspicious_t1071 = any(
                             getattr(p, "is_suspicious", False)
@@ -105,7 +122,6 @@ class AITriageService:
                     f"AI hallucinated {len(rejected_techs)} MITRE IDs for incident {incident_id}, rejected: {[t.get('id') for t in rejected_techs]}"
                 )
 
-            # 7. Check confidence calibration & classification
             classification = str(parsed.get("classification", "suspicious_unconfirmed")).strip()
             valid_classifications = {
                 "benign_expected", "suspicious_unconfirmed", "likely_malicious",
@@ -115,7 +131,6 @@ class AITriageService:
                 classification = "suspicious_unconfirmed"
 
             if classification == "benign_expected":
-                # Suppress offensive techniques for expected benign traffic
                 validated_techs = [t for t in validated_techs if not str(t.get("id", "")).startswith("T1071")]
 
             confidence = float(parsed.get("confidence", 0.75))
@@ -124,7 +139,6 @@ class AITriageService:
             elif confidence < 0.0:
                 confidence = 0.0
 
-            # Guard against overconfidence without strong supporting factors
             has_strong_evidence = bool(validated_techs and any(t.get("evidence") for t in validated_techs))
             if confidence >= 0.9 and not has_strong_evidence:
                 confidence = 0.70
@@ -149,20 +163,29 @@ class AITriageService:
             summary = summary[:4000]
             root_cause = str(parsed.get("root_cause", "")).strip()[:2000]
 
-            # 8. Save AI Analysis
-            ai_analysis = AIAnalysis(
-                incident_id=incident_id,
-                analysis_type="triage",
-                summary=summary,
-                mitre_techniques=validated_techs,
-                root_cause=root_cause,
-                model_name="foundation-sec",
-                confidence=round(confidence, 2),
-                raw_response=result.get("answer", "")[:8000],
-            )
-            session.add(ai_analysis)
-            await session.commit()
-            await session.refresh(ai_analysis)
+            # Phase 3: Persist successful analysis in short DB transaction
+            async def _persist_success(s: AsyncSession) -> AIAnalysis:
+                row = AIAnalysis(
+                    incident_id=incident_id,
+                    analysis_type="triage",
+                    summary=summary,
+                    mitre_techniques=validated_techs,
+                    root_cause=root_cause,
+                    model_name="foundation-sec",
+                    confidence=round(confidence, 2),
+                    raw_response=result.get("answer", "")[:8000],
+                )
+                s.add(row)
+                await s.commit()
+                await s.refresh(row)
+                return row
+
+            if session is not None:
+                ai_analysis = await _persist_success(session)
+            else:
+                async with AsyncSessionLocal() as s:
+                    ai_analysis = await _persist_success(s)
+
             logger.info(f"AI triage completed successfully for incident {incident_id} (confidence={confidence:.2f})")
             return ai_analysis
 
@@ -171,18 +194,25 @@ class AITriageService:
             logger.error(f"AI triage failed for incident {incident_id}: {err_msg}", exc_info=True)
             # Save error record so analysts know triage failed rather than hanging indefinitely
             try:
-                ai_analysis = AIAnalysis(
-                    incident_id=incident_id,
-                    analysis_type="triage",
-                    summary="[AI analysis failed]",
-                    error_message=err_msg[:500],
-                    model_name="foundation-sec",
-                    confidence=0.0,
-                    raw_response=result.get("answer", "")[:8000] if result else None,
-                )
-                session.add(ai_analysis)
-                await session.commit()
-                return ai_analysis
+                async def _persist_error(s: AsyncSession) -> AIAnalysis:
+                    row = AIAnalysis(
+                        incident_id=incident_id,
+                        analysis_type="triage",
+                        summary="[AI analysis failed]",
+                        error_message=err_msg[:500],
+                        model_name="foundation-sec",
+                        confidence=0.0,
+                        raw_response=result.get("answer", "")[:8000] if result else None,
+                    )
+                    s.add(row)
+                    await s.commit()
+                    return row
+
+                if session is not None:
+                    return await _persist_error(session)
+                else:
+                    async with AsyncSessionLocal() as s:
+                        return await _persist_error(s)
             except Exception as commit_err:
                 logger.error(f"Failed to save AI error record for incident {incident_id}: {commit_err}")
                 return None

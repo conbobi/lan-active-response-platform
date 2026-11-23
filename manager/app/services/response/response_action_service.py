@@ -79,9 +79,12 @@ class ResponseActionService:
             start = action_params.get("process_start_time")
             exe = action_params.get("exe_path")
             ppid = action_params.get("parent_pid")
+            is_valid_exe = isinstance(exe, str) and (
+                exe.startswith("/") or (len(exe) >= 3 and exe[1] == ":" and exe[2] in ("\\", "/"))
+            )
             if (type(pid) is not int or pid <= 2 or type(ppid) is not int or ppid <= 0
                     or type(start) not in (int, float) or not math.isfinite(start) or start <= 0
-                    or not isinstance(exe, str) or not exe.startswith("/")):
+                    or not is_valid_exe):
                 raise BadRequestError("PID, start time, executable and parent PID are required")
 
             from app.repositories.process_info_repository import ProcessInfoRepository

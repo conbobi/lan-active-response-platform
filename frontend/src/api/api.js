@@ -12,6 +12,22 @@ const api = axios.create({
 
 export const subscribeLoading = () => () => { };
 
+// Interceptor tự động đính kèm Authorization Bearer token nếu đã đăng nhập hoặc có token mạng
+api.interceptors.request.use((config) => {
+    try {
+        const token = sessionStorage.getItem('larp_network_token')
+            || localStorage.getItem('larp_network_token')
+            || localStorage.getItem('token');
+        if (token && !config.headers?.Authorization) {
+            config.headers = config.headers || {};
+            config.headers.Authorization = `Bearer ${token.trim()}`;
+        }
+    } catch {
+        // Fallback an toàn nếu localStorage/sessionStorage không khả dụng
+    }
+    return config;
+});
+
 // Interceptor xử lý response và lỗi
 api.interceptors.response.use(
     (res) => res.data,

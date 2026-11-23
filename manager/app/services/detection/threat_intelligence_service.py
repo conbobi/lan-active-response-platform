@@ -165,17 +165,22 @@ class ThreatIntelligenceService:
             )
 
         feed.status = "syncing"
+        feed_url = feed.url
+        feed_type = feed.feed_type
+        feed_name = feed.name
         await self.session.commit()
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(feed.url)
+                resp = await client.get(feed_url)
                 if resp.status_code != 200:
-                    feed.status = "error"
-                    await self.session.commit()
+                    feed = await self.feed_repo.get(feed_id)
+                    if feed:
+                        feed.status = "error"
+                        await self.session.commit()
                     return ThreatFeedSyncResult(
-                        feed_id=feed.id,
-                        name=feed.name,
+                        feed_id=feed_id,
+                        name=feed_name,
                         status="error",
                         indicators_added=0,
                         indicators_updated=0,
@@ -183,7 +188,7 @@ class ThreatIntelligenceService:
                     )
 
                 text_data = resp.text
-                iocs = self._extract_indicators_from_text(text_data, feed.feed_type)
+                iocs = self._extract_indicators_from_text(text_data, feed_type)
 
                 added = 0
                 updated = 0

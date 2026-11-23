@@ -14,6 +14,25 @@ AGENT_PROCESS_NAMES = {
     "win_agent.py",
 }
 
+# Critical system services and daemons that must never be killed by automated/manual response
+CRITICAL_SYSTEM_PROCESSES = {
+    "systemd",
+    "init",
+    "kthreadd",
+    "sshd",
+    "sshd-session",
+    "dbus-daemon",
+    "tailscaled",
+    "cloudflared",
+    "docker",
+    "dockerd",
+    "containerd",
+    "systemd-resolved",
+    "systemd-journald",
+    "systemd-logind",
+    "systemd-udevd",
+}
+
 # Legitimate commands invoked by the LARP Agent
 AGENT_CHILD_PATTERNS = [
     "netsh advfirewall",
@@ -87,7 +106,12 @@ def check_agent_kill_protection(
     Checks if terminating target_pid is safe:
     Returns (True, None) if allowed.
     Returns (False, reason) if target is agent, has agent ancestor, or has agent descendant.
+    Returns (False, reason) if target is agent, critical system process (SSH/systemd),
+    has agent ancestor, or has agent descendant.
     """
+    if target_pid is not None and target_pid <= 2:
+        return False, f"PID {target_pid} is a core kernel/system process and cannot be killed"
+
     if not process_tree or not target_pid:
         return True, None
 
@@ -102,8 +126,26 @@ def check_agent_kill_protection(
 
     target = pid_map.get(target_pid)
     # Check 1: Target itself
+    # Check 1: Target itself (Agent)
     if target and is_agent_process(target):
         return False, "target is LARP agent or legitimate child"
+
+    # Check 1b: Target itself (Critical system service - SSH, systemd, cloudflared, etc.)
+    if target:
+        if isinstance(target, dict):
+            name = (target.get("name") or "").lower()
+            cmdline = (target.get("cmdline") or "").lower()
+            exe = (target.get("exe_path") or target.get("exe") or "").lower()
+        else:
+            name = (getattr(target, "name", "") or "").lower()
+            cmdline = (getattr(target, "cmdline", "") or "").lower()
+            exe = (getattr(target, "exe_path", "") or getattr(target, "exe", "") or "").lower()
+
+        for crit in CRITICAL_SYSTEM_PROCESSES:
+            if crit == name or crit == exe.split("/")[-1].split("\\")[-1] or f"/{crit}" in exe:
+                return False, f"Process '{name}' (PID {target_pid}) is a critical system service ({crit}) protected from termination"
+            if crit in ("sshd", "sshd-session", "cloudflared", "tailscaled") and crit in cmdline:
+                return False, f"Process '{name}' (PID {target_pid}) is a critical network access daemon protected from termination"
 
     # Check 2: Ancestors (if target has an ancestor that is the agent)
     curr = target

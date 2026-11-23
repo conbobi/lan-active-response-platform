@@ -173,13 +173,12 @@ async def regenerate_ai_analysis(
         raise HTTPException(status_code=404, detail="Incident not found")
     
     async def _run_ai():
-        async with AsyncSessionLocal() as session:
-            try:
-                from app.services.ai.ai_triage_service import AITriageService
-                await AITriageService().analyze_incident(incident_id, session)
-                logger.info(f"Background AI triage completed for {incident_id}")
-            except Exception as e:
-                logger.error(f"Background AI triage failed for {incident_id}: {e}", exc_info=True)
+        try:
+            from app.services.ai.ai_triage_service import AITriageService
+            await AITriageService().analyze_incident(incident_id)
+            logger.info(f"Background AI triage completed for {incident_id}")
+        except Exception as e:
+            logger.error(f"Background AI triage failed for {incident_id}: {e}", exc_info=True)
     
     background_tasks.add_task(_run_ai)
     
@@ -245,13 +244,12 @@ async def suggest_ai_response(
         raise HTTPException(status_code=404, detail="Incident not found")
 
     async def _run_suggest():
-        async with AsyncSessionLocal() as session:
-            try:
-                from app.services.ai.ai_response_service import AIResponseService
-                await AIResponseService().suggest_response(incident_id, session)
-                logger.info(f"Background AI response suggestion completed for {incident_id}")
-            except Exception as e:
-                logger.error(f"Background AI response suggestion failed for {incident_id}: {e}", exc_info=True)
+        try:
+            from app.services.ai.ai_response_service import AIResponseService
+            await AIResponseService().suggest_response(incident_id)
+            logger.info(f"Background AI response suggestion completed for {incident_id}")
+        except Exception as e:
+            logger.error(f"Background AI response suggestion failed for {incident_id}: {e}", exc_info=True)
 
     background_tasks.add_task(_run_suggest)
 

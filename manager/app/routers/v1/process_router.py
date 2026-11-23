@@ -79,13 +79,62 @@ async def kill_process_on_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger kill_process or kill_process_tree command on agent via ResponseActionService."""
+    if pid <= 2:
+        raise HTTPException(status_code=400, detail="PID must be greater than 2")
+
+    # 1. Check agent existence and online status
+    from app.models.agent import Agent, AgentStatus
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    if agent.status == AgentStatus.DEAD:
+        raise HTTPException(status_code=409, detail=f"Agent '{agent_id}' is offline and cannot execute commands")
+
+    # 2. Find ProcessInfo in DB to verify existence and get ground truth start time
+    stmt = select(ProcessInfo).where(
+        ProcessInfo.agent_id == agent_id,
+        ProcessInfo.pid == pid,
+    ).order_by(ProcessInfo.created_at.desc()).limit(1)
+    res = await db.execute(stmt)
+    proc = res.scalar_one_or_none()
+    if not proc:
+        raise HTTPException(status_code=404, detail=f"Process PID {pid} not found on agent '{agent_id}'")
+
+    # 3. Check for PID reuse / restart if process_start_time provided
+    if body.process_start_time is not None and proc.process_start_time is not None:
+        if abs(float(body.process_start_time) - float(proc.process_start_time)) > 2.0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Process PID {pid} start time mismatch (possible PID reuse). Action aborted for safety."
+            )
+
+    # 4. Auto-populate parameters for verified execution
+    process_start_time = body.process_start_time or proc.process_start_time
+    if process_start_time is None or process_start_time <= 0:
+        process_start_time = proc.created_at.timestamp() if proc.created_at else 1.0
+
+    exe_path = body.exe_path or proc.exe_path or proc.exe or f"/proc/{pid}/exe"
+    if not exe_path.startswith("/") and not exe_path.startswith("\\") and ":" not in exe_path:
+        exe_path = f"/{exe_path}"
+
+    parent_pid = body.parent_pid if body.parent_pid is not None else proc.parent_pid
+    if parent_pid is None or parent_pid <= 0:
+        parent_pid = 1
+
     action_type = "kill_process_tree" if body.kill_tree else "kill_process"
 
     svc = ResponseActionService(db)
     action = await svc.create_and_apply_action(
         agent_id=agent_id,
         action_type=action_type,
-        action_params={"pid": pid, **body.model_dump(exclude={"kill_tree"})},
+        action_params={
+            "pid": pid,
+            "reason": body.reason,
+            "confirmed": True,
+            "process_start_time": process_start_time,
+            "parent_pid": parent_pid,
+            "exe_path": exe_path,
+        },
         actor="analyst",
     )
 

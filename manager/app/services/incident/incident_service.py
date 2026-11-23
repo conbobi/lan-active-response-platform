@@ -91,13 +91,14 @@ async def _safe_trigger_ai_triage(incident_id: str):
                         )
                         return
 
-                service = AITriageService()
-                analysis = await service.analyze_incident(incident_id, session)
-                if analysis:
-                    logger.info(f"AI triage completed successfully for incident {incident_id}")
-                else:
-                    logger.warning(f"AI triage returned no analysis for incident {incident_id}")
-                return
+            # Connection released back to pool before AI triage LLM call
+            service = AITriageService()
+            analysis = await service.analyze_incident(incident_id)
+            if analysis:
+                logger.info(f"AI triage completed successfully for incident {incident_id}")
+            else:
+                logger.warning(f"AI triage returned no analysis for incident {incident_id}")
+            return
         except Exception as e:
             logger.error(f"AI triage attempt {attempt} failed for incident {incident_id}: {e}", exc_info=True)
             if attempt < 3:

@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import AsyncSessionLocal
 
 from app.models.incident import Incident
 from app.models.process_info import ProcessInfo
@@ -36,37 +37,55 @@ class AIResponseService:
     Analyst must explicitly approve and apply all recommendations — zero automated dispatch.
     """
 
-    async def suggest_response(self, incident_id: str, session: AsyncSession) -> Optional[AIAnalysis]:
-        """Suggest response action based on existing triage analysis. Read-only."""
+    async def suggest_response(self, incident_id: str, session: Optional[AsyncSession] = None) -> Optional[AIAnalysis]:
+        """
+        Suggest response action based on existing triage analysis.
+        Decoupled 3-phase execution:
+          Phase 1: DB Read Context (Short Session)
+          Phase 2: LLM Call (No DB session held across network I/O)
+          Phase 3: DB Write Suggestion (Short Session)
+        """
         try:
-            # 1. Lấy latest AIAnalysis (triage) — nếu chưa có → return None
-            stmt = (
-                select(AIAnalysis)
-                .where(AIAnalysis.incident_id == incident_id, AIAnalysis.analysis_type == "triage")
-                .order_by(AIAnalysis.created_at.desc())
-                .limit(1)
-            )
-            res = await session.execute(stmt)
-            analysis = res.scalar_one_or_none()
+            # Phase 1: Pull context
+            async def _fetch_context(s: AsyncSession):
+                stmt = (
+                    select(AIAnalysis)
+                    .where(AIAnalysis.incident_id == incident_id, AIAnalysis.analysis_type == "triage")
+                    .order_by(AIAnalysis.created_at.desc())
+                    .limit(1)
+                )
+                res = await s.execute(stmt)
+                ana = res.scalar_one_or_none()
+                if not ana:
+                    return None, None, [], [], [], []
+
+                inc = await s.get(Incident, incident_id)
+                if not inc:
+                    return None, None, [], [], [], []
+
+                susp_procs, procs = await self._get_processes(s, inc.agent_id)
+                flows = await self._get_flows(s, inc.agent_id)
+                sim_cases = await self._get_similar_incidents(s)
+                return ana, inc, susp_procs, procs, flows, sim_cases
+
+            if session is not None:
+                analysis, incident, suspicious_procs, all_procs, recent_flows, similar_cases = await _fetch_context(session)
+                try:
+                    await session.commit()
+                except Exception:
+                    pass
+            else:
+                async with AsyncSessionLocal() as s:
+                    analysis, incident, suspicious_procs, all_procs, recent_flows, similar_cases = await _fetch_context(s)
+
             if not analysis:
                 logger.warning(f"No triage analysis found for incident {incident_id} to suggest response")
                 return None
-
-            incident = await session.get(Incident, incident_id)
             if not incident:
                 logger.warning(f"Incident {incident_id} not found")
                 return None
 
-            agent_id = incident.agent_id
-
-            # 2. Pull context: process tree + suspicious processes + network
-            suspicious_procs, all_procs = await self._get_processes(session, agent_id)
-            recent_flows = await self._get_flows(session, agent_id)
-
-            # 3. Pull similar incidents: label=true_positive and response_action.outcome=effective
-            similar_cases = await self._get_similar_incidents(session)
-
-            # 4. Build prompt
+            # Phase 2: Call AI LLM without holding any active database connections
             prompt = self._build_prompt(
                 incident=incident,
                 triage=analysis,
@@ -75,14 +94,12 @@ class AIResponseService:
                 similar_incidents=similar_cases,
             )
 
-            # 5. Call ai_client
-            logger.info(f"Calling Foundation-Sec AI response suggestion for incident {incident_id}...")
+            logger.info(f"Calling Foundation-Sec AI response suggestion for incident {incident_id} (0 DB connections held)...")
             result = await ai_client.generate(
                 prompt=prompt,
                 system=self._system_prompt(),
             )
 
-            # 6. Parse JSON from answer or raw text
             text_to_parse = result.get("answer") or result.get("raw") or ""
             parsed = self._parse_json_answer(text_to_parse)
 
@@ -95,7 +112,6 @@ class AIResponseService:
             if risk_if_not_act and not reasoning.endswith(risk_if_not_act):
                 reasoning = f"{reasoning} Nguy cơ nếu không hành động: {risk_if_not_act}"
 
-            # 7. Validate action & params
             validated_action, validated_params, final_reasoning = await self._validate_suggestion(
                 action=raw_action,
                 params=raw_params,
@@ -105,34 +121,52 @@ class AIResponseService:
                 recent_flows=recent_flows,
             )
 
-            # 8. Calculate real blast radius from endpoint data (OVERRIDE AI value)
-            real_blast = await self._calculate_real_blast_radius(
-                session=session,
-                agent_id=incident.agent_id,
-                action_type=validated_action,
-                params=validated_params,
-            )
+            # Phase 3: Calculate real blast radius & update AIAnalysis row in short DB transaction
+            async def _persist_suggestion(s: AsyncSession) -> Optional[AIAnalysis]:
+                real_blast = await self._calculate_real_blast_radius(
+                    session=s,
+                    agent_id=incident.agent_id,
+                    action_type=validated_action,
+                    params=validated_params,
+                )
 
-            # 9. Update AIAnalysis row with suggestion_* fields
-            analysis.suggested_action = validated_action
-            analysis.suggestion_params = validated_params
-            analysis.suggestion_reasoning = final_reasoning
-            analysis.blast_radius = real_blast
-            # Reset analyst review fields if re-suggesting
-            analysis.applied_by_analyst = None
-            analysis.applied_at = None
-            analysis.dismissed_by_analyst = None
-            analysis.dismissed_at = None
-            analysis.dismiss_reason = None
-            analysis.updated_at = datetime.now(timezone.utc)
+                stmt_up = (
+                    select(AIAnalysis)
+                    .where(AIAnalysis.incident_id == incident_id, AIAnalysis.analysis_type == "triage")
+                    .order_by(AIAnalysis.created_at.desc())
+                    .limit(1)
+                )
+                res_up = await s.execute(stmt_up)
+                target_ana = res_up.scalar_one_or_none()
+                if not target_ana:
+                    return None
 
-            await session.commit()
-            await session.refresh(analysis)
+                target_ana.suggested_action = validated_action
+                target_ana.suggestion_params = validated_params
+                target_ana.suggestion_reasoning = final_reasoning
+                target_ana.blast_radius = real_blast
+                target_ana.applied_by_analyst = None
+                target_ana.applied_at = None
+                target_ana.dismissed_by_analyst = None
+                target_ana.dismissed_at = None
+                target_ana.dismiss_reason = None
+                target_ana.updated_at = datetime.now(timezone.utc)
+
+                await s.commit()
+                await s.refresh(target_ana)
+                return target_ana
+
+            if session is not None:
+                updated_analysis = await _persist_suggestion(session)
+            else:
+                async with AsyncSessionLocal() as s:
+                    updated_analysis = await _persist_suggestion(s)
+
             logger.info(
                 f"AI response suggestion generated for incident {incident_id}: "
                 f"action={validated_action}, params={validated_params}, confidence={confidence:.2f}"
             )
-            return analysis
+            return updated_analysis
 
         except Exception as e:
             logger.error(f"Failed to generate response suggestion for incident {incident_id}: {e}", exc_info=True)

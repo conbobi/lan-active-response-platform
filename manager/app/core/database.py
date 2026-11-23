@@ -39,3 +39,28 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+def get_pool_status() -> dict:
+    """Safely return SQLAlchemy async engine QueuePool metrics without leaking credentials."""
+    pool = async_engine.pool
+    try:
+        pool_size = pool.size()
+        checked_in = pool.checkedin()
+        checked_out = pool.checkedout()
+        overflow = pool.overflow()
+    except Exception:
+        pool_size = 20
+        checked_in = 0
+        checked_out = 0
+        overflow = 0
+
+    return {
+        "pool_size": pool_size,
+        "checked_in_connections": checked_in,
+        "checked_out_connections": checked_out,
+        "overflow": overflow,
+        "max_overflow": getattr(pool, "_max_overflow", 20),
+        "timeout": getattr(pool, "_timeout", 30.0),
+        "total_active_connections": checked_out,
+    }

@@ -177,6 +177,7 @@ async def _run_ai_triage(incident_id: str):
 
     for attempt in range(1, 6):
         try:
+            # Short session: check if incident exists and commit/close immediately
             async with AsyncSessionLocal() as session:
                 inc = await session.get(Incident, incident_id)
                 if not inc:
@@ -192,29 +193,30 @@ async def _run_ai_triage(incident_id: str):
                         )
                         return
 
-                service = AITriageService()
-                logger.info(f"Executing analyze_incident for {incident_id}...")
-                analysis = await service.analyze_incident(incident_id, session)
-                if analysis:
-                    logger.info(f"AI triage completed successfully for incident {incident_id}")
-                    try:
-                        await dashboard_manager.broadcast({
-                            "type": "AI_ANALYSIS_COMPLETED",
-                            "event": "AI_ANALYSIS_COMPLETED",
-                            "incident_id": incident_id,
-                            "data": {
-                                "id": analysis.id,
-                                "summary": analysis.summary,
-                                "confidence": analysis.confidence,
-                                "mitre_techniques": analysis.mitre_techniques,
-                                "root_cause": analysis.root_cause
-                            }
-                        })
-                    except Exception as b_err:
-                        logger.debug(f"Dashboard broadcast AI analysis failed: {b_err}")
-                else:
-                    logger.warning(f"AI triage returned no analysis for incident {incident_id}")
-                return
+            # DB connection released to pool before running AI triage LLM call
+            service = AITriageService()
+            logger.info(f"Executing analyze_incident for {incident_id}...")
+            analysis = await service.analyze_incident(incident_id)
+            if analysis:
+                logger.info(f"AI triage completed successfully for incident {incident_id}")
+                try:
+                    await dashboard_manager.broadcast({
+                        "type": "AI_ANALYSIS_COMPLETED",
+                        "event": "AI_ANALYSIS_COMPLETED",
+                        "incident_id": incident_id,
+                        "data": {
+                            "id": analysis.id,
+                            "summary": analysis.summary,
+                            "confidence": analysis.confidence,
+                            "mitre_techniques": analysis.mitre_techniques,
+                            "root_cause": analysis.root_cause
+                        }
+                    })
+                except Exception as b_err:
+                    logger.debug(f"Dashboard broadcast AI analysis failed: {b_err}")
+            else:
+                logger.warning(f"AI triage returned no analysis for incident {incident_id}")
+            return
         except Exception as e:
             logger.error(f"AI Triage failed: {e}", exc_info=True)
             if attempt < 5:
@@ -811,17 +813,15 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                 await websocket.close(code=1008)
                 break
 
+            response_payload = None
             async with AsyncSessionLocal() as session:
                 try:
                     if msg_type == "NETWORK_SNAPSHOT":
                         await network_service.store_snapshot(session, agent_id, payload)
-                        response_payload = None
                     elif msg_type == "NETWORK_ACK":
                         await network_service.acknowledge(session, agent_id, payload)
-                        response_payload = None
                     elif msg_type == "NETWORK_TRANSACTION":
                         await network_service.record_transaction(session, agent_id, payload.get("transaction", {}))
-                        response_payload = None
                     elif msg_type == "HEARTBEAT":
                         response_payload, agent_id = await _handle_heartbeat(agent_id, data, session)
                         if authenticated:
@@ -833,18 +833,20 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                     else:
                         response_payload = {"error": f"Unknown message type '{msg_type}'"}
                     await session.commit()
-                    if response_payload:
-                        await websocket.send_json(response_payload)
                 except (ValidationError, ValueError) as error:
                     await session.rollback()
                     logger.warning("Invalid %s for Agent '%s': %s", msg_type, agent_id, type(error).__name__)
                     if not network_message:
-                        await websocket.send_json({"error": "Validation error"})
+                        response_payload = {"error": "Validation error"}
                 except Exception:
                     await session.rollback()
                     logger.exception("Failed to process %s for Agent '%s'", msg_type, agent_id)
                     if not network_message:
-                        await websocket.send_json({"error": "Message processing failed"})
+                        response_payload = {"error": "Message processing failed"}
+
+            # Send WebSocket response outside of DB session to prevent connection holding
+            if response_payload:
+                await websocket.send_json(response_payload)
     except (WebSocketDisconnect, RuntimeError):
         logger.info("Agent '%s' disconnected from WebSocket.", agent_id)
     finally:
