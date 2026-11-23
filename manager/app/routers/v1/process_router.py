@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, status, Body, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +15,11 @@ router = APIRouter(tags=["Process & Root Cause Analysis"])
 
 class KillProcessRequest(BaseModel):
     reason: Optional[str] = "Manual analyst action"
-    kill_tree: bool = False  # False = kill single, True = kill tree
+    kill_tree: bool = False
+    confirmed: StrictBool = False
+    process_start_time: Optional[float] = None
+    exe_path: Optional[str] = None
+    parent_pid: Optional[int] = None
 
 
 
@@ -46,7 +50,7 @@ async def kill_agent_process(
         raise BadRequestError("Field 'pid' is required.")
 
     service = ProcessTreeService(db)
-    cmd = await service.kill_process(agent_id, int(pid))
+    cmd = await service.queue_termination(agent_id, payload)
     return cmd
 
 
@@ -63,7 +67,7 @@ async def kill_agent_process_tree(
         raise BadRequestError("Field 'pid' is required.")
 
     service = ProcessTreeService(db)
-    cmd = await service.kill_process_tree(agent_id, int(pid), process_name=payload.get("process_name"))
+    cmd = await service.queue_termination(agent_id, payload, tree=True)
     return cmd
 
 
@@ -81,10 +85,7 @@ async def kill_process_on_agent(
     action = await svc.create_and_apply_action(
         agent_id=agent_id,
         action_type=action_type,
-        action_params={
-            "pid": pid,
-            "reason": body.reason,
-        },
+        action_params={"pid": pid, **body.model_dump(exclude={"kill_tree"})},
         actor="analyst",
     )
 
@@ -113,6 +114,7 @@ async def get_process_detail(agent_id: str, pid: int, db: AsyncSession = Depends
     return {
         "pid": proc.pid,
         "ppid": proc.parent_pid,
+        "process_start_time": proc.process_start_time,
         "name": proc.name,
         "exe": proc.exe_path or proc.exe,
         "cmdline": proc.cmdline,

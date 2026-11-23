@@ -30,7 +30,7 @@ async def test_evaluate_low_risk(mock_db, mock_notification_service):
     assert score == 0.0
 
 
-async def test_process_risk_high_risk_auto_isolate(mock_db, mock_notification_service):
+async def test_process_risk_high_score_only_simulates_response(mock_db, mock_notification_service):
     service = RiskAssessmentService(mock_db)
     service.risk_repo = MagicMock()
     service.risk_repo.add = AsyncMock()
@@ -49,14 +49,8 @@ async def test_process_risk_high_risk_auto_isolate(mock_db, mock_notification_se
 
     service.notification_service = mock_notification_service
 
-    mock_dispatcher = MagicMock()
-    mock_dispatcher.push_command = AsyncMock()
-
-    mock_cmd_repo = MagicMock()
-    mock_cmd_repo.add = AsyncMock()
-
-    with patch("app.services.detection.risk_assessment_service.command_dispatcher", mock_dispatcher), \
-         patch("app.services.detection.risk_assessment_service.CommandRepository", return_value=mock_cmd_repo), \
+    with patch("app.services.response.policy_engine_service.PolicyEngineService.evaluate_and_execute",
+               new_callable=AsyncMock) as simulate, \
          patch("app.services.detection.risk_assessment_service.IncidentService") as MockIncService:
 
         mock_inc_instance = MagicMock()
@@ -73,9 +67,9 @@ async def test_process_risk_high_risk_auto_isolate(mock_db, mock_notification_se
         record = await service.process_risk(dto.agent_id, dto)
         assert record.score >= 80.0
 
-        mock_dispatcher.push_command.assert_awaited_once()
-        call_args = mock_dispatcher.push_command.call_args[0]
-        assert call_args[1] == "agent-1"
+        simulate.assert_awaited_once()
+        assert simulate.call_args.kwargs["dry_run"] is True
+        service.agent_repo.get.return_value.isolate.assert_not_called()
 
 
 async def test_whitelisted_agent_no_auto_isolate(mock_db, mock_notification_service):
@@ -97,10 +91,8 @@ async def test_whitelisted_agent_no_auto_isolate(mock_db, mock_notification_serv
 
     service.notification_service = mock_notification_service
 
-    mock_dispatcher = MagicMock()
-    mock_dispatcher.push_command = AsyncMock()
-
-    with patch("app.services.detection.risk_assessment_service.command_dispatcher", mock_dispatcher):
+    with patch("app.services.response.policy_engine_service.PolicyEngineService.evaluate_and_execute",
+               new_callable=AsyncMock) as simulate:
         dto = RiskAssessmentDTO(
             agent_id="agent-1",
             cpu_usage=95.0,
@@ -109,7 +101,7 @@ async def test_whitelisted_agent_no_auto_isolate(mock_db, mock_notification_serv
         )
 
         await service.process_risk(dto.agent_id, dto)
-        mock_dispatcher.push_command.assert_not_awaited()
+        simulate.assert_not_awaited()
 
 
 async def test_compute_ema_critical_bypass():
@@ -152,14 +144,8 @@ async def test_process_risk_critical_attack_bypasses_ema(mock_db, mock_notificat
 
     service.notification_service = mock_notification_service
 
-    mock_dispatcher = MagicMock()
-    mock_dispatcher.push_command = AsyncMock()
-
-    mock_cmd_repo = MagicMock()
-    mock_cmd_repo.add = AsyncMock()
-
-    with patch("app.services.detection.risk_assessment_service.command_dispatcher", mock_dispatcher), \
-         patch("app.services.detection.risk_assessment_service.CommandRepository", return_value=mock_cmd_repo), \
+    with patch("app.services.response.policy_engine_service.PolicyEngineService.evaluate_and_execute",
+               new_callable=AsyncMock) as simulate, \
          patch("app.services.detection.risk_assessment_service.IncidentService") as MockIncService:
 
         mock_inc_instance = MagicMock()

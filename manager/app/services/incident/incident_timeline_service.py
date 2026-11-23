@@ -65,6 +65,11 @@ class IncidentTimelineService:
         agent_id = incident.agent_id
         inc_time = incident.created_at or datetime.now(timezone.utc)
         timeline: List[Dict[str, Any]] = []
+        if incident.detection_evidence:
+            return await self._evidence_timeline(incident, inc_time)
+        if ((incident.notes or "").startswith("rule_id:builtin_linux_network_shell")
+                or "Direct connection to C2 port" in (incident.description or "")):
+            return await self._evidence_timeline(incident, inc_time)
 
         # ------------------------------------------------------------------
         # 1. PROCESS SPAWN: Look up processes for the agent
@@ -368,3 +373,40 @@ class IncidentTimelineService:
             "incident_id": incident.id,
             "timeline": timeline
         }
+
+    async def _evidence_timeline(self, incident, incident_time):
+        evidence = incident.detection_evidence or {}
+        network = evidence.get("network")
+        observed = (network or {}).get("observed_at") or incident_time.isoformat()
+        timeline = []
+        process = evidence.get("process")
+        if process:
+            timeline.append({
+                "time": observed, "type": "process_observed", "severity": "warning",
+                "title": f"Observed socket holder {process['name']} (PID {process['pid']})",
+                "details": process,
+            })
+        if network:
+            timeline.append({
+                "time": observed, "type": "network_connection", "severity": "warning",
+                "title": evidence["story"], "details": network,
+            })
+        signals = evidence.get("signals", evidence.get("factors", []))
+        for signal in signals:
+            timeline.append({
+                "time": observed, "type": "rule_trigger", "severity": "warning",
+                "title": signal["reason"], "details": {"rule": evidence.get("rule_id"), **signal},
+            })
+
+        actions = (await self.session.execute(select(ResponseAction).where(
+            ResponseAction.incident_id == incident.id,
+        ).order_by(ResponseAction.created_at))).scalars().all()
+        for action in actions:
+            timeline.append({
+                "time": (action.applied_at or action.created_at).isoformat(), "type": "action",
+                "severity": "success" if action.status == "applied" else "info",
+                "title": f"{action.action_type} {action.status}",
+                "details": {"action_id": action.id, "action_type": action.action_type, "status": action.status},
+            })
+        timeline.sort(key=lambda item: item["time"])
+        return {"incident_id": incident.id, "timeline": timeline}

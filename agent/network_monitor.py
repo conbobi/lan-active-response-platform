@@ -42,6 +42,10 @@ def parse_ss(output, family):
                      "src_ip": local_ip, "src_port": local_port, "dst_ip": remote_ip if remote_port else None,
                      "dst_port": remote_port or None, "owners": owners, "inode": inode[1] if inode else None,
                      "socket_id": f"{family}:{cookie[1]}" if cookie and cookie[1] != "0" else None})
+        for counter in ("bytes_sent", "bytes_received"):
+            match = re.search(rf"\b{counter}:(\d+)", details)
+            if match:
+                rows[-1][counter] = int(match[1])
     return rows
 
 
@@ -57,6 +61,15 @@ def _psutil_sockets():
                      "dst_port": conn.raddr.port if conn.raddr else None,
                      "owners": [(conn.pid, conn.fd)] if conn.pid and conn.fd >= 0 else [], "inode": None, "socket_id": None})
     return rows
+
+
+def socket_rows(errors):
+    try:
+        return [row for flag, family in (("-4", "IPv4"), ("-6", "IPv6"))
+                for row in parse_ss(run("ss", "-H", "-O", flag, "-tunapei"), family)]
+    except (CollectionError, OSError) as error:
+        errors["ss"] = str(error)
+        return _psutil_sockets()
 
 
 def _process(row, sample_started):
@@ -123,12 +136,7 @@ class NetworkMonitor:
 
     def _sockets(self, errors):
         sample_started = time.time()
-        try:
-            rows = [row for flag, family in (("-4", "IPv4"), ("-6", "IPv6"))
-                    for row in parse_ss(run("ss", "-H", "-O", flag, "-tunape"), family)]
-        except (CollectionError, OSError) as error:
-            errors["ss"] = str(error)
-            rows = _psutil_sockets()
+        rows = socket_rows(errors)
         counts = Counter()
         for row in rows:
             row["bind_scope"] = bind_scope(row["src_ip"])

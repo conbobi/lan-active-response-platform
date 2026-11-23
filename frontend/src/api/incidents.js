@@ -53,6 +53,7 @@ export const mapIncident = (inc) => {
     factorsBreakdown,
     factors_breakdown: factorsBreakdown,
     story,
+    detection_evidence: inc.detection_evidence || null,
   };
 };
 

@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import json
 import uuid
 import logging
@@ -14,6 +15,7 @@ from app.websocket.dashboard_connection_manager import dashboard_manager
 from app.services.rule_engine import rule_engine
 from app.services.ai.ai_triage_service import AITriageService
 from app.schemas.heartbeat import HeartbeatDTO
+from app.core.response_safety import PROTECTED_COMMANDS, VERIFIED_KILL_COMMANDS
 from app.schemas.command_ack import CommandAckDTO
 from app.services.agent.agent_service import AgentService
 from app.services.core.command_dispatcher import command_dispatcher
@@ -268,35 +270,41 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
     platform_name = payload.get("platform", "linux")
     logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}' (platform: {platform_name})")
 
-    # Record network connections into flows table with process info
-    conns = payload.get("network_connections", [])
-    if isinstance(conns, list) and conns:
-        try:
-            flow_repo = FlowRepository(session)
-            now_dt = datetime.now(timezone.utc)
-            for c in conns:
-                dst_ip = c.get("dst_ip")
-                dst_port = c.get("dst_port")
-                if dst_ip and dst_port:
-                    conn_flow = Flow(
-                        id=f"flow_{uuid.uuid4().hex[:12]}",
-                        src_ip=c.get("src_ip") or "0.0.0.0",
-                        dst_ip=str(dst_ip),
-                        src_port=int(c.get("src_port") or 0),
-                        dst_port=int(dst_port),
-                        protocol=c.get("protocol") or "TCP",
-                        bytes_sent=int(c.get("bytes_sent") or 0),
-                        packets_sent=int(c.get("packets_sent") or 1),
-                        start_time=now_dt,
-                        end_time=now_dt,
-                        agent_id=target_agent_id,
-                        created_at=now_dt,
-                        process_name=c.get("process_name") or c.get("process"),
-                        pid=c.get("pid")
-                    )
-                    await flow_repo.add(conn_flow)
-        except Exception as e:
-            logger.warning(f"Failed to record network connections from telemetry: {e}")
+    conns = payload.get("network_connections")
+    if isinstance(conns, list):
+        flows = []
+        now_dt = datetime.now(timezone.utc)
+        for conn in conns[:200]:
+            if not isinstance(conn, dict):
+                continue
+            try:
+                source = str(ipaddress.ip_address(conn.get("src_ip") or "0.0.0.0"))
+                destination = str(ipaddress.ip_address(conn.get("dst_ip")))
+                src_port = int(conn.get("src_port") or 0)
+                dst_port = int(conn["dst_port"])
+                if not 0 <= src_port <= 65535 or not 0 < dst_port <= 65535:
+                    continue
+                socket_evidence = None
+                if conn.get("attribution"):
+                    socket_evidence = {key: conn[key] for key in (
+                        "status", "direction", "observed_at", "first_seen", "inode", "socket_id", "holders", "originator_pid",
+                        "attribution", "attribution_reason", "interfaces", "overlay", "bytes_sent", "bytes_received",
+                    ) if key in conn}
+                pid = conn.get("pid")
+                flows.append(Flow(
+                    id=f"flow_{uuid.uuid4().hex[:12]}", agent_id=target_agent_id,
+                    src_ip=source, dst_ip=destination, src_port=src_port, dst_port=dst_port,
+                    protocol=str(conn.get("protocol") or "TCP")[:16],
+                    bytes_sent=0 if socket_evidence else min(2**31 - 1, max(0, int(conn.get("bytes_sent") or 0))),
+                    packets_sent=0 if socket_evidence else min(2**31 - 1, max(0, int(conn.get("packets_sent") or 1))),
+                    start_time=now_dt, end_time=now_dt, created_at=now_dt,
+                    process_name=str(conn.get("process_name") or conn.get("process") or "unknown")[:128],
+                    pid=pid if type(pid) is int and 0 < pid < 2**31 else None, socket_evidence=socket_evidence,
+                ))
+            except (KeyError, ValueError, TypeError, OverflowError):
+                logger.debug("Skipping malformed socket observation for Agent %s", target_agent_id)
+        if flows:
+            session.add_all(flows)
 
     try:
         await _evaluate_incident_rules(target_agent_id, payload, session)
@@ -438,6 +446,14 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
     existing = await session.get(Command, dto.command_id)
     if existing and (existing.agent_id != agent_id or existing.action in network_service.ACTIONS):
         return {"status": "error", "message": "Invalid command acknowledgement"}
+    if existing and existing.action in VERIFIED_KILL_COMMANDS and dto.status == CommandStatus.SUCCESS:
+        target = (existing.payload or {}).get("pid")
+        killed = payload.get("killed_pids")
+        if payload.get("validation") != "validated" or not isinstance(killed, list) or target not in killed:
+            dto.status = CommandStatus.FAILED
+            dto.error_message = "Process validation or verified exit missing from Agent ACK"
+    if existing and existing.action in PROTECTED_COMMANDS and existing.status != CommandStatus.SENT:
+        return {"status": "ack", "message": "Response command no longer awaiting acknowledgement"}
     cmd = await command_dispatcher.verify_execution(dto, session)
     if not cmd:
         logger.warning(f"Command ack received for unknown command '{dto.command_id}' on agent '{agent_id}'")
@@ -451,21 +467,9 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
     if action_id:
         action = await session.get(ResponseAction, action_id)
 
-    if not action:
-        # Fallback: find latest pending ResponseAction for this agent with matching action_type
-        stmt = (
-            select(ResponseAction)
-            .where(
-                ResponseAction.agent_id == target_agent_id,
-                ResponseAction.action_type == cmd.action,
-                ResponseAction.status == "pending"
-            )
-            .order_by(ResponseAction.created_at.desc())
-            .limit(1)
-        )
-        res = await session.execute(stmt)
-        action = res.scalar_one_or_none()
-
+    if action and (action.agent_id != target_agent_id or (action.action_params or {}).get("command_id") != cmd.id
+                   or action.status != "pending"):
+        action = None
     now = datetime.now(timezone.utc)
     agent = await session.get(Agent, target_agent_id)
 
@@ -502,7 +506,11 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
                 event="applied",
                 actor="agent",
                 reason=action.action_params.get("reason"),
-                metadata={"command_id": cmd.id, "action_type": action.action_type}
+                metadata={
+                    "command_id": cmd.id, "action_type": action.action_type, "incident_id": action.incident_id,
+                    "target_pid": (cmd.payload or {}).get("pid"), "validation": payload.get("validation"),
+                    "killed_pids": payload.get("killed_pids"), "result": "success", "executed_at": dto.executed_at.isoformat(),
+                }
             )
             logger.info(f"ResponseAction '{action.id}' applied upon ACK success for command '{cmd.id}'.")
 
@@ -540,6 +548,14 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
         # Command failed on agent
         if action:
             action.status = "failed"
+            await ActionAuditLogService(session).record_event(
+                action_id=action.id, event="failed", actor="agent", reason=dto.error_message,
+                metadata={
+                    "command_id": cmd.id, "action_type": action.action_type, "incident_id": action.incident_id,
+                    "target_pid": (cmd.payload or {}).get("pid"), "validation": payload.get("validation"),
+                    "killed_pids": payload.get("killed_pids"), "result": "failed", "executed_at": dto.executed_at.isoformat(),
+                },
+            )
             logger.warning(f"ResponseAction '{action.id}' marked failed for command '{cmd.id}': {dto.error_message}")
 
     await session.flush()

@@ -36,7 +36,7 @@ export const useIncidents = () => {
   // Realtime updates via WebSocket dashboard connection
   useDashboardSocket(
     useCallback((msg) => {
-      if (msg && (msg.type === 'INCIDENT_CREATED' || msg.type === 'TELEMETRY_RISK' || msg.type === 'INCIDENT_UPDATED')) {
+      if (msg && ['INCIDENT_NEW', 'INCIDENT_CREATED', 'TELEMETRY_RISK', 'INCIDENT_UPDATED'].includes(msg.type)) {
         loadIncidents(false);
       }
     }, [loadIncidents])

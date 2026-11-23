@@ -7,7 +7,6 @@ import api from '../../api/api';
 import { isKernelOrSystem } from '../../constants/processExclusions';
 import {
   FiTerminal,
-  FiSlash,
   FiCornerDownRight,
   FiLayers,
   FiCpu,
@@ -48,6 +47,7 @@ export default function ProcessAncestry({
 
   const culprit = incData?.culpritProcess || incData?.culprit_process || null;
   const parent = incData?.parentProcess || incData?.parent_process || null;
+  const evidence = incData?.detection_evidence;
 
   if (!culprit && !parent) {
     return (
@@ -73,29 +73,16 @@ export default function ProcessAncestry({
     );
   }
 
-  // Construct dynamic ancestry chain from available culprit and parent data
-  const ancestryChain = [];
-  if (parent) {
-    ancestryChain.push({
-      level: 'Parent Process',
-      name: parent.name || parent.process_name || 'parent',
-      pid: parent.pid || 'N/A',
-      path: parent.exe_path || parent.exe || parent.path || '',
-      cmdline: parent.cmdline || '',
-      role: 'parent',
-    });
-  }
-
-  if (culprit) {
-    ancestryChain.push({
-      level: 'Malicious Culprit',
-      name: culprit.name || culprit.process_name || 'culprit',
-      pid: culprit.pid || 'N/A',
-      path: culprit.exe_path || culprit.exe || culprit.path || '',
-      cmdline: culprit.cmdline || '',
-      sha256: culprit.sha256 || '',
-      role: 'culprit',
-    });
+  const ancestors = evidence?.ancestry ? [...evidence.ancestry].reverse() : (parent ? [parent] : []);
+  const ancestryChain = [
+    ...ancestors.map((proc, depth) => ({ ...proc, depth, level: 'Ancestor', role: 'parent' })),
+    ...(culprit ? [{ ...culprit, depth: ancestors.length, level: evidence ? 'Verified Socket Holder' : 'Related Process', role: 'culprit' }] : []),
+  ];
+  const depthByPid = new Map(ancestryChain.map((proc) => [proc.pid, proc.depth]));
+  for (const proc of evidence?.descendants || []) {
+    const depth = (depthByPid.get(proc.parent_pid) ?? ancestors.length) + 1;
+    depthByPid.set(proc.pid, depth);
+    ancestryChain.push({ ...proc, depth, level: 'Descendant', role: 'child' });
   }
 
   const culpritPid = culprit?.pid;
@@ -122,25 +109,16 @@ export default function ProcessAncestry({
               size="sm"
               iconLeft={<FiCpu size={13} />}
               onClick={() => {
-                navigate(`/investigate?agent=${encodeURIComponent(targetAgentId)}&pid=${culpritPid || ''}`);
+                navigate(`/investigate?tab=process&agent=${encodeURIComponent(targetAgentId)}&pid=${culpritPid || ''}&started=${culprit?.process_start_time || ''}`);
               }}
             >
               🌳 View in Process Tree
             </Button>
           )}
           <Button
-            variant="warning"
-            size="sm"
-            disabled={actionLoading || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
-            iconLeft={<FiSlash size={13} />}
-            onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
-          >
-            Kill Process {culpritPid ? `(PID ${culpritPid})` : ''}
-          </Button>
-          <Button
             variant="danger"
             size="sm"
-            disabled={actionLoading || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
+            disabled={actionLoading || !evidence?.process || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
             iconLeft={<FiLayers size={13} />}
             onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
           >
@@ -170,7 +148,7 @@ export default function ProcessAncestry({
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.75rem',
-                  marginLeft: `${index * 1.75}rem`,
+                  marginLeft: `${Math.min(node.depth, 5) * 1.25}rem`,
                   position: 'relative',
                 }}
               >
@@ -219,7 +197,7 @@ export default function ProcessAncestry({
                       </span>
                       {node.pid && node.pid !== 'N/A' && (
                         <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginLeft: '0.5rem' }}>
-                          PID: <strong>{node.pid}</strong>
+                          PID: <strong>{node.pid}</strong>{node.parent_pid ? ` · PPID ${node.parent_pid}` : ''}
                         </span>
                       )}
                     </div>
@@ -238,7 +216,7 @@ export default function ProcessAncestry({
                           letterSpacing: '0.05em',
                         }}
                       >
-                        CULPRIT
+                        {evidence ? 'SOCKET HOLDER' : 'RELATED PROCESS'}
                       </span>
                     ) : (
                       <span
@@ -252,7 +230,7 @@ export default function ProcessAncestry({
                           borderRadius: 'var(--radius-xs)',
                         }}
                       >
-                        PARENT
+                        {node.level}
                       </span>
                     )}
                   </div>
@@ -274,7 +252,7 @@ export default function ProcessAncestry({
           }}
         >
           <h5 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
-            Culprit Binary Forensics & Indicators
+            Process Details
           </h5>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem', fontSize: '0.85rem' }}>

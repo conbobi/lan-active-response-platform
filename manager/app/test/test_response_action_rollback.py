@@ -52,7 +52,7 @@ async def test_response_action_lifecycle(mock_db):
         action = await service.create_and_apply_action(
             agent_id="agent_1",
             action_type="isolate",
-            action_params={"reason": "Test unit"},
+            action_params={"reason": "Test unit", "confirmed": True},
             auto_rollback_seconds=120
         )
 
@@ -139,7 +139,7 @@ async def test_anti_flapping_cooldown_rejection(mock_db):
     service.action_repo.get_active_cooldown = AsyncMock(return_value=cooldown_action)
 
     with pytest.raises(FlappingCooldownError) as exc_info:
-        await service.create_and_apply_action("agent_1", "isolate")
+        await service.create_and_apply_action("agent_1", "isolate", {"confirmed": True})
 
     assert "cooldown" in str(exc_info.value).lower()
 

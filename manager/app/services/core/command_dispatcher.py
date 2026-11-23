@@ -7,6 +7,7 @@ from app.schemas.command_ack import CommandAckDTO
 from app.schemas.enums import CommandStatus
 from app.models.command import Command
 from app.core.network_security import is_reserved_action
+from app.core.response_safety import KILL_ACTIONS, PROTECTED_COMMANDS
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,19 @@ class CommandDispatcher:
     async def pull_pending_commands(self, agent_id: str, session: AsyncSession) -> List[Command]:
         """Pull and mark pending commands for a specific agent."""
         repo = CommandRepository(session)
-        pending = [cmd for cmd in await repo.get_pending_by_agent(agent_id) if not is_reserved_action(cmd.action)]
-        for cmd in pending:
+        pending = []
+        for cmd in await repo.get_pending_by_agent(agent_id):
+            if is_reserved_action(cmd.action):
+                continue
+            payload = cmd.payload or {}
+            if cmd.action in PROTECTED_COMMANDS and (
+                cmd.action in KILL_ACTIONS | {"kill"}
+                or payload.get("confirmed") is not True or not payload.get("action_id")
+            ):
+                cmd.acknowledge(CommandStatus.FAILED, "Legacy or unconfirmed response blocked")
+                continue
             cmd.send_to_agent()
+            pending.append(cmd)
         await session.flush()
         # Clear in-memory queue for this agent
         self._agent_queues.pop(agent_id, None)
@@ -50,7 +61,8 @@ class CommandDispatcher:
         cmd.acknowledge(ack_data.status, ack_data.error_message)
         if ack_data.status == CommandStatus.FAILED:
             logger.warning(f"Command '{cmd.id}' failed on agent '{cmd.agent_id}'. Checking retry...")
-            await self.schedule_retry(cmd, session)
+            if cmd.action not in PROTECTED_COMMANDS:
+                await self.schedule_retry(cmd, session)
         else:
             logger.info(f"Command '{cmd.id}' executed successfully on agent '{cmd.agent_id}'.")
 

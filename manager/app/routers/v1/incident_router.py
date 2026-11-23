@@ -274,9 +274,9 @@ async def apply_ai_suggestion(
     from app.services.ai.ai_response_service import AIResponseService
     from app.core.exceptions import FlappingCooldownError, AppException
     try:
-        action = await AIResponseService().apply_suggestion(incident_id, analyst, db)
+        action = await AIResponseService().apply_suggestion(incident_id, analyst, db, confirmed=payload.get("confirmed") is True)
         return {
-            "status": "applied",
+            "status": action.status,
             "incident_id": incident_id,
             "action_id": action.id,
             "action_type": action.action_type,

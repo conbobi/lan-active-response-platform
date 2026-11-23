@@ -206,7 +206,7 @@ export default function Dashboard() {
         }
         setIsolatingId(agentId);
         try {
-            await isolateAgent(agentId);
+            await isolateAgent(agentId, true);
             toast.success(`Đã phát lệnh cô lập agent ${agentId} thành công!`);
             loadData();
         } catch (err) {
@@ -330,7 +330,8 @@ export default function Dashboard() {
                             onClick={() => {
                                 const targetAgent = criticalActiveIncident.agent_id || criticalActiveIncident.agentId || '';
                                 const pid = criticalActiveIncident.culprit_process?.pid || criticalActiveIncident.culpritProcess?.pid || '';
-                                navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid ? `&pid=${pid}` : ''}`);
+                                const started = criticalActiveIncident.culprit_process?.process_start_time || criticalActiveIncident.culpritProcess?.process_start_time;
+                                navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid && started ? `&pid=${pid}&started=${started}` : ''}`);
                             }}
                         >
                             🌳 View in Process Tree

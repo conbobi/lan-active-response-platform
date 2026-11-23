@@ -1,181 +1,66 @@
-// src/components/incidents/NetworkCorrelation.jsx
 import React from 'react';
-import Button from '../ui/Button';
-import {
-  FiGlobe,
-  FiLock,
-  FiShield,
-  FiCheckCircle,
-  FiAlertTriangle,
-  FiActivity,
-  FiArrowUpRight
-} from 'react-icons/fi';
+import { Link } from 'react-router-dom';
 
-export default function NetworkCorrelation({
-  incident,
-  onAction,
-  actionLoading,
-}) {
-  const networkIndicators = incident?.networkIndicators || [];
-  const culprit = incident?.culpritProcess || incident?.culprit_process || null;
-  const displayIndicators = Array.isArray(networkIndicators) ? networkIndicators : [];
+function endpoint(ip, port) {
+  if (!ip) return '—';
+  return `${ip.includes(':') ? `[${ip}]` : ip}${port ? `:${port}` : ''}`;
+}
+
+export default function NetworkCorrelation({ incident }) {
+  const rows = incident?.networkIndicators || [];
+  const evidence = incident?.detection_evidence;
+  const agentId = incident?.agentId || incident?.agent_id;
+  if (!rows.length) return <p>Incident chưa có bằng chứng socket.</p>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      {/* Header */}
-      <div>
-        <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-          Process ↔ Network Socket Correlation
-        </h4>
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-          Trace outbound connections, beaconing intervals, and C2 infrastructure linked to host processes
-        </span>
-      </div>
-
-      {/* Network Connections Table */}
-      {displayIndicators.length === 0 ? (
-        <div
-          style={{
-            textAlign: 'center',
-            padding: '2.5rem',
-            background: 'var(--bg-secondary)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border)',
-            color: 'var(--text-tertiary)',
-          }}
-        >
-          <FiCheckCircle size={32} style={{ margin: '0 auto 0.5rem', color: 'var(--success)' }} />
-          <p style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Không có kết nối mạng bất thường</p>
-          <span style={{ fontSize: '0.8rem' }}>Agent chưa ghi nhận luồng truyền tải dữ liệu hoặc beacon ra ngoài C2 IP.</span>
-        </div>
-      ) : (
-        <div
-          style={{
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            overflow: 'hidden',
-          }}
-        >
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-            <thead>
-              <tr style={{ background: 'rgba(255, 255, 255, 0.02)', borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontSize: '0.72rem', letterSpacing: '0.05em' }}>
-                <th style={{ padding: '0.75rem 1rem' }}>Associated Process</th>
-                <th style={{ padding: '0.75rem 1rem' }}>Destination & Operator</th>
-                <th style={{ padding: '0.75rem 1rem' }}>Dest Port</th>
-                <th style={{ padding: '0.75rem 1rem' }}>Protocol</th>
-                <th style={{ padding: '0.75rem 1rem' }}>Traffic Sent</th>
-                <th style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Mitigation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayIndicators.map((item, index) => {
-                const isCulprit = (culprit?.name && item.process_name === culprit.name) || (item.dst_port === 4444);
-                const procDisplay = item.process_name || 'unknown';
-                const pidDisplay = item.pid ? ` (PID ${item.pid})` : '';
-                return (
-                  <tr
-                    key={index}
-                    style={{
-                      borderBottom: '1px solid var(--border)',
-                      background: isCulprit ? 'rgba(239, 68, 68, 0.06)' : 'transparent',
-                    }}
-                  >
-                    <td style={{ padding: '0.75rem 1rem' }}>
-                      <span
-                        style={{
-                          fontWeight: 700,
-                          color: isCulprit ? 'var(--error)' : (procDisplay === 'unknown' ? 'var(--text-tertiary)' : 'var(--text-primary)'),
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
-                        }}
-                      >
-                        <FiArrowUpRight size={14} />
-                        {procDisplay}{pidDisplay}
-                      </span>
-                    </td>
-                    <td style={{ padding: '0.75rem 1rem' }}>
-                      <code style={{ color: isCulprit ? 'var(--warning)' : 'var(--text-primary)', fontWeight: 600 }}>
-                        {item.dst_ip}
-                      </code>
-                      {item.asn && item.asn !== 'UNKNOWN' && (
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', display: 'block', marginTop: '0.15rem' }}>
-                          {item.asn} • {item.org || 'Known Operator'}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: '0.75rem 1rem' }}>
-                      <span
-                        style={{
-                          padding: '0.15rem 0.45rem',
-                          borderRadius: 'var(--radius-xs)',
-                          fontSize: '0.78rem',
-                          fontWeight: 700,
-                          background: isCulprit ? 'rgba(239, 68, 68, 0.2)' : 'var(--bg-tertiary)',
-                          color: isCulprit ? 'var(--error)' : 'var(--text-secondary)',
-                        }}
-                      >
-                        {item.dst_port}
-                      </span>
-                    </td>
-                    <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)' }}>
-                      {item.protocol || 'TCP'}
-                    </td>
-                    <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)' }}>
-                      {item.bytes_sent != null && item.bytes_sent > 0 ? `${item.bytes_sent} B` : (item.packets_sent ? `${item.packets_sent} pkts` : 'Active Socket')}
-                    </td>
-                    <td style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={actionLoading}
-                        iconLeft={<FiLock size={12} />}
-                        onClick={() => onAction && onAction('block_ip', { ip: item.dst_ip })}
-                      >
-                        Block IP
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+    <div style={{ display: 'grid', gap: '1rem' }}>
+      {evidence?.classification && (
+        <div>
+          <strong>{evidence.classification}</strong>
+          <p>Risk Score {incident.riskScore}/100 · Confidence {Math.round(evidence.confidence * 100)}% · {evidence.observations} lượt quan sát</p>
         </div>
       )}
-
-      {/* Threat Intel C2 Correlation Card */}
-      <div
-        style={{
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          padding: '1rem 1.25rem',
-        }}
-      >
-        <h5 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          <FiShield size={14} color="var(--primary)" />
-          Threat Intelligence Reputation Match
-        </h5>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem', fontSize: '0.82rem' }}>
-          <div style={{ background: 'var(--bg-tertiary)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-            <span style={{ color: 'var(--text-tertiary)', display: 'block', marginBottom: '0.2rem' }}>Target Port Reputation</span>
-            <strong style={{ color: 'var(--error)' }}>Port 4444 / Metasploit Default C2</strong>
-            <p style={{ margin: '0.2rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-              Common default reverse shell handler port. Kích hoạt rule C2 Communication (+30 pts).
-            </p>
-          </div>
-
-          <div style={{ background: 'var(--bg-tertiary)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-            <span style={{ color: 'var(--text-tertiary)', display: 'block', marginBottom: '0.2rem' }}>Traffic Signature</span>
-            <strong style={{ color: 'var(--warning)' }}>Beaconing Heartbeat Pattern</strong>
-            <p style={{ margin: '0.2rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-              Chu kỳ phát sinh kết nối định kỳ dưới 15 giây, phù hợp với hành vi keylogger exfiltration.
-            </p>
-          </div>
-        </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', textAlign: 'left' }}>
+          <thead>
+            <tr><th>Process / PID</th><th>Local</th><th>Remote</th><th>Socket</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => {
+              const holders = row.holders?.length ? row.holders : (row.pid ? [{
+                pid: row.pid, name: row.process_name, process_start_time: row.process_start_time,
+              }] : []);
+              return (
+                <tr key={row.socket_id || index}>
+                  <td>
+                    {holders.length ? holders.map((holder) => {
+                      const label = `${holder.name || 'unknown'} (PID ${holder.pid})`;
+                      return <div key={holder.pid}>
+                        {agentId && holder.process_start_time ? (
+                          <Link to={`/investigate?tab=process&agent=${encodeURIComponent(agentId)}&pid=${holder.pid}&started=${holder.process_start_time}`}>
+                            {label}
+                          </Link>
+                        ) : label}
+                        {holder.stdio_fds?.length > 0 && <small> · stdio {holder.stdio_fds.join(', ')}</small>}
+                      </div>;
+                    }) : <span>Unknown{row.attribution && ` · ${row.attribution}`}</span>}
+                  </td>
+                  <td><code>{endpoint(row.src_ip, row.src_port)}</code></td>
+                  <td>
+                    <code>{endpoint(row.dst_ip, row.dst_port)}</code>
+                    {row.overlay && <div>{row.overlay}</div>}
+                    {row.category === 'shared_cgnat' && <div>Shared / CGNAT</div>}
+                  </td>
+                  <td>{[row.protocol, row.status, row.direction].filter(Boolean).join(' · ')}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      {evidence?.signals?.length > 0 && (
+        <ul>{evidence.signals.map((signal) => <li key={signal.reason}>{signal.reason} (+{signal.score})</li>)}</ul>
+      )}
     </div>
   );
 }

@@ -28,10 +28,11 @@ export const useAgents = ({ autoRefresh = true, refreshInterval = 5000 } = {}) =
     return () => clearInterval(interval);
   }, [fetchAgents, autoRefresh, refreshInterval]);
 
-  const handleIsolate = async (agentId) => {
+  const handleIsolate = async (agentId, confirmed = false) => {
+    if (!confirmed && !window.confirm(`Xác nhận cô lập agent ${agentId}?`)) return;
     try {
-      await isolateAgent(agentId);
-      toast.success(`Đã cô lập mạng cho agent ${agentId}`);
+      await isolateAgent(agentId, true);
+      toast.success(`Đã gửi yêu cầu cô lập agent ${agentId}`);
       await fetchAgents();
     } catch (e) {
       console.error('Failed to isolate agent', e);

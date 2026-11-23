@@ -197,7 +197,7 @@ class AgentGroupService:
                 results.append(GroupBatchActionResult(
                     action_id=action.id,
                     agent_id=agent.id,
-                    status="applied"
+                    status=action.status
                 ))
                 succeeded_count += 1
             except Exception as exc:

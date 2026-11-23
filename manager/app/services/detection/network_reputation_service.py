@@ -2,6 +2,7 @@ import socket
 import logging
 import ipaddress
 from typing import Dict, Any, Optional, Tuple, List
+from app.services.detection.network_shell import SHARED_IPV4
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,15 @@ class NetworkReputationService:
 
         if ip in cls._cache:
             return cls._cache[ip]
+
+        try:
+            address = ipaddress.ip_address(ip)
+            address = getattr(address, "ipv4_mapped", None) or address
+        except ValueError:
+            address = None
+        if isinstance(address, ipaddress.IPv4Address) and address in SHARED_IPV4:
+            return {"ip": ip, "asn": "UNKNOWN", "org": "Shared address space", "category": "shared_cgnat",
+                    "reverse_dns": "", "is_known_provider": False}
 
         asn = "UNKNOWN"
         org = "Unknown Operator"

@@ -186,9 +186,9 @@ async def test_network_connection_rule():
     }
 
     score, reason = await rule.evaluate(telemetry, context)
-    assert score == 50.0  # 20 (port) + 30 (malicious IP)
-    assert "suspicious ports" in reason
-    assert "malicious IPs" in reason
+    assert score == 36.0  # 6 (port) + 30 (threat intelligence)
+    assert "uncommon remote endpoint" in reason
+    assert "Threat intelligence matched" in reason
 
 
 async def test_file_changes_rule():
@@ -318,7 +318,7 @@ async def test_c2_communication_rule():
 
     score, reason = await rule.evaluate(telemetry, {})
     assert score > 0.0
-    assert "C2 communication indicator detected" in reason
+    assert "Possible C2 communication indicator detected" in reason
 
 
 async def test_lateral_movement_rule():

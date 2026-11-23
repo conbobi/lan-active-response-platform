@@ -31,3 +31,6 @@ class FlowOut(ORMBaseModel):
     end_time: Optional[datetime]
     agent_id: Optional[str]
     created_at: datetime
+    process_name: Optional[str] = None
+    pid: Optional[int] = None
+    socket_evidence: Optional[dict] = None

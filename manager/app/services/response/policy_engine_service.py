@@ -134,13 +134,13 @@ class PolicyEngineService:
         action_params = dict(action_params or {})
 
         # Check global auto-response flag (Monitor Mode check)
-        setting = await self.setting_service.get_setting("auto_response_enabled", default=True)
+        setting = await self.setting_service.get_setting("auto_response_enabled", default=False)
         if isinstance(setting, dict):
-            auto_enabled = setting.get("value", setting.get("data", True))
+            auto_enabled = setting.get("value", setting.get("data", False))
         elif setting is not None:
             auto_enabled = bool(setting)
         else:
-            auto_enabled = True
+            auto_enabled = False
 
         if not auto_enabled:
             logger.info(f"[MONITOR MODE] Would dispatch {action_type} for {agent_id} — skipped")
@@ -194,7 +194,7 @@ class PolicyEngineService:
                 actor=actor,
                 auto_rollback_seconds=auto_rollback_seconds
             )
-            return {"action_id": act.id, "agent_id": agent_id, "status": "applied"}
+            return {"action_id": act.id, "agent_id": agent_id, "status": "pending"}
         except Exception as e:
             logger.error(f"Policy engine failed to execute '{action_type}' on agent '{agent_id}': {e}", exc_info=True)
             return {"agent_id": agent_id, "status": "failed", "error": str(e)}

@@ -125,7 +125,7 @@ async def test_policy_engine_self_protection_blocks_kill(mock_db):
         action_type="kill_process_tree",
         target_pid=9000
     )
-    assert res_malware["status"] == "applied"
+    assert res_malware["status"] == "pending"
     assert res_malware["action_id"] == "act_123"
     engine.action_service.create_and_apply_action.assert_awaited_once()
 
@@ -182,7 +182,8 @@ async def test_response_action_service_rejects_agent_kill(mock_db):
             await service.create_and_apply_action(
                 agent_id="agent-win",
                 action_type="kill_process",
-                action_params={"pid": 5000}
+                action_params={"confirmed": True, "pid": 5000, "parent_pid": 1,
+                               "process_start_time": 1000.5, "exe_path": "/usr/bin/python"}
             )
         assert "target is LARP agent" in str(exc_info.value)
 

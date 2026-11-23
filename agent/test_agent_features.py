@@ -175,24 +175,29 @@ def test_auth_monitor_web_and_ssh_events():
 
 
 def test_socket_telemetry_uses_the_observed_file_descriptor(monkeypatch):
-    peer = SimpleNamespace(ip="192.0.2.5", port=443)
-    local = SimpleNamespace(ip="192.0.2.6", port=32001)
-    conn = SimpleNamespace(
-        pid=123, fd=5, type=agent.socket.SOCK_STREAM, status=agent.psutil.CONN_ESTABLISHED,
-        laddr=local, raddr=peer,
-    )
-    proc = SimpleNamespace(name=lambda: "bash", exe=lambda: "/usr/bin/bash", create_time=lambda: 1000.5)
-    descriptors = {"0": "socket:[42]", "1": "socket:[42]", "2": "/dev/null", "5": "socket:[42]"}
-    monkeypatch.setattr(agent.psutil, "net_connections", lambda **_: [conn])
-    monkeypatch.setattr(agent.psutil, "Process", lambda _: proc)
-    monkeypatch.setattr(agent.os, "getpid", lambda: 124)
-    monkeypatch.setattr(agent.os, "readlink", lambda path: descriptors[path.rsplit("/", 1)[-1]])
+    from connection_tracker import ConnectionTracker
+    import socket_telemetry as telemetry
 
-    sample, = agent.get_network_connections()
+    observed = {
+        "protocol": "TCP", "status": "ESTAB", "family": "IPv4",
+        "src_ip": "192.0.2.6", "src_port": 32001, "dst_ip": "192.0.2.5", "dst_port": 443,
+        "owners": [(123, 5)], "inode": "42", "socket_id": "IPv4:1",
+    }
+    metadata = {"pid": 123, "parent_pid": 17, "process_start_time": 1000.5,
+                "process_name": "bash", "exe_path": "/usr/bin/bash", "pty_requested": False}
+    descriptors = {"0": "socket:[42]", "1": "socket:[42]", "2": "/dev/null", "5": "socket:[42]"}
+    monkeypatch.setattr(telemetry, "socket_rows", lambda _: [observed])
+    monkeypatch.setattr(telemetry, "_process", lambda *_: metadata.copy())
+    monkeypatch.setattr(telemetry, "_ancestry", lambda *_: [])
+    monkeypatch.setattr(telemetry, "_descendants", lambda *_: [])
+    monkeypatch.setattr(telemetry.psutil, "Process", lambda _: SimpleNamespace(create_time=lambda: 1000.5))
+    monkeypatch.setattr(telemetry.os, "readlink", lambda path: descriptors[path.rsplit("/", 1)[-1]])
+
+    tracker = ConnectionTracker()
+    sample, = telemetry.collect_connections(tracker)
     assert sample["protocol"] == "TCP"
     assert sample["process_start_time"] == 1000.5
-    assert sample["socket_stdio"] is True
+    assert sample["holders"][0]["socket_stdio"] is True
     descriptors["1"] = "socket:[43]"
-    sample, = agent.get_network_connections()
-    assert sample["socket_stdio"] is False
-
+    sample, = telemetry.collect_connections(tracker)
+    assert sample["holders"][0]["socket_stdio"] is False

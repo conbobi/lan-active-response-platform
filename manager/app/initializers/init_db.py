@@ -17,6 +17,17 @@ def ensure_process_instance_column(connection):
         connection.execute(text("ALTER TABLE process_info ADD COLUMN process_start_time DOUBLE PRECISION"))
 
 
+def ensure_network_evidence_columns(connection):
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS detection_evidence JSON"))
+        connection.execute(text("ALTER TABLE flows ADD COLUMN IF NOT EXISTS socket_evidence JSON"))
+        return
+    inspector = inspect(connection)
+    for table, name in (("incidents", "detection_evidence"), ("flows", "socket_evidence")):
+        if not any(column["name"] == name for column in inspector.get_columns(table)):
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} JSON"))
+
+
 async def init_db() -> None:
     """Initialize database tables asynchronously."""
     async with async_engine.begin() as conn:

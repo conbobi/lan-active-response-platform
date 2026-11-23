@@ -7,6 +7,7 @@ from app.schemas.command_ack import CommandAckDTO
 from app.schemas.enums import CommandStatus
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.network_security import is_reserved_action
+from app.core.response_safety import PROTECTED_COMMANDS
 from app.services.core.base import AbstractService
 from app.services.core.command_dispatcher import command_dispatcher
 
@@ -20,6 +21,8 @@ class CommandService(AbstractService[CommandRepository]):
     async def issue_command(self, dto: CommandCreate) -> Command:
         if is_reserved_action(dto.action):
             raise BadRequestError("Use the authenticated network action endpoint")
+        if dto.action in PROTECTED_COMMANDS:
+            raise BadRequestError("Use a confirmed response action for this command")
         cmd = Command(
             id=dto.id,
             agent_id=dto.agent_id,
@@ -44,6 +47,9 @@ class CommandService(AbstractService[CommandRepository]):
         return list((await self.session.scalars(statement)).all())
 
     async def process_ack(self, ack_data: CommandAckDTO) -> Command:
+        existing = await self.repository.get(ack_data.command_id)
+        if existing and existing.action in PROTECTED_COMMANDS:
+            raise BadRequestError("Response acknowledgements must arrive through the Agent connection")
         cmd = await command_dispatcher.verify_execution(ack_data, self.session)
         if not cmd:
             raise NotFoundError(f"Command '{ack_data.command_id}' not found.")

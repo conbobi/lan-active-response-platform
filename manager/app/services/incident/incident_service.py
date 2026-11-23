@@ -161,13 +161,18 @@ class IncidentService(AbstractService[IncidentRepository]):
         severity = IncidentSeverity.CRITICAL if risk_score >= 85.0 else (
             IncidentSeverity.HIGH if risk_score >= 70.0 else IncidentSeverity.MEDIUM
         )
+        scores = factors.get("_scores", {})
+        evidence = {"factors": [
+            {"rule": key, "score": scores.get(key), "reason": str(value)}
+            for key, value in factors.items() if key not in {"_scores", "total_score", "score"}
+        ]}
 
         if existing:
+            if existing.detection_evidence is None or risk_score > existing.risk_score:
+                existing.detection_evidence = evidence
             existing.risk_score = max(existing.risk_score, risk_score)
             if severity == IncidentSeverity.CRITICAL and existing.severity != IncidentSeverity.CRITICAL:
                 existing.severity = IncidentSeverity.CRITICAL
-            existing.description += f"\n\n[Auto Update] Additional Risk Telemetry Spike: Score {risk_score}. Factors: {factors}"
-            await self.add_note(existing.id, f"Automated risk spike recorded. Score: {risk_score}", user="system")
             await self.session.flush()
             logger.info(f"Updated existing incident '{existing.id}' for agent '{agent_id}' with score {risk_score}.")
             return existing
@@ -188,6 +193,7 @@ class IncidentService(AbstractService[IncidentRepository]):
             agent_id=agent_id,
             risk_score=risk_score,
             notes=notes,
+            detection_evidence=evidence,
         )
         created = await self.repository.add(inc)
         await self.session.flush()
@@ -273,6 +279,26 @@ class IncidentService(AbstractService[IncidentRepository]):
 
     async def _enrich_incident(self, inc: Incident) -> Incident:
         """Enrich incident with structured fields: culprit_process, parent_process, network_indicators, factors_breakdown."""
+        if inc.detection_evidence:
+            evidence = inc.detection_evidence
+            inc.culprit_process = evidence.get("process")
+            inc.parent_process = next(iter(evidence.get("ancestry", [])), None)
+            inc.network_indicators = [evidence["network"]] if "network" in evidence else []
+            inc.factors_breakdown = evidence.get("factors") or [
+                {"rule": evidence["rule_id"], "score": signal["score"], "reason": signal["reason"]}
+                for signal in evidence.get("signals", [])
+            ]
+            inc.story = evidence.get("story") or (inc.description or "").split("\n", 1)[0]
+            return inc
+        notes = inc.notes or ""
+        if (notes.startswith("rule_id:builtin_linux_network_shell")
+                or "Direct connection to C2 port" in (inc.description or "")):
+            inc.culprit_process = None
+            inc.parent_process = None
+            inc.network_indicators = []
+            inc.factors_breakdown = []
+            inc.story = "Legacy network alert. Socket-to-process evidence was unavailable."
+            return inc
         agent_id = inc.agent_id
         desc_lower = (inc.description or "").lower()
 
@@ -284,11 +310,11 @@ class IncidentService(AbstractService[IncidentRepository]):
             rrec = risk_res.scalar_one_or_none()
             if rrec and rrec.factors and isinstance(rrec.factors, dict):
                 for k, v in rrec.factors.items():
-                    if k in ("total_score", "score"):
+                    if k in ("total_score", "score", "_scores"):
                         continue
                     factors_breakdown.append({
                         "rule": k,
-                        "score": round(float(rrec.score), 1) if rrec.score else 25.0,
+                        "score": rrec.factors.get("_scores", {}).get(k),
                         "reason": str(v)
                     })
 
@@ -579,12 +605,11 @@ class IncidentService(AbstractService[IncidentRepository]):
             act = await act_service.create_and_apply_action(
                 agent_id=agent_id,
                 action_type="isolate",
-                action_params={"reason": f"SOC Quick Action from Incident '{incident_id}' by {user}"},
+                action_params={"confirmed": params.get("confirmed"), "reason": f"SOC Quick Action from Incident '{incident_id}' by {user}"},
                 incident_id=incident_id,
                 actor=user
             )
-            inc.status = IncidentStatus.CONTAINED
-            result_msg = f"Isolated Agent '{agent_id}' (Action: {act.id}) and updated status to CONTAINED."
+            result_msg = f"Queued isolation for Agent '{agent_id}' (Action: {act.id})."
 
         elif action_type == "unisolate":
             from app.services.response.rollback_service import RollbackService
@@ -600,7 +625,7 @@ class IncidentService(AbstractService[IncidentRepository]):
                         reason=f"SOC Unisolate Action from Incident '{incident_id}' by {user}",
                         actor=user
                     )
-                result_msg = f"Unisolated Agent '{agent_id}' via RollbackService."
+                result_msg = f"Requested isolation rollback for Agent '{agent_id}'."
             else:
                 from app.repositories.agent_repository import AgentRepository
                 agent_repo = AgentRepository(self.session)
@@ -620,43 +645,32 @@ class IncidentService(AbstractService[IncidentRepository]):
                 result_msg = f"Unisolated Agent '{agent_id}'."
 
         elif action_type == "kill_process_tree":
-            pid = params.get("pid")
-            process_name = params.get("process_name")
-            if not pid:
-                raise BadRequestError("Parameter 'pid' is required for kill_process_tree action.")
-            if int(pid) <= 2:
-                raise BadRequestError("Cannot kill kernel process or system init (PID <= 2).")
-
-            cmd = Command(
-                id=f"cmd_{uuid.uuid4().hex[:12]}",
-                agent_id=agent_id,
-                action="kill_process_tree",
-                payload={
-                    "pid": int(pid),
-                    "process_name": process_name,
-                    "reason": f"SOC Quick Action from Incident '{incident_id}' by {user}"
+            process = (inc.detection_evidence or {}).get("process")
+            if not process or params.get("pid") != process["pid"]:
+                raise BadRequestError("The incident has no verified process identity for this PID")
+            from app.services.response.response_action_service import ResponseActionService
+            act = await ResponseActionService(self.session).create_and_apply_action(
+                agent_id=agent_id, action_type=action_type, incident_id=incident_id, actor=user,
+                action_params={
+                    "pid": process["pid"], "process_start_time": process["process_start_time"],
+                    "parent_pid": process["parent_pid"], "exe_path": process["exe_path"],
+                    "confirmed": params.get("confirmed"), "reason": f"SOC action for incident {incident_id}",
                 },
-                status=CommandStatus.PENDING
             )
-            await cmd_repo.add(cmd)
-            await command_dispatcher.push_command(cmd.id, agent_id)
-            result_msg = f"Dispatched kill_process_tree for PID {pid} ({process_name or 'unknown'}) on agent '{agent_id}'."
+            result_msg = f"Queued process termination for PID {process['pid']} (Action: {act.id})."
 
         elif action_type == "block_ip":
-            target_ip = params.get("ip") or params.get("target_ip")
-            if not target_ip:
-                raise BadRequestError("Parameter 'ip' is required for block_ip action.")
-            result_msg = f"Blocked IP '{target_ip}' in firewall rules for Incident '{incident_id}'."
+            raise BadRequestError("Use the Agent firewall controls to apply an IP rule.")
 
         else:
             raise BadRequestError(f"Unknown action_type '{action_type}'.")
 
-        await self.add_note(incident_id, f"SOC Quick Action executed: [{action_type.upper()}] - {result_msg}", user=user)
+        await self.add_note(incident_id, f"SOC action requested: [{action_type.upper()}] - {result_msg}", user=user)
         await self.session.flush()
 
         # Send notification
         msg = (
-            f"⚡ <b>SOC QUICK ACTION EXECUTED</b>\n"
+            f"⚡ <b>SOC ACTION REQUESTED</b>\n"
             f"<b>Incident:</b> {incident_id}\n"
             f"<b>Action:</b> {action_type.upper()}\n"
             f"<b>Executed By:</b> {user}\n"
@@ -664,7 +678,7 @@ class IncidentService(AbstractService[IncidentRepository]):
         )
         await self.notification_service.send_alert(msg)
 
-        return {"status": "success", "message": result_msg, "action": action_type, "incident_id": incident_id}
+        return {"status": "pending", "message": result_msg, "action": action_type, "incident_id": incident_id}
 
     async def add_note(self, incident_id: str, content: str, user: str = "system") -> IncidentNote:
         inc = await self.get_incident(incident_id)

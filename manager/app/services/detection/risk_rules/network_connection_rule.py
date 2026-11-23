@@ -1,74 +1,63 @@
+import ipaddress
+import logging
 from typing import Any, Dict, Tuple
+
+from app.services.detection.network_shell import connection_key
 from app.services.detection.risk_rules.base import RiskRule
+
+logger = logging.getLogger(__name__)
 
 
 class NetworkConnectionRule(RiskRule):
     rule_id = "network_connection"
-    name = "Suspicious Network Connection & Threat Intel IP"
-    description = "Detects connections to suspicious ports and Threat Intelligence blacklisted IPs."
-    enabled = True
-    weight = 1.0
+    name = "Suspicious Network Connection"
+    description = "Scores uncommon destinations and threat intelligence matches."
     category = "network"
 
-    DEFAULT_SUSPICIOUS_PORTS = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
-    SAFE_PROCESSES = {'python3', 'python', 'node', 'bash', 'sh', 'xfwm4', 'systemd', 'dbus-daemon', 'xfce4-panel'}
-
-    def _get_suspicious_ports(self) -> set:
-        config_ports = self.config.get("suspicious_ports")
-        if config_ports:
-            return set(config_ports)
-        return self.DEFAULT_SUSPICIOUS_PORTS
+    DEFAULT_SUSPICIOUS_PORTS = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445, 9001, 8443}
 
     async def evaluate(self, telemetry: Dict[str, Any], context: Dict[str, Any]) -> Tuple[float, str]:
-        connections = telemetry.get("network_connections", [])
-        if not connections:
-            return 0.0, ""
+        ports = set(self.config.get("suspicious_ports", self.DEFAULT_SUSPICIOUS_PORTS))
+        shell_connections = context.get("shell_connections", set())
+        threat_intel = context.get("threat_intel_service")
+        unusual = set()
+        malicious = set()
+        queried = set()
 
-        suspicious_ports = self._get_suspicious_ports()
-        suspicious_conns = 0
-        threat_ip_count = 0
+        for conn in telemetry.get("network_connections", []):
+            if not isinstance(conn, dict):
+                continue
+            try:
+                remote = ipaddress.ip_address(conn.get("dst_ip"))
+            except ValueError:
+                continue
+            remote = getattr(remote, "ipv4_mapped", None) or remote
+            if remote.is_loopback or remote.is_unspecified or remote.is_multicast:
+                continue
+            if type(conn.get("dst_port")) is not int or not 0 < conn["dst_port"] <= 65535:
+                continue
+            if conn["dst_port"] in ports and conn.get("direction") != "inbound":
+                key = connection_key(conn)
+                if key not in shell_connections:
+                    unusual.add((str(remote), conn["dst_port"]))
 
-        threat_intel_service = context.get("threat_intel_service")
-
-        for conn in connections:
-            c_dict = conn if isinstance(conn, dict) else conn.model_dump() if hasattr(conn, "model_dump") else getattr(conn, "__dict__", {})
-            dst_port = c_dict.get("dst_port", 0)
-            src_port = c_dict.get("src_port", 0)
-            dst_ip = c_dict.get("dst_ip")
-            is_susp = c_dict.get("is_suspicious", False)
-
-            p_name = str(c_dict.get("process_name") or c_dict.get("process") or "").strip().lower()
-            base_p_name = p_name.replace("\\", "/").split("/")[-1]
-            is_safe = base_p_name in self.SAFE_PROCESSES or p_name in self.SAFE_PROCESSES
-
-            # Nếu tiến trình là SAFE_PROCESS và không có cờ is_suspicious, chỉ cờ nếu port là port C2 nguy hiểm thực sự (4444, 1337, 31337, 5555)
-            if is_safe and not is_susp:
-                high_risk_ports = {4444, 5555, 1337, 31337, 6667}
-                if dst_port in high_risk_ports or src_port in high_risk_ports:
-                    suspicious_conns += 1
-            elif is_susp or dst_port in suspicious_ports or src_port in suspicious_ports:
-                suspicious_conns += 1
-
-            if dst_ip and threat_intel_service:
+            # Shared, local and private addresses have no public threat-feed attribution.
+            if threat_intel and remote.is_global and remote not in queried:
+                queried.add(remote)
                 try:
-                    ip_intel = await threat_intel_service.check_ip(dst_ip)
-                    if ip_intel and ip_intel.get("is_malicious"):
-                        threat_ip_count += 1
-                except Exception:
-                    pass
+                    result = await threat_intel.check_ip(str(remote))
+                    if result and result.get("is_malicious"):
+                        malicious.add(remote)
+                except Exception as error:
+                    logger.debug("IP reputation unavailable: %s", error)
 
-        score = 0.0
         reasons = []
-
-        if suspicious_conns > 0:
-            score += min(35.0, suspicious_conns * 20.0)
-            reasons.append(f"Detected {suspicious_conns} connections to suspicious ports")
-
-        if threat_ip_count > 0:
-            score += 30.0
-            reasons.append(f"Detected {threat_ip_count} connections to malicious IPs")
-
-        if score > 0:
-            return score * self.base_score, "; ".join(reasons)
-
-        return 0.0, ""
+        port_score = min(10.0, len(unusual) * 6.0)
+        if unusual:
+            reasons.append(f"Suspicious network connection: {len(unusual)} uncommon remote endpoint(s)")
+        if malicious:
+            reasons.append(f"Threat intelligence matched {len(malicious)} remote IP(s)")
+        intel_points = 30.0 if malicious else 0.0
+        context["network_threat_intel_points"] = intel_points
+        score = (port_score + intel_points) * self.base_score
+        return score, "; ".join(reasons)

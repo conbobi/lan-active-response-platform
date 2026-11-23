@@ -9,12 +9,14 @@ import yaml
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rule_candidate import RuleCandidate
+from app.models.agent import Agent
 from app.models.incident import Incident
 from app.schemas.enums import IncidentSeverity, IncidentStatus
+from app.services.detection.network_shell import detect_network_shell
 
 logger = logging.getLogger("larp.services.rule_engine")
 
@@ -28,9 +30,9 @@ class RuleMatch:
     matched_event: Dict[str, Any]
     detail: str
     entity: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
 
 
-LINUX_SHELLS = {"bash", "dash", "sh", "ash", "ksh", "zsh"}
 LINUX_TEMP_DIRS = ("/tmp/", "/dev/shm/", "/var/tmp/")
 SENSITIVE_FILES = {
     "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow",
@@ -42,6 +44,12 @@ SENSITIVE_DIRS = ("/etc/sudoers.d/", "/etc/ssh/sshd_config.d/", "/etc/cron.d/", 
 def match_endpoint_telemetry(telemetry: Dict[str, Any]) -> List[RuleMatch]:
     matches = []
     for event in telemetry.get("network_connections") or []:
+        evidence = detect_network_shell(event)
+        if evidence:
+            matches.append(RuleMatch(
+                evidence["rule_id"], evidence["classification"], evidence["severity"], ["T1059.004"],
+                event, evidence["story"], evidence["entity"], evidence,
+            ))
         if not isinstance(event, dict) or event.get("protocol") != "TCP" or event.get("status") != "ESTABLISHED":
             continue
         path = event.get("exe_path")
@@ -65,13 +73,6 @@ def match_endpoint_telemetry(telemetry: Dict[str, Any]) -> List[RuleMatch]:
         entity = f"{pid}:{started}"
         peer = f"[{remote}]:{port}"
         detail = f"PID={pid}, process_start_time={started}, executable={path}, remote={peer}, TCP=ESTABLISHED"
-        if posixpath.basename(path) in LINUX_SHELLS and event.get("socket_stdio") is True:
-            matches.append(RuleMatch(
-                "builtin_linux_network_shell", "Linux shell attached to a remote socket",
-                "high", ["T1059.004"], event,
-                f"{detail}, same socket observed on stdin and an output stream",
-                f"{entity}:{peer}",
-            ))
         if path.startswith(LINUX_TEMP_DIRS):
             matches.append(RuleMatch(
                 "builtin_linux_temp_network_exec", "Linux temporary executable with a remote connection",
@@ -280,7 +281,18 @@ class RuleEngine:
                 filtered_matches.append(m)
             matches = filtered_matches
 
-        matches = match_endpoint_telemetry(telemetry) + matches
+        endpoint_matches = match_endpoint_telemetry(telemetry)
+        shell_instances = {(m.evidence["process"]["pid"], m.evidence["process"]["process_start_time"])
+                           for m in endpoint_matches if m.evidence and m.evidence["process"]}
+        sigma_matches = []
+        for match in matches:
+            if "reverse shell" in match.rule_name.lower():
+                event = match.matched_event
+                if (event.get("pid"), event.get("process_start_time")) in shell_instances:
+                    continue
+                match.rule_name = "Suspicious Shell Activity"
+            sigma_matches.append(match)
+        matches = endpoint_matches + sigma_matches
         if not matches:
             return []
         incidents = await self._create_incidents(matches, telemetry, agent_id, session)
@@ -639,10 +651,15 @@ class RuleEngine:
         Tạo Incident cho mỗi match.
         DEDUP: nếu cùng (rule_name, agent_id) đã có incident mở trong 5 phút → bỏ qua.
         """
-        cutoff_dt = datetime.now(timezone.utc) - timedelta(seconds=300)
+        now = datetime.now(timezone.utc)
+        cutoff_dt = now - timedelta(seconds=300)
+        if any(match.evidence for match in matches):
+            # Serialize concurrent reports for the same Agent before finding or inserting a session.
+            await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
         recent_stmt = select(Incident).where(
             Incident.agent_id == agent_id,
-            Incident.created_at >= cutoff_dt,
+            or_(Incident.created_at >= cutoff_dt,
+                Incident.detection_evidence.is_not(None) & (Incident.updated_at >= cutoff_dt)),
         )
         recent = (await session.execute(recent_stmt)).scalars().all()
 
@@ -664,9 +681,14 @@ class RuleEngine:
         )
 
         created = []
+        updated = False
+        active_statuses = {IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED}
         for m in matches:
-            # Dedup check
-            if any(self._is_same_rule_incident(inc, m) for inc in recent):
+            existing = next((inc for inc in recent if (not m.evidence or inc.status in active_statuses)
+                             and self._is_same_rule_incident(inc, m)), None)
+            if existing is not None:
+                if m.evidence:
+                    updated |= self._aggregate_evidence(existing, m, now)
                 logger.debug(f"rule_engine: dedup skip rule={m.rule_name} agent={agent_id}")
                 continue
 
@@ -683,17 +705,14 @@ class RuleEngine:
                 id=inc_id,
                 agent_id=agent_id,
                 title=f"[{m.severity.upper()}] {m.rule_name}"[:256],
-                description=(
-                    f"Rule: {m.rule_name}\n"
-                    f"Rule ID: {m.rule_id}\n"
-                    f"Severity: {m.severity}\n"
-                    f"MITRE: {', '.join(m.mitre_techniques) if m.mitre_techniques else 'N/A'}\n"
-                    f"Detail: {m.detail}\n"
-                    f"Agent: {agent_id}"
-                ),
+                description=self._describe_match(m, agent_id),
                 severity=sev_map.get(m.severity.lower(), IncidentSeverity.MEDIUM),
                 status=IncidentStatus.OPEN,
-                risk_score=float(self._severity_to_score(m.severity)),
+                risk_score=float(m.evidence["risk_score"] if m.evidence else self._severity_to_score(m.severity)),
+                detection_evidence=({**m.evidence, "observations": 1,
+                                     "first_received_at": now.isoformat(), "last_received_at": now.isoformat(),
+                                     "last_observed_at": m.evidence["network"].get("observed_at")}
+                                    if m.evidence else None),
                 notes=(
                     f"rule_id:{m.rule_id} | entity:{m.entity}"
                     if m.entity is not None else f"rule_id:{m.rule_id} | Auto-generated by LARP AI Rule Engine"
@@ -704,7 +723,7 @@ class RuleEngine:
             # Add to local recent list for deduplicating multiple matches in the same batch
             recent.append(incident)
 
-        if created:
+        if created or updated:
             await session.commit()
             for inc in created:
                 await session.refresh(inc)
@@ -712,6 +731,9 @@ class RuleEngine:
 
     def _is_same_rule_incident(self, incident: Incident, match: RuleMatch) -> bool:
         """Kiểm tra incident trùng lặp theo rule_id hoặc rule_name."""
+        if match.evidence:
+            evidence = incident.detection_evidence or {}
+            return evidence.get("rule_id") == match.rule_id and evidence.get("entity") == match.entity
         if match.entity is not None:
             return incident.notes == f"rule_id:{match.rule_id} | entity:{match.entity}"
         if incident.notes and f"rule_id:{match.rule_id}" in incident.notes:
@@ -719,6 +741,35 @@ class RuleEngine:
         if incident.description and f"Rule ID: {match.rule_id}" in incident.description:
             return True
         return match.rule_name in (incident.title or "")
+
+    def _aggregate_evidence(self, incident: Incident, match: RuleMatch, now: datetime) -> bool:
+        incoming = match.evidence
+        existing = incident.detection_evidence
+        observed_at = incoming["network"].get("observed_at")
+        if observed_at and observed_at == existing.get("last_observed_at"):
+            return False
+        previous_rank = (existing["severity"] == "high", existing["risk_score"])
+        incoming_rank = (incoming["severity"] == "high", incoming["risk_score"])
+        latest = incoming if incoming_rank >= previous_rank else existing
+        incident.detection_evidence = {
+            **latest, "observations": existing["observations"] + 1,
+            "first_received_at": existing["first_received_at"], "last_received_at": now.isoformat(),
+            "last_observed_at": observed_at,
+        }
+        if incoming_rank > previous_rank:
+            incident.risk_score = incoming["risk_score"]
+            incident.severity = IncidentSeverity(incoming["severity"])
+            incident.title = f"[{match.severity.upper()}] {match.rule_name}"
+            incident.description = self._describe_match(match, incident.agent_id)
+        incident.updated_at = now
+        return True
+
+    @staticmethod
+    def _describe_match(match: RuleMatch, agent_id: str) -> str:
+        return (
+            f"Rule: {match.rule_name}\nRule ID: {match.rule_id}\nSeverity: {match.severity}\n"
+            f"MITRE: {', '.join(match.mitre_techniques) or 'N/A'}\nDetail: {match.detail}\nAgent: {agent_id}"
+        )
 
     def _severity_to_score(self, severity: str) -> int:
         return {"low": 30, "medium": 50, "high": 75, "critical": 95}.get(severity.lower(), 50)

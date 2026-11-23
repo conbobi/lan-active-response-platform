@@ -76,10 +76,15 @@ export default function IncidentDetailModal({
 
   const handleAction = async (actionType, params = {}) => {
     if (!detailedIncident?.id || actionLoading) return;
+    if (['kill_process_tree', 'isolate', 'block_ip'].includes(actionType)) {
+      const target = params.pid ? `PID ${params.pid}` : detailedIncident.agentId;
+      if (!window.confirm(`Xác nhận ${actionType} cho ${target}?`)) return;
+      params = { ...params, confirmed: true };
+    }
     setActionLoading(true);
     try {
       const res = await executeIncidentAction(detailedIncident.id, actionType, params);
-      const msg = res.message || `Thực thi thành công: ${actionType}`;
+      const msg = res.message || `Đã gửi yêu cầu ${actionType}`;
       toast.success(msg);
       showToast(msg);
 

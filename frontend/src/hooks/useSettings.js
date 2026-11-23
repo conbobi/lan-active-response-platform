@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS = {
     file_changes_critical: 100,
     file_changes_elevated: 30,
   },
-  auto_response_enabled: true,
+  auto_response_enabled: false,
   email_notifications_enabled: true,
   admin_email: 'admin@larp-soc.lan',
   telemetry_interval_sec: 5,

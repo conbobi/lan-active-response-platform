@@ -11,7 +11,6 @@ import InfoTooltip from '../components/ui/InfoTooltip';
 import { TOOLTIPS } from '../constants/tooltips';
 import KillProcessModal from '../components/process/KillProcessModal';
 import TreeNode from '../components/process/TreeNode';
-import { killProcess } from '../api/process';
 import {
   FiCpu,
   FiAlertOctagon,
@@ -98,8 +97,7 @@ export default function ProcessTree({ embedded = false }) {
     clearActionSuccess,
     clearError,
     refreshProcessData,
-    handleKillProcess,
-    handleKillProcessTree,
+    queueTermination,
   } = useProcessTree(selectedAgent);
 
   const queryPid = useMemo(() => {
@@ -109,7 +107,7 @@ export default function ProcessTree({ embedded = false }) {
     while (nodes.length) {
       const node = nodes.pop();
       if (Number(node.pid) === Number(requestedPid) && node.process_start_time != null &&
-        Math.abs(Number(node.process_start_time) - Number(requestedStart)) < 0.01) return requestedPid;
+        Number(node.process_start_time) === Number(requestedStart)) return requestedPid;
       nodes.push(...(node.children || []));
     }
     return null;
@@ -273,14 +271,11 @@ export default function ProcessTree({ embedded = false }) {
     setKillTarget({ ...proc, defaultKillTree: isTreeMode });
   };
 
-  const handleKill = async ({ pid, reason, killTree }) => {
+  const handleKill = async ({ pid, reason, killTree, target }) => {
     try {
-      const result = await killProcess(selectedAgent, pid, { reason, killTree });
+      const result = await queueTermination({ pid, reason, killTree, target });
       toast.success(`Đã gửi lệnh ${result?.action_type || (killTree ? 'kill_tree' : 'kill_process')} cho PID ${pid}`);
       if (clearError) clearError();
-      if (killTree) await handleKillProcessTree(pid);
-      else await handleKillProcess(pid);
-      setTimeout(() => refreshProcessData(), 1500);
     } catch (err) {
       if (err.response?.status === 429) {
         const detail = err.response.data?.detail || '';
@@ -411,7 +406,7 @@ export default function ProcessTree({ embedded = false }) {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FiCheckCircle size={17} />
-            <span>{actionSuccess} — Process list refreshed successfully.</span>
+            <span>{actionSuccess}</span>
           </div>
           <button onClick={clearActionSuccess} style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer' }}>
             <FiX size={16} />

@@ -1,7 +1,7 @@
 import statistics
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Index
+from sqlalchemy import JSON, String, Integer, DateTime, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
@@ -28,6 +28,7 @@ class Flow(Base):
     )
     process_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    socket_evidence: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
 
     def calculate_duration(self) -> float:
         """Calculate flow duration in seconds."""

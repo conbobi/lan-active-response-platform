@@ -8,6 +8,7 @@ if agent_path not in sys.path:
 
 
 from agent import get_process_list, get_network_connections, get_file_changes_count
+from socket_telemetry import SOCKET_LIMIT
 
 
 def test_get_process_list():
@@ -25,13 +26,14 @@ def test_get_process_list():
 def test_get_network_connections():
     conns = get_network_connections()
     assert isinstance(conns, list)
-    assert len(conns) <= 30
+    assert len(conns) <= SOCKET_LIMIT
     for c in conns:
         assert "src_ip" in c
         assert "src_port" in c
         assert "dst_ip" in c
         assert "dst_port" in c
         assert "is_suspicious" in c
+        assert "holders" in c and "attribution" in c
 
 
 def test_get_file_changes_count():

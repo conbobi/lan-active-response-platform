@@ -17,6 +17,7 @@ from fim import FileIntegrityMonitor
 from auth_monitor import global_auth_monitor
 from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
+from socket_telemetry import collect_connections
 from web_log_monitor import web_log_monitor_task
 from network_channel import NetworkChannel, TOKEN as NETWORK_TOKEN, websocket_auth
 from firewall_control import SAFETY_VERSION
@@ -283,104 +284,9 @@ def get_process_list(all_processes=None):
     normal_procs = [p for p in all_processes if not p["is_suspicious"]]
     return (suspicious_procs + normal_procs)[:30]
 
-def has_socket_stdio(pid, fd):
-    """Check that the observed socket is attached to stdin and an output stream."""
-    if not pid or fd < 0:
-        return False
-
-    def read_fd(number):
-        try:
-            return os.readlink(f"/proc/{pid}/fd/{number}")
-        except OSError:
-            return ""
-
-    socket_link = read_fd(fd)
-    return (
-        socket_link.startswith("socket:[")
-        and read_fd(0) == socket_link
-        and socket_link in (read_fd(1), read_fd(2))
-    )
-
-
 def get_network_connections():
-    """Collect sockets with a remote peer and any available owning process metadata."""
-    suspicious_ports = {4444, 5555, 1337, 31337, 6667, 23, 8080, 445}
-    connections = []
-    my_pid = os.getpid()
-    try:
-        for conn in psutil.net_connections(kind='inet'):
-            # psutil reports local and remote endpoints for inbound and outbound sockets.
-            if not conn.raddr or conn.status == 'LISTEN':
-                continue
-            # Bỏ qua socket của chính LARP Agent (tránh self-detection loop)
-            if conn.pid == my_pid:
-                continue
+    return collect_connections(global_connection_tracker)
 
-            laddr = conn.laddr
-            raddr = conn.raddr
-            src_ip = laddr.ip if laddr else "0.0.0.0"
-            src_port = laddr.port if laddr else 0
-            dst_ip = raddr.ip
-            dst_port = raddr.port
-
-            # Bỏ qua loopback và wildcard 0.0.0.0
-            if dst_ip.startswith("127.") or dst_ip in ("::1", "0.0.0.0", "localhost"):
-                continue
-
-            is_susp = (dst_port in suspicious_ports or src_port in suspicious_ports)
-
-            proc_name = "unknown"
-            exe_path = ""
-            create_time = None
-            if conn.pid:
-                try:
-                    p = psutil.Process(conn.pid)
-                    proc_name = p.name() or "unknown"
-                    try:
-                        exe_path = p.exe() or ""
-                    except Exception:
-                        pass
-                    try:
-                        create_time = p.create_time()
-                    except Exception:
-                        pass
-                except Exception:
-                    proc_name = "unknown"
-
-            is_tcp = conn.type == socket.SOCK_STREAM
-            shell = os.path.basename(exe_path) in {"bash", "dash", "sh", "ash", "ksh", "zsh"}
-            socket_stdio = (
-                is_tcp and conn.status == psutil.CONN_ESTABLISHED
-                and shell and has_socket_stdio(conn.pid, conn.fd)
-            )
-
-            connections.append({
-                "pid": conn.pid,
-                "process_name": proc_name,
-                "process": proc_name,
-                "exe_path": exe_path,
-                "process_start_time": create_time,
-                "src_ip": src_ip,
-                "src_port": src_port,
-                "dst_ip": dst_ip,
-                "dst_port": dst_port,
-                "protocol": "TCP" if is_tcp else "UDP",
-                "status": conn.status,
-                "socket_stdio": socket_stdio,
-                "is_suspicious": is_susp
-            })
-    except Exception:
-        pass
-
-    connections.sort(
-        key=lambda conn: (
-            conn["socket_stdio"],
-            conn["exe_path"].startswith(("/tmp/", "/dev/shm/", "/var/tmp/")),
-            conn["is_suspicious"],
-        ),
-        reverse=True,
-    )
-    return connections[:25]
 
 def get_file_changes_count():
     """Đếm số file .encrypted hoặc có thay đổi gần đây trong /tmp (bao gồm thư mục con)."""
@@ -600,9 +506,13 @@ async def send_ws_json_no_wait(websocket, message):
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
     params = cmd.get("payload", {})
+    if action in {"isolate", "auto_isolate", "quarantine", "block_ip", "remove_registry", "suspend_process"} and params.get("confirmed") is not True:
+        return {"status": "failed", "message": "Explicit operator confirmation required"}
+    if action in {"kill_process_verified", "kill_process_tree_verified"}:
+        action = action.removesuffix("_verified")
     handler = COMMAND_HANDLERS.get(action)
     if not handler:
-        return {"status": "error", "message": f"Unknown action '{action}'"}
+        return {"status": "failed", "message": f"Unknown action '{action}'"}
 
     result = await handler.execute(params, websocket)
     return result
@@ -627,7 +537,9 @@ async def send_stats(websocket):
                             "type": "COMMAND_ACK",
                             "payload": {
                                 "command_id": cmd.get("command_id"),
-                                "status": ack_payload.get("status", "success"),
+                                "status": "success" if ack_payload.get("status") == "success" else "failed",
+                                "validation": ack_payload.get("validation"),
+                                "killed_pids": ack_payload.get("killed_pids"),
                                 "error_message": ack_payload.get("message"),
                                 "executed_at": datetime.now(timezone.utc).isoformat()
                             }
@@ -646,7 +558,7 @@ async def send_risk_telemetry(websocket):
         try:
             all_procs = collect_process_info()
             procs = get_process_list(all_procs)
-            conns = get_network_connections()
+            conns = await asyncio.to_thread(get_network_connections)
             file_changes = get_file_changes_count()
             registry_changes = collect_registry_changes()
             suspicious_cmds = collect_suspicious_commands(all_procs)
@@ -660,7 +572,6 @@ async def send_risk_telemetry(websocket):
 
             auth_events = global_auth_monitor.get_new_events()
             dns_queries = global_dns_sniffer.get_recent_queries()
-            global_connection_tracker.sample_connections()
             conn_hist = global_connection_tracker.get_connection_history()
 
             payload = {

@@ -189,21 +189,24 @@ def test_endpoint_network_rules_require_process_and_socket_evidence():
     shell = {
         "exe_path": "/usr/bin/bash", "pid": 808, "process_start_time": 1000.5,
         "dst_ip": "192.0.2.21", "dst_port": 443, "protocol": "TCP",
-        "status": "ESTABLISHED", "socket_stdio": True,
+        "status": "ESTABLISHED", "src_ip": "192.0.2.9", "src_port": 34000,
+        "inode": "42", "attribution": "inode_verified",
+        "holders": [{"pid": 808, "exe_path": "/usr/bin/bash", "process_start_time": 1000.5,
+                     "stdio_fds": [0, 1], "socket_fds": [0, 1], "interactive": True}],
     }
-    temp_exec = {**shell, "exe_path": "/dev/shm/tool", "socket_stdio": False}
+    temp_exec = {**shell, "exe_path": "/dev/shm/tool", "holders": []}
     matches = match_endpoint_telemetry({"network_connections": [shell, temp_exec]})
     assert [match.rule_id for match in matches] == [
         "builtin_linux_network_shell", "builtin_linux_temp_network_exec",
     ]
     assert "192.0.2.21" in matches[0].detail
     different_start = match_endpoint_telemetry(
-        {"network_connections": [{**shell, "process_start_time": 1001}]}
+        {"network_connections": [{**shell, "holders": [{**shell["holders"][0], "process_start_time": 1001}]}]}
     )[0]
     assert different_start.entity != matches[0].entity
 
     benign = [
-        {**shell, "socket_stdio": False},
+        {**shell, "holders": []},
         {**shell, "dst_ip": "127.0.0.1"},
         {**shell, "dst_ip": "::ffff:127.0.0.1"},
         {**shell, "status": "SYN_SENT"},

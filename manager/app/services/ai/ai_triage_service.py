@@ -36,15 +36,17 @@ class AITriageService:
                 return None
 
             # 2. Pull context
-            process_tree = await self._get_process_tree(session, incident.agent_id)
-            process_tree = process_tree[:20]
-            flows = await self._get_recent_flows(session, incident.agent_id, incident.created_at, minutes=15)
-            flows = flows[:10]
+            evidence = getattr(incident, "detection_evidence", None)
+            process_tree = []
+            flows = []
             factors = {}
-            if not (getattr(incident, "notes", None) or "").startswith(("rule_id:", "risk_source:")):
-                factors = await self._get_risk_factors(
-                    session, incident.agent_id, incident.created_at, incident.description,
-                )
+            if not isinstance(evidence, dict) or not evidence:
+                process_tree = (await self._get_process_tree(session, incident.agent_id))[:20]
+                flows = (await self._get_recent_flows(session, incident.agent_id, incident.created_at, minutes=15))[:10]
+                if not (getattr(incident, "notes", None) or "").startswith(("rule_id:", "risk_source:")):
+                    factors = await self._get_risk_factors(
+                        session, incident.agent_id, incident.created_at, incident.description,
+                    )
 
             # 3. Build prompt
             prompt = self._build_prompt(
@@ -206,7 +208,10 @@ class AITriageService:
     ) -> str:
         description = incident.description or ""
         notes = getattr(incident, "notes", None) or ""
-        if notes.startswith("rule_id:"):
+        evidence = getattr(incident, "detection_evidence", None)
+        if isinstance(evidence, dict) and evidence:
+            alert_evidence = json.dumps(evidence, ensure_ascii=False)[:6500]
+        elif notes.startswith("rule_id:"):
             alert_evidence = description[:1600]
         elif notes.startswith("risk_source:"):
             alert_evidence = description.rsplit("[Auto Update]", 1)[-1][:1600]

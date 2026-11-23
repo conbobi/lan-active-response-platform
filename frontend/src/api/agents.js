@@ -27,8 +27,8 @@ export const getAgents = async () => {
     last_seen: agent.last_seen,
   }));
 };
-export const isolateAgent = async (agentId) => {
-  return await api.post(`/agents/${agentId}/isolate`);
+export const isolateAgent = async (agentId, confirmed = false) => {
+  return await api.post(`/agents/${agentId}/isolate`, { confirmed });
 };
 
 export const getAgentHistory = async (agentId) => {

@@ -12,7 +12,6 @@ import {
   FiChevronDown,
   FiChevronUp,
   FiSlash,
-  FiLock,
   FiRotateCcw,
   FiClock,
   FiRefreshCw
@@ -56,8 +55,10 @@ export default function StoryTimeline({
 
   const getEventIcon = (type) => {
     switch (type) {
+      case 'process_observed':
       case 'process_spawn':
         return <FiTerminal size={15} />;
+      case 'network_connection':
       case 'network':
         return <FiGlobe size={15} />;
       case 'rule_trigger':
@@ -231,15 +232,15 @@ export default function StoryTimeline({
                     }}
                   >
                     {/* Process Spawn specifics */}
-                    {item.type === 'process_spawn' && (
+                    {['process_spawn', 'process_observed'].includes(item.type) && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         <div>
                           <strong>PID:</strong> <code style={{ color: 'var(--primary)' }}>{item.details.pid}</code> |{' '}
                           <strong>Name:</strong> <code>{item.details.name}</code>
                         </div>
-                        {item.details.path && (
+                        {(item.details.exe_path || item.details.path) && (
                           <div>
-                            <strong>Path:</strong> <code>{item.details.path}</code>
+                            <strong>Path:</strong> <code>{item.details.exe_path || item.details.path}</code>
                           </div>
                         )}
                         {item.details.cmdline && (
@@ -252,7 +253,7 @@ export default function StoryTimeline({
                             <strong>Parent:</strong> {item.details.parent.name || 'Unknown'} {item.details.parent.pid !== undefined && item.details.parent.pid !== null ? `(PID: ${item.details.parent.pid})` : ''}
                           </div>
                         )}
-                        {item.details.pid && !isKernelOrSystem(item.details) && (
+                        {item.type === 'process_observed' && item.details.pid && !isKernelOrSystem(item.details) && (
                           <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
                             <Button
                               variant="danger"
@@ -269,7 +270,7 @@ export default function StoryTimeline({
                     )}
 
                     {/* Network specifics */}
-                    {item.type === 'network' && (
+                    {['network', 'network_connection'].includes(item.type) && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         <div>
                           <strong>Destination:</strong>{' '}
@@ -283,17 +284,6 @@ export default function StoryTimeline({
                             <strong>Traffic:</strong> {item.details.bytes_sent} bytes ({item.details.packets_sent || 0} packets)
                           </div>
                         )}
-                        <div style={{ marginTop: '0.5rem' }}>
-                          <Button
-                            variant="warning"
-                            size="sm"
-                            disabled={actionLoading}
-                            iconLeft={<FiLock size={12} />}
-                            onClick={() => onAction && onAction('block_ip', { ip: item.details.dst_ip })}
-                          >
-                            Block IP {item.details.dst_ip}
-                          </Button>
-                        </div>
                       </div>
                     )}
 
@@ -303,7 +293,7 @@ export default function StoryTimeline({
                         <div>
                           <strong>Rule ID:</strong> <code>{item.details.rule}</code> |{' '}
                           <strong>Score Contribution:</strong>{' '}
-                          <span style={{ color: colors.color, fontWeight: 700 }}>+{item.details.score}</span>
+                          <span style={{ color: colors.color, fontWeight: 700 }}>{item.details.score == null ? '—' : `+${item.details.score}`}</span>
                         </div>
                         <div style={{ color: 'var(--text-primary)', fontStyle: 'italic', marginTop: '0.2rem' }}>
                           "{item.details.reason}"

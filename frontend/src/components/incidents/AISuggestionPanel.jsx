@@ -162,10 +162,11 @@ export default function AISuggestionPanel({ incidentId, onRefresh }) {
 
   const handleApply = async () => {
     if (!analysis?.suggested_action || applying) return;
+    if (!window.confirm(`Xác nhận gửi yêu cầu ${analysis.suggested_action}?`)) return;
     try {
       setApplying(true);
-      const res = await applyAISuggestion(incidentId, { analyst: 'analyst_soc' });
-      toast.success(`Đã thực thi phản ứng: ${analysis.suggested_action} (Action ID: ${res.action_id || 'OK'})`);
+      const res = await applyAISuggestion(incidentId, { analyst: 'analyst_soc', confirmed: true });
+      toast.success(`Đã gửi yêu cầu phản ứng: ${analysis.suggested_action} (Action ID: ${res.action_id || 'OK'})`);
       await fetchAnalysis(true);
       if (onRefresh) onRefresh();
     } catch (err) {

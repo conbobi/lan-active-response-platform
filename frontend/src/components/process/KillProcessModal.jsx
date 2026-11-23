@@ -26,6 +26,7 @@ export default function KillProcessModal({ isOpen, process, agentId, onClose, on
     try {
       await onConfirm({
         pid: process.pid,
+        target: process,
         reason: reason || "Manual analyst action",
         killTree,
       });

@@ -106,7 +106,7 @@ export default function Settings({ initialTab }) {
   // Load initial settings
   useEffect(() => {
     if (settings) {
-      const isAuto = settings.auto_response_enabled !== false;
+      const isAuto = settings.auto_response_enabled === true;
       const btnTh = settings.risk_thresholds?.alert_with_buttons ?? 70;
       if (isAuto) {
         setMode('auto');

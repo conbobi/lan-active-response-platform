@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.network_security import token_matches
-from app.initializers.init_db import ensure_process_instance_column, init_db
+from app.initializers.init_db import ensure_process_instance_column, init_db, ensure_network_evidence_columns
 from app.routers.v1 import api_router
 from app.websocket.agent_ws import agent_websocket_endpoint
 from app.websocket.dashboard_ws import router as dashboard_ws_router
@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(ensure_process_instance_column)
+            await conn.run_sync(ensure_network_evidence_columns)
         logger.info(f"[STARTUP] ✓ Tables ready: {len(Base.metadata.tables)} tables")
     except Exception as e:
         logger.error(f"[STARTUP] ✗ Failed to create tables: {e}")

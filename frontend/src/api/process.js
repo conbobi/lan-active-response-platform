@@ -41,15 +41,12 @@ export async function killProcess(agentId, pid, options = {}) {
   const res = await api.post(`/process/${agentId}/process/${pid}/kill`, {
     reason,
     kill_tree: killTree,
+    confirmed: options.confirmed === true,
+    process_start_time: options.target?.process_start_time,
+    parent_pid: options.target?.parent_pid ?? options.target?.ppid,
+    exe_path: options.target?.exe_path || options.target?.exe,
   });
   return res?.data ?? res;
-}
-
-export async function killProcessTree(agentId, pid, processName = null) {
-  return await killProcess(agentId, pid, {
-    reason: processName ? `Kill tree: ${processName}` : "Manual analyst action",
-    killTree: true,
-  });
 }
 
 export default {
@@ -57,5 +54,4 @@ export default {
   getSuspiciousProcesses,
   getProcessDetail,
   killProcess,
-  killProcessTree,
 };

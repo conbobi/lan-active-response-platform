@@ -1,4 +1,3 @@
-import re
 import uuid
 import logging
 from datetime import datetime
@@ -6,20 +5,17 @@ from typing import Dict, Any, Tuple, Union, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.risk_score import RiskScoreRecord
-from app.models.command import Command
 from app.schemas.risk import RiskAssessmentDTO
-from app.schemas.enums import CommandStatus
 from app.repositories.risk_score_repository import RiskScoreRepository
 from app.repositories.agent_repository import AgentRepository
-from app.repositories.command_repository import CommandRepository
 from app.services.common.whitelist_service import WhitelistService
 from app.services.common.notification_service import NotificationService
 from app.services.detection.threat_intelligence_service import ThreatIntelligenceService
 from app.services.incident.incident_service import IncidentService
 from app.services.common.setting_service import SettingService
 from app.services.detection.detection_rule_service import DetectionRuleService
+from app.services.detection.network_shell import RULE_ID as NETWORK_SHELL_RULE_ID, connection_key, detect_network_shell
 from app.services.detection.risk_rules import create_default_registry, RiskRuleRegistry
-from app.services.core.command_dispatcher import command_dispatcher
 from app.services.common.agent_protection import is_agent_process
 
 logger = logging.getLogger(__name__)
@@ -56,8 +52,8 @@ ANOMALY_RULES = {
 }
 IOC_RULES = {
     "yara_match",
+    NETWORK_SHELL_RULE_ID,
     "suspicious_process",
-    "c2_communication",
     "credential_dumping",
     "threat_intel_match",
     "http_beaconing",
@@ -197,7 +193,10 @@ class RiskAssessmentService:
         except Exception as e:
             logger.debug(f"Risk rule DB sync skipped/failed: {e}")
 
+        shell_evidence = [(event, evidence) for event in telemetry.get("network_connections", [])
+                          if (evidence := detect_network_shell(event))]
         context = {
+            "shell_connections": {connection_key(event) for event, _ in shell_evidence},
             "threat_intel_service": self.threat_intel_service,
             "whitelist_service": self.whitelist_service,
             "setting_service": self.setting_service,
@@ -222,7 +221,12 @@ class RiskAssessmentService:
                     else:
                         debounced_score = rule_score
 
-                    weighted_score = debounced_score * getattr(rule, "weight", 1.0)
+                    weighted_score = max(0.0, debounced_score * getattr(rule, "weight", 1.0))
+                    if rule.rule_id == "c2_communication":
+                        weighted_score = min(weighted_score, 20.0)
+                    if rule.rule_id == "network_connection":
+                        limit = 10.0 + context.get("network_threat_intel_points", 0.0)
+                        weighted_score = min(weighted_score, limit)
                     rule_scores[rule.rule_id] = weighted_score
                     factors[rule.rule_id] = reason
                     logger.info(f"[EVALUATE] Agent {agent_id} - Rule {rule.rule_id}: raw={rule_score}, debounced={debounced_score}, weighted={weighted_score}")
@@ -231,7 +235,14 @@ class RiskAssessmentService:
             except Exception as exc:
                 logger.error(f"Error evaluating rule '{rule.rule_id}' for agent {agent_id}: {exc}", exc_info=True)
 
+        if shell_evidence:
+            best = max((evidence for _, evidence in shell_evidence), key=lambda item: item["risk_score"])
+            rule_scores[NETWORK_SHELL_RULE_ID] = best["risk_score"]
+            factors[NETWORK_SHELL_RULE_ID] = best["classification"]
+
         final_score = min(100.0, apply_category_cap(rule_scores))
+        if rule_scores:
+            factors["_scores"] = {rule_id: round(score, 2) for rule_id, score in rule_scores.items()}
         factors["total_score"] = final_score
         logger.info(f"[EVALUATE] Agent {agent_id} - Final score: {final_score}")
         return final_score, factors
@@ -294,7 +305,7 @@ class RiskAssessmentService:
         has_security_attack = any(
             k in factors and factors[k]
             for k in factors.keys()
-            if k not in ANOMALY_RULES and k != "total_score"
+            if k not in ANOMALY_RULES and k not in {"total_score", "_scores"}
         )
         if raw_score >= CRITICAL_BYPASS_THRESHOLD or (has_security_attack and raw_score >= 50.0):
             smoothed = round(float(raw_score), 2)
@@ -346,192 +357,32 @@ class RiskAssessmentService:
         # Fetch thresholds
         thresholds = await self.setting_service.get_risk_thresholds()
         incident_creation_th = thresholds.get("incident_creation_threshold", 50.0)
-        auto_kill_th = thresholds.get("auto_kill_threshold", 85.0)
-
-        # Global auto-response check (Monitor Mode)
-        import inspect
-        auto_resp_call = self.setting_service.get_setting("auto_response_enabled", default=True)
-        if inspect.isawaitable(auto_resp_call):
-            auto_resp_setting = await auto_resp_call
-        else:
-            auto_resp_setting = auto_resp_call
-        if isinstance(auto_resp_setting, dict):
-            auto_response_enabled = auto_resp_setting.get("value", auto_resp_setting.get("data", True))
-        elif auto_resp_setting is not None:
-            auto_response_enabled = bool(auto_resp_setting)
-        else:
-            auto_response_enabled = True
-
-        # 1. Automated Incident Creation if smoothed >= incident_creation_threshold
-        inc = None
-        if smoothed >= incident_creation_th:
+        # The Rule Engine owns incidents for correlated socket sessions.
+        incident_score = smoothed
+        if NETWORK_SHELL_RULE_ID in factors:
+            other_scores = {key: value for key, value in factors.get("_scores", {}).items()
+                            if key != NETWORK_SHELL_RULE_ID}
+            incident_score = min(100.0, apply_category_cap(other_scores))
+        if incident_score >= incident_creation_th:
             incident_service = IncidentService(self.session)
-            inc = await incident_service.create_from_risk(agent_id, smoothed, factors)
-            record.incident = inc
-            logger.info(f"Automated incident '{inc.id}' evaluated for agent '{agent_id}' (score: {smoothed} >= threshold: {incident_creation_th})")
+            incident_factors = {key: value for key, value in factors.items() if key != NETWORK_SHELL_RULE_ID}
+            if NETWORK_SHELL_RULE_ID in factors:
+                incident_factors = {**incident_factors, "_scores": other_scores, "total_score": incident_score}
+            record.incident = await incident_service.create_from_risk(agent_id, incident_score, incident_factors)
 
-        # 2. Automated Process Tree Termination if smoothed >= auto_kill_threshold
-        if smoothed >= auto_kill_th and not is_whitelisted and auto_response_enabled:
-            logger.warning(
-                f"High risk score ({smoothed} >= {auto_kill_th}) for agent '{agent_id}'. "
-                f"Triggering Automated Process Tree Termination!"
-            )
-            cmd_repo = CommandRepository(self.session)
-            suspicious_procs = []
-            
-            suspect_keywords = [
-                "mimikatz", "nmap", "chisel", "psexec", "procdump",
-                "ransomware_sim", "backdoor_sim", "credential_dump", "lazagne",
-                "vssadmin", "meterpreter", "cobaltstrike", "key_test", "keylog", "keylogger"
-            ]
-            
-            for proc in processes:
-                p_dict = proc if isinstance(proc, dict) else proc.model_dump() if hasattr(proc, "model_dump") else getattr(proc, "__dict__", {})
-                if self._is_agent_process(p_dict):
-                    continue
-                p_pid = int(p_dict.get("pid") or 0)
-                if p_pid <= 2 or p_pid < 100:
-                    continue
-                name = str(p_dict.get("name", "")).strip().lower()
-                if any(k in name for k in ("kthreadd", "kworker", "systemd", "rcu", "swapper", "init")):
-                    continue
-                is_susp = p_dict.get("is_suspicious", False)
-                cmdline = str(p_dict.get("cmdline", "")).strip().lower()
-                full_str = f"{name} {cmdline}"
-                
-                matches_suspect = any(k in full_str for k in suspect_keywords) or bool(re.search(r"(?:\A|[^a-zA-Z0-9_\-\.])(?:nc|ncat|netcat)(?:\.exe)?(?:\Z|[^a-zA-Z0-9_\-\.])", full_str))
-                if is_susp or matches_suspect:
-                    pid = p_dict.get("pid")
-                    p_name = p_dict.get("name") or name or "suspicious_process"
-                    if pid and not any(sp["pid"] == pid for sp in suspicious_procs):
-                        suspicious_procs.append({"pid": pid, "name": p_name, "cmdline": cmdline})
-
-            killed_details = []
-            for sproc in suspicious_procs:
-                from app.services.response.response_action_service import ResponseActionService
-                act_service = ResponseActionService(self.session)
-                try:
-                    await act_service.create_and_apply_action(
-                        agent_id=agent_id,
-                        action_type="kill_process_tree",
-                        action_params={
-                            "pid": sproc["pid"],
-                            "process_name": sproc["name"],
-                            "reason": f"Automated Process Tree Kill triggered by Risk Score {smoothed} (threshold: {auto_kill_th})"
-                        },
-                        incident_id=inc.id if inc else None,
-                        actor="risk_assessment"
-                    )
-                except Exception as kill_act_err:
-                    logger.warning(f"ResponseActionService kill_process_tree failed, using raw command: {kill_act_err}")
-                    kill_cmd = Command(
-                        id=f"cmd_{uuid.uuid4().hex[:12]}",
-                        agent_id=agent_id,
-                        action="kill_process_tree",
-                        payload={
-                            "pid": sproc["pid"],
-                            "process_name": sproc["name"],
-                            "reason": f"Automated Process Tree Kill triggered by Risk Score {smoothed} (threshold: {auto_kill_th})"
-                        },
-                        status=CommandStatus.PENDING
-                    )
-                    await cmd_repo.add(kill_cmd)
-                    await command_dispatcher.push_command(kill_cmd.id, agent_id)
-                killed_details.append(f"PID {sproc['pid']} ({sproc['name']})")
-                logger.info(f"Dispatched kill_process_tree for PID {sproc['pid']} ({sproc['name']}) on agent '{agent_id}'")
-
-            if killed_details:
-                msg = (
-                    f"⚔️ <b>AUTOMATED PROCESS TREE KILLED</b> ⚔️\n"
-                    f"<b>Agent ID:</b> {agent_id}\n"
-                    f"<b>Risk Score:</b> {smoothed}/100 (Threshold: {auto_kill_th})\n"
-                    f"<b>Terminated Process Trees:</b> {', '.join(killed_details)}"
+        # Telemetry records proposed policy actions in dry-run mode.
+        if action != "log":
+            try:
+                from app.services.response.policy_engine_service import PolicyEngineService
+                await PolicyEngineService(self.session).evaluate_and_execute(
+                    agent_id=agent_id, risk_score=smoothed, context=factors, dry_run=True,
+                    incident_id=record.incident.id if getattr(record, "incident", None) else None,
                 )
-                await self.notification_service.send_alert(msg)
+            except Exception:
+                logger.exception("Could not evaluate response policy for agent %s", agent_id)
 
-        # 3. Policy-Based Automated Response (Policy Engine v1.4)
-        policy_executed = False
-        try:
-            from app.services.response.policy_engine_service import PolicyEngineService
-            policy_engine = PolicyEngineService(self.session)
-            policy_res = await policy_engine.evaluate_and_execute(
-                agent_id=agent_id,
-                risk_score=smoothed,
-                context=factors,
-                dry_run=False,
-                incident_id=inc.id if inc else None
-            )
-            if policy_res and policy_res.matched_policy and policy_res.executed:
-                policy_executed = True
-                logger.info(
-                    f"PolicyEngine successfully executed '{policy_res.action_type}' "
-                    f"with scope '{policy_res.scope}' for agent '{agent_id}' (policy: {policy_res.matched_policy.name})"
-                )
-        except Exception as pe_exc:
-            logger.error(f"Error in PolicyEngine execution for agent '{agent_id}': {pe_exc}", exc_info=True)
-
-        # 4. Fallback legacy action trigger if no policy was executed (only when auto_response_enabled)
-        if not policy_executed and auto_response_enabled:
-            if action == "auto_isolate":
-                logger.warning(f"Critical risk score ({smoothed}) for agent '{agent_id}'. Triggering fallback auto-isolation!")
-                from app.services.response.response_action_service import ResponseActionService
-                act_service = ResponseActionService(self.session)
-                try:
-                    await act_service.create_and_apply_action(
-                        agent_id=agent_id,
-                        action_type="isolate",
-                        action_params={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
-                        incident_id=inc.id if inc else None,
-                        actor="policy_engine"
-                    )
-                except Exception as iso_err:
-                    logger.warning(f"ResponseActionService isolate failed, using raw command: {iso_err}")
-                    agent.isolate()
-                    cmd_repo = CommandRepository(self.session)
-                    cmd = Command(
-                        id=f"cmd_{uuid.uuid4().hex[:12]}",
-                        agent_id=agent_id,
-                        action="isolate",
-                        payload={"reason": f"Auto isolation triggered by Risk Assessment Score {smoothed}"},
-                        status=CommandStatus.PENDING
-                    )
-                    await cmd_repo.add(cmd)
-                    await command_dispatcher.push_command(cmd.id, agent_id)
-
-                # Send critical Telegram notification
-                msg = (
-                    f"🚨 <b>CRITICAL RISK ALERT</b> 🚨\n"
-                    f"<b>Agent ID:</b> {agent_id}\n"
-                    f"<b>Hostname:</b> {agent.hostname}\n"
-                    f"<b>Risk Score:</b> {smoothed}/100\n"
-                    f"<b>Action:</b> 🛡️ Automated Network Isolation Executed\n"
-                    f"<b>Factors:</b> {factors}"
-                )
-                await self.notification_service.send_alert(msg)
-
-            elif action == "alert_with_buttons":
-                msg = (
-                    f"⚠️ <b>HIGH RISK DETECTED</b> ⚠️\n"
-                    f"<b>Agent ID:</b> {agent_id}\n"
-                    f"<b>Hostname:</b> {agent.hostname}\n"
-                    f"<b>Risk Score:</b> {smoothed}/100\n"
-                    f"<b>Action Required:</b> Manual review or isolation recommended."
-                )
-                buttons = [
-                    [
-                        {"text": "🔒 Cô lập ngay", "callback_data": f"isolate:{agent_id}"},
-                        {"text": "❌ Bỏ qua", "callback_data": f"ignore:{agent_id}"}
-                    ]
-                ]
-                await self.notification_service.send_alert(msg, buttons=buttons)
-
-            elif action == "alert":
-                msg = (
-                    f"⚡ <b>MODERATE RISK ALERT</b> ⚡\n"
-                    f"<b>Agent ID:</b> {agent_id}\n"
-                    f"<b>Risk Score:</b> {smoothed}/100"
-                )
-                await self.notification_service.send_alert(msg)
+        if action == "alert" and (prev_smoothed is None or prev_smoothed < thresholds.get("alert", 30.0)):
+            await self.notification_service.send_alert(f"Risk alert for Agent {agent_id}: {smoothed}/100")
 
         await self.session.flush()
         return record

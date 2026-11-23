@@ -128,6 +128,8 @@ class ConnectionTracker:
                 else:
                     # Brand new connection establishment event!
                     state = {
+                        "protocol": conn.get("protocol", "TCP"),
+                        "socket_id": conn.get("socket_id"),
                         "src_ip": src_ip,
                         "src_port": src_port,
                         "dst_ip": dst_ip,

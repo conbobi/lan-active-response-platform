@@ -1,13 +1,9 @@
-import uuid
 import logging
 from typing import Dict, List, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.command import Command
-from app.schemas.enums import CommandStatus
 from app.repositories.process_info_repository import ProcessInfoRepository
-from app.repositories.command_repository import CommandRepository
-from app.services.core.command_dispatcher import command_dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +125,7 @@ class ProcessTreeService:
                 suspicious_list.append({
                     "pid": p.pid,
                     "parent_pid": p.parent_pid,
+                    "process_start_time": p.process_start_time,
                     "name": p.name,
                     "exe": p.exe or p.exe_path or "",
                     "path": p.exe or p.exe_path or "",
@@ -142,44 +139,11 @@ class ProcessTreeService:
 
         return suspicious_list
 
-    async def kill_process(self, agent_id: str, pid: int) -> Command:
-        """
-        Generate and push a 'kill_process' command to terminate a specific process on an agent.
-        """
-        cmd_repo = CommandRepository(self.session)
-        cmd = Command(
-            id=f"cmd_{uuid.uuid4().hex[:12]}",
-            agent_id=agent_id,
-            action="kill_process",
-            payload={"pid": pid, "reason": "Terminated by Root Cause Analysis operator"},
-            status=CommandStatus.PENDING
-        )
-        await cmd_repo.add(cmd)
-        await command_dispatcher.push_command(cmd.id, agent_id)
-        await self.session.flush()
-        logger.info(f"Pushed kill_process command for PID {pid} on agent '{agent_id}'.")
-        return cmd
+    async def queue_termination(self, agent_id: str, params: dict, tree: bool = False) -> Command:
+        from app.services.response.response_action_service import ResponseActionService
 
-    async def kill_process_tree(
-        self, agent_id: str, pid: int, process_name: Optional[str] = None, reason: Optional[str] = None
-    ) -> Command:
-        """
-        Generate and push a 'kill_process_tree' command to terminate a process and all its children on an agent.
-        """
-        cmd_repo = CommandRepository(self.session)
-        cmd = Command(
-            id=f"cmd_{uuid.uuid4().hex[:12]}",
-            agent_id=agent_id,
-            action="kill_process_tree",
-            payload={
-                "pid": pid,
-                "process_name": process_name,
-                "reason": reason or "Terminated by Process Tree / Risk Assessment"
-            },
-            status=CommandStatus.PENDING
+        action = await ResponseActionService(self.session).create_and_apply_action(
+            agent_id=agent_id, action_type="kill_process_tree" if tree else "kill_process",
+            action_params=params, actor="analyst",
         )
-        await cmd_repo.add(cmd)
-        await command_dispatcher.push_command(cmd.id, agent_id)
-        await self.session.flush()
-        logger.info(f"Pushed kill_process_tree command for PID {pid} ({process_name}) on agent '{agent_id}'.")
-        return cmd
+        return await self.session.get(Command, action.action_params["command_id"])

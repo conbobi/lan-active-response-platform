@@ -95,7 +95,7 @@ async def isolate_agent(
     await action_service.create_and_apply_action(
         agent_id=agent_id,
         action_type="isolate",
-        action_params={"reason": reason},
+        action_params={"reason": reason, "confirmed": (payload or {}).get("confirmed")},
         actor="analyst"
     )
     service = AgentService(db)

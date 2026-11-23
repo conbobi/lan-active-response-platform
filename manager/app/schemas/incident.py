@@ -81,6 +81,7 @@ class IncidentOut(ORMBaseModel):
     network_indicators: Optional[list] = None
     factors_breakdown: Optional[list] = None
     story: Optional[str] = None
+    detection_evidence: Optional[dict] = None
 
 
 class AIAnalysisOut(ORMBaseModel):

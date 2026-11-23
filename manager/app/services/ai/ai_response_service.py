@@ -138,7 +138,9 @@ class AIResponseService:
             logger.error(f"Failed to generate response suggestion for incident {incident_id}: {e}", exc_info=True)
             return None
 
-    async def apply_suggestion(self, incident_id: str, analyst: str, session: AsyncSession) -> ResponseAction:
+    async def apply_suggestion(
+        self, incident_id: str, analyst: str, session: AsyncSession, *, confirmed: bool = False,
+    ) -> ResponseAction:
         """Apply AI response suggestion — delegate strictly to existing ResponseActionService."""
         # 1. Lấy AIAnalysis có suggested_action
         stmt = (
@@ -249,6 +251,13 @@ class AIResponseService:
         action_params = dict(suggestion.suggestion_params or {})
         reason_text = f"Applied AI suggestion: {(suggestion.suggestion_reasoning or '')[:200]}"
         action_params["reason"] = reason_text
+        action_params["confirmed"] = confirmed
+        if suggested in {"kill_process", "kill_process_tree"}:
+            process = (incident.detection_evidence or {}).get("process")
+            if not process or process["pid"] != action_params.get("pid"):
+                raise ValueError("The incident has no verified identity for the suggested PID.")
+            for key in ("process_start_time", "parent_pid", "exe_path"):
+                action_params[key] = process[key]
 
         action = await response_service.create_and_apply_action(
             agent_id=incident.agent_id,

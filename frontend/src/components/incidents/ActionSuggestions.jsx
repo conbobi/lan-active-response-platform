@@ -31,8 +31,6 @@ export default function ActionSuggestions({
   } = useActions({ incidentId: incident?.id });
 
   const culprit = incident?.culpritProcess || incident?.culprit_process || null;
-  const networkIndicators = incident?.networkIndicators || incident?.network_indicators || [];
-  const targetIp = networkIndicators[0]?.dst_ip || null;
 
   // Generate intelligent suggestions based on threat context
   const suggestions = [];
@@ -50,7 +48,7 @@ export default function ActionSuggestions({
     });
   }
 
-  if (culprit && culprit.pid && !isKernelOrSystem(culprit)) {
+  if (incident?.detection_evidence?.process && culprit?.pid && !isKernelOrSystem(culprit)) {
     suggestions.push({
       id: 'kill_tree',
       title: `Tiêu diệt cây tiến trình: ${culprit.name} (PID ${culprit.pid})`,
@@ -60,19 +58,6 @@ export default function ActionSuggestions({
       variant: 'warning',
       icon: <FiSlash size={14} />,
       recommended: true,
-    });
-  }
-
-  if (targetIp) {
-    suggestions.push({
-      id: 'block_ip',
-      title: `Chặn kết nối C2 IP: ${targetIp}`,
-      description: 'Thêm luật Firewall tại Agent để từ chối mọi gói tin gửi tới địa chỉ máy chủ C2.',
-      actionType: 'block_ip',
-      params: { ip: targetIp },
-      variant: 'outline',
-      icon: <FiShield size={14} />,
-      recommended: false,
     });
   }
 

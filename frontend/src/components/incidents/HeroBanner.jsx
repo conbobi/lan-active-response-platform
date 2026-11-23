@@ -254,7 +254,7 @@ export default function HeroBanner({
                 </Button>
               )}
 
-              {culprit && culprit.pid && !isKernelOrSystem(culprit) && (
+              {incident.detection_evidence?.process && culprit?.pid && !isKernelOrSystem(culprit) && (
                 <Button
                   variant="warning"
                   size="sm"
@@ -273,8 +273,8 @@ export default function HeroBanner({
             size="sm"
             onClick={() => {
               const targetAgent = incident.agentId || incident.agent_id || incident.agent_hostname || '';
-              const pid = culprit?.pid || '';
-              navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid ? `&pid=${pid}` : ''}`);
+              const target = culprit?.pid && culprit.process_start_time ? `&pid=${culprit.pid}&started=${culprit.process_start_time}` : '';
+              navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${target}`);
             }}
             title="Open culprit process in interactive root cause tree"
           >

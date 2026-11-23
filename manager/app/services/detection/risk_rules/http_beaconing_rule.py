@@ -129,11 +129,13 @@ class BeaconingDetectionService:
         deduplicating repeated observations of the same active socket.
         """
         # Key: (dst_ip, dst_port) -> Dict[socket_identity, datetime]
-        groups: Dict[str, Dict[Any, datetime]] = {}
-        process_map: Dict[str, Dict[str, Any]] = {}
+        groups: Dict[Tuple[str, int], Dict[Any, datetime]] = {}
+        process_map: Dict[Tuple[str, int], Dict[str, Any]] = {}
         ignored_ips = _get_ignored_ips()
 
         for conn in connection_history:
+            if conn.get("protocol", "TCP") != "TCP" or conn.get("direction") == "inbound":
+                continue
             # 1. Reject LISTEN sockets or sockets without destination
             if conn.get("status") == "LISTEN":
                 continue
@@ -168,7 +170,7 @@ class BeaconingDetectionService:
             else:
                 continue
 
-            key = f"{dst_ip}:{dst_port}"
+            key = (dst_ip, dst_port)
             groups.setdefault(key, {})
 
             # Socket identity tuple
@@ -205,7 +207,7 @@ class BeaconingDetectionService:
             stats = cls.analyze_intervals(intervals)
 
             if stats["is_beaconing"] and stats["cv"] <= cv_threshold:
-                dst_ip, port_str = key.split(":")
+                dst_ip, port_str = key
                 proc_info = process_map.get(key, {})
                 rep = NetworkReputationService.get_reputation(dst_ip)
                 candidates.append({

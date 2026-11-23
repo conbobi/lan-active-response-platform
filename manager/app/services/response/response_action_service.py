@@ -1,10 +1,12 @@
 import logging
+import math
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.response_action import ResponseAction
 from app.core.network_security import is_reserved_action
+from app.core.response_safety import CONFIRMATION_REQUIRED, KILL_ACTIONS, VERIFIED_KILL_COMMANDS
 from app.models.command import Command
 from app.schemas.enums import CommandStatus, AgentStatus
 from app.repositories.response_action_repository import ResponseActionRepository
@@ -59,7 +61,12 @@ class ResponseActionService:
         """
         if is_reserved_action(action_type):
             raise BadRequestError("Use the authenticated network action endpoint")
-        action_params = action_params or {}
+        action_params = dict(action_params or {})
+        if action_type in {"kill", *VERIFIED_KILL_COMMANDS}:
+            raise BadRequestError("Use kill_process or kill_process_tree with a verified target")
+        if action_type in CONFIRMATION_REQUIRED and (action_params.get("confirmed") is not True
+                or actor in {"system", "policy_engine", "risk_assessment"}):
+            raise BadRequestError("Explicit operator confirmation is required")
         now = datetime.now(timezone.utc)
 
         # 1. Kiểm tra Agent tồn tại
@@ -67,23 +74,22 @@ class ResponseActionService:
         if not agent:
             raise NotFoundError(f"Agent with ID '{agent_id}' was not found.")
 
-        # 1.1 Self-Protection: Không bao giờ kill LARP agent hoặc con/ancestor của nó
-        if action_type in ("kill", "kill_process", "kill_process_tree"):
-            raw_pid = action_params.get("pid") or action_params.get("target_pid")
-            if raw_pid is not None:
-                try:
-                    pid_int = int(raw_pid)
-                    from app.repositories.process_info_repository import ProcessInfoRepository
-                    from app.services.common.agent_protection import check_agent_kill_protection
-                    procs = await ProcessInfoRepository(self.session).find_by_agent(agent_id)
-                    allowed, block_reason = check_agent_kill_protection(procs, pid_int)
-                    if not allowed:
-                        logger.warning(
-                            f"Action blocked by Agent Protection: cannot kill PID {pid_int} on agent '{agent_id}': {block_reason}"
-                        )
-                        raise BadRequestError(f"Action rejected: {block_reason}")
-                except (ValueError, TypeError):
-                    pass
+        if action_type in KILL_ACTIONS:
+            pid = action_params.get("pid")
+            start = action_params.get("process_start_time")
+            exe = action_params.get("exe_path")
+            ppid = action_params.get("parent_pid")
+            if (type(pid) is not int or pid <= 2 or type(ppid) is not int or ppid <= 0
+                    or type(start) not in (int, float) or not math.isfinite(start) or start <= 0
+                    or not isinstance(exe, str) or not exe.startswith("/")):
+                raise BadRequestError("PID, start time, executable and parent PID are required")
+
+            from app.repositories.process_info_repository import ProcessInfoRepository
+            from app.services.common.agent_protection import check_agent_kill_protection
+            procs = await ProcessInfoRepository(self.session).find_by_agent(agent_id)
+            allowed, reason = check_agent_kill_protection(procs, pid)
+            if not allowed:
+                raise BadRequestError(f"Action rejected: {reason}")
 
         # 2. Kiểm tra Anti-Flapping Cooldown
         # Chỉ check cooldown cho stateful actions
@@ -158,23 +164,31 @@ class ResponseActionService:
             event="created",
             actor=actor,
             reason=action_params.get("reason", f"Initiated {action_type} response"),
-            metadata={"action_type": action_type, "command_id": cmd_id, "auto_rollback_at": auto_rollback_at.isoformat() if auto_rollback_at else None}
+            metadata={
+                "action_type": action_type, "incident_id": incident_id, "target_pid": action_params.get("pid"),
+                "command_id": cmd_id, "validation": "pending_agent" if action_type in KILL_ACTIONS else "confirmed",
+                "auto_rollback_at": auto_rollback_at.isoformat() if auto_rollback_at else None,
+            }
         )
 
         # 6. Dispatch command xuống agent — KHÔNG cập nhật agent state ở đây (tránh optimistic DB bug)
         cmd_action = action_type
+        if action_type in KILL_ACTIONS:
+            cmd_action = f"{action_type}_verified"
         if action_type == "auto_isolate":
             cmd_action = "isolate"
 
         cmd_payload = dict(action_params)
         cmd_payload["action_id"] = action_id
+        cmd_payload["incident_id"] = incident_id
 
         cmd = Command(
             id=cmd_id,
             agent_id=agent_id,
             action=cmd_action,
             payload=cmd_payload,
-            status=CommandStatus.PENDING
+            status=CommandStatus.PENDING,
+            max_retries=0 if action_type in CONFIRMATION_REQUIRED else 3,
         )
         await self.cmd_repo.add(cmd)
         await command_dispatcher.push_command(cmd.id, agent_id)
