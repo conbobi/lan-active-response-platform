@@ -18,6 +18,7 @@ from app.schemas.heartbeat import HeartbeatDTO
 from app.core.response_safety import PROTECTED_COMMANDS, VERIFIED_KILL_COMMANDS
 from app.schemas.command_ack import CommandAckDTO
 from app.services.agent.agent_service import AgentService
+from app.services.agent.activity import process_identity, record_sample
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.services.detection.risk_rules.brute_force_rule import normalize_auth_event
@@ -30,8 +31,9 @@ from app.repositories.event_repository import EventRepository
 from app.models.agent import Agent
 from app.models.incident import Incident
 from app.models.response_action import ResponseAction
-from app.schemas.enums import IncidentSeverity, AgentStatus, CommandStatus
+from app.schemas.enums import IncidentSeverity, IncidentStatus, AgentStatus, CommandStatus
 from app.services.common.audit_log_service import ActionAuditLogService
+from app.services.common.notification_service import NotificationService
 from app.schemas.incident import IncidentCreate
 from app.services.incident.incident_service import IncidentService
 from app.models.auth_event import AuthEvent
@@ -47,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 async def _save_process_list(session: AsyncSession, target_agent_id: str, 
                               processes_data: list) -> int:
-    """Save process list with truncation + per-process savepoints."""
+    """Replace one process snapshot using a batched insert."""
     if not processes_data or not isinstance(processes_data, list):
         return 0
     
@@ -56,32 +58,32 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
     await session.flush()
     
     now_dt = datetime.now(timezone.utc)
-    count = 0
+    rows = []
     skipped = 0
     
     def safe_str(val, max_len: int, default: str = "") -> str:
         """Truncate string to model max length."""
         if val is None:
             return default
-        s = str(val)
+        s = str(val).replace("\x00", "")
         return s[:max_len] if len(s) > max_len else s
     
     def safe_int(val, default=None):
         try:
             return int(val) if val is not None else default
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return default
     
     def safe_float(val, default=0.0):
         try:
             return float(val) if val is not None else default
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return default
     
     for proc_item in processes_data:
         # Skip invalid pid
-        pid = safe_int(proc_item.get("pid"))
-        if pid is None or pid < 0:
+        pid = safe_int(proc_item.get("pid")) if isinstance(proc_item, dict) else None
+        if pid is None or not 0 <= pid < 2**31:
             skipped += 1
             continue
         
@@ -92,6 +94,8 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
                 else proc_item.get("ppid")
             )
             
+            if parent_pid is not None and not 0 <= parent_pid < 2**31:
+                parent_pid = None
             cmd_raw = proc_item.get("cmdline") or ""
             if isinstance(cmd_raw, list):
                 cmdline_str = " ".join(str(x) for x in cmd_raw)
@@ -125,11 +129,7 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
                 created_at=now_dt,
             )
             
-            # ✅ Savepoint per process — nếu fail, chỉ rollback process đó
-            async with session.begin_nested():
-                await proc_repo.add(pinfo)
-            count += 1
-            
+            rows.append(pinfo)
         except Exception as e:
             logger.warning(
                 f"[PROCESS_LIST] Skip pid={proc_item.get('pid')} "
@@ -138,6 +138,10 @@ async def _save_process_list(session: AsyncSession, target_agent_id: str,
             skipped += 1
             continue
     
+    if rows:
+        session.add_all(rows)
+        await session.flush()
+    count = len(rows)
     if skipped > 0:
         logger.warning(
             f"[PROCESS_LIST] {target_agent_id}: saved={count}, skipped={skipped}"
@@ -154,7 +158,9 @@ async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) ->
     dto = HeartbeatDTO(**payload)
     active_agent_id = dto.agent_id or agent_id
     agent_svc = AgentService(session)
-    await agent_svc.process_heartbeat(dto)
+    agent = await agent_svc.process_heartbeat(dto)
+    if isinstance(getattr(agent, "decommissioned_at", None), datetime):
+        return {"status": "ack", "message": "Agent decommissioned", "pending_commands": []}, active_agent_id
     if str(dto.platform).lower() in {"windows", "darwin"}:
         await network_service.mark_unsupported(session, active_agent_id, dto.platform.lower())
 
@@ -228,9 +234,7 @@ async def _evaluate_incident_rules(agent_id: str, telemetry: dict, session: Asyn
     if not incidents:
         return
 
-    for incident in incidents:
-        asyncio.create_task(_run_ai_triage(incident.id))
-    await dashboard_manager.broadcast({
+    message = {
         "type": "INCIDENT_NEW",
         "data": [
             {
@@ -242,19 +246,34 @@ async def _evaluate_incident_rules(agent_id: str, telemetry: dict, session: Asyn
             }
             for incident in incidents
         ],
-    })
+    }
+    context = getattr(session, "info", {})
+    if context.get("defer_incident_events") is True:
+        context.setdefault("dashboard_events", []).append(message)
+        context.setdefault("new_incident_ids", []).extend(incident.id for incident in incidents)
+        return
+    for incident in incidents:
+        asyncio.create_task(_run_ai_triage(incident.id))
+    await dashboard_manager.broadcast(message)
 
 
 async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
     procs_data = payload.get("processes", [])
+    accepted = await record_sample(session, target_agent_id, "process", payload, procs_data)
+    if accepted is False:
+        return {"status": "ack", "count": 0, "message": "Observation already superseded"} if data.get("wait_ack", True) else None
+    if accepted and not procs_data and payload["activity_sample"].get("complete") is True:
+        await ProcessInfoRepository(session).delete_by_agent(target_agent_id)
     saved_count = await _save_process_list(session, target_agent_id, procs_data)
     logger.info(f"Saved {saved_count} processes for agent '{target_agent_id}' via PROCESS_LIST")
 
     try:
         await _evaluate_incident_rules(target_agent_id, payload, session)
     except Exception as e:
+        if accepted:
+            raise
         logger.error(f"rule_engine hook failed on PROCESS_LIST for agent '{target_agent_id}': {e}", exc_info=True)
 
     if data.get("wait_ack", True):
@@ -273,6 +292,9 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
     logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}' (platform: {platform_name})")
 
     conns = payload.get("network_connections")
+    accepted = await record_sample(session, target_agent_id, "socket", payload, conns)
+    if accepted is False:
+        return {"status": "ack", "message": "Observation already superseded"} if data.get("wait_ack", True) else None
     if isinstance(conns, list):
         flows = []
         now_dt = datetime.now(timezone.utc)
@@ -311,6 +333,8 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
     try:
         await _evaluate_incident_rules(target_agent_id, payload, session)
     except Exception as e:
+        if accepted:
+            raise
         logger.error(f"rule_engine hook failed for agent '{target_agent_id}': {e}", exc_info=True)
 
     risk_service = RiskAssessmentService(session)
@@ -318,9 +342,6 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
         agent_id=target_agent_id,
         data=payload
     )
-    if hasattr(record, "incident") and record.incident:
-        logger.info(f"Hook: Triggering AI Triage for {record.incident.id}")
-        asyncio.create_task(_run_ai_triage(record.incident.id))
     logger.info(f"Calculated risk score {record.score} for agent '{target_agent_id}'")
     if data.get("wait_ack", True):
         return {
@@ -516,6 +537,22 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
             )
             logger.info(f"ResponseAction '{action.id}' applied upon ACK success for command '{cmd.id}'.")
 
+        if action and action.incident_id and cmd.action in VERIFIED_KILL_COMMANDS:
+            incident = (await session.execute(select(Incident).where(
+                Incident.id == action.incident_id, Incident.agent_id == target_agent_id,
+            ).with_for_update())).scalar_one_or_none()
+            evidence = incident.detection_evidence if incident else None
+            target = cmd.payload or {}
+            process = (evidence or {}).get("process") or {}
+            if (process_identity(process) and process_identity(process) == process_identity(target)
+                    and process.get("exe_path") == target.get("exe_path")):
+                incident.detection_evidence = {**evidence, "containment": {
+                    "action_id": action.id, "pid": target["pid"], "process_start_time": target["process_start_time"],
+                    "verified_at": now.isoformat(),
+                }}
+                if incident.status in {IncidentStatus.OPEN, IncidentStatus.INVESTIGATING}:
+                    incident.status = IncidentStatus.CONTAINED
+
         # Update Agent state ONLY when agent successfully confirms
         if agent:
             if cmd.action in ("isolate", "auto_isolate"):
@@ -524,25 +561,6 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
             elif cmd.action == "unisolate":
                 agent.unisolate()
                 logger.info(f"Agent '{target_agent_id}' confirmed unisolation -> status=ACTIVE, is_isolated=False")
-                from app.repositories.incident_repository import IncidentRepository
-                inc_repo = IncidentRepository(session)
-                resolved_incidents = await inc_repo.resolve_active_incidents_for_agent(
-                    target_agent_id,
-                    resolved_reason="Auto-resolved upon agent unisolation confirmed by agent"
-                )
-                if resolved_incidents:
-                    logger.info(f"Auto-resolved {len(resolved_incidents)} incidents for agent '{target_agent_id}' after unisolation")
-                    try:
-                        from app.websocket.dashboard_connection_manager import dashboard_manager
-                        await dashboard_manager.broadcast({
-                            "type": "INCIDENTS_RESOLVED",
-                            "event": "INCIDENTS_RESOLVED",
-                            "agent_id": target_agent_id,
-                            "incident_ids": [i.id for i in resolved_incidents],
-                            "action": "unisolate"
-                        })
-                    except Exception as e:
-                        logger.warning(f"Failed to broadcast unisolation incident resolution to dashboard: {e}")
             elif cmd.action == "quarantine":
                 agent.status = AgentStatus.QUARANTINE
                 logger.info(f"Agent '{target_agent_id}' confirmed quarantine -> status=QUARANTINE")
@@ -775,20 +793,20 @@ async def agent_websocket_endpoint(websocket: WebSocket):
     if enrolled and not authenticated:
         await websocket.close(code=1008)
         return
+    previous_socket = connection_manager.active_connections.get(agent_id)
     await connection_manager.connect(agent_id, websocket)
     if authenticated:
-        previous = connection_manager.authenticated_connections.get(agent_id)
         connection_manager.authenticated_connections[agent_id] = websocket
-        if previous is not None:
-            try:
-                await previous.close(code=1008)
-            except (RuntimeError, WebSocketDisconnect):
-                logger.debug("Previous Agent socket already closed")
+    if previous_socket is not None:
+        try:
+            await previous_socket.close(code=1008)
+        except (RuntimeError, WebSocketDisconnect):
+            logger.debug("Previous Agent socket already closed")
 
     try:
         while True:
             raw_text = await websocket.receive_text()
-            if authenticated and connection_manager.authenticated_connections.get(agent_id) is not websocket:
+            if connection_manager.active_connections.get(agent_id, websocket) is not websocket:
                 break
             if len(raw_text) > 2_000_000 and raw_text.lstrip().startswith('{"type": "NETWORK_'):
                 await websocket.close(code=1009)
@@ -804,6 +822,7 @@ async def agent_websocket_endpoint(websocket: WebSocket):
             payload = data.get("payload", {})
             claims = [claim for claim in (payload.get("agent_id"), data.get("agent_id")) if claim is not None]
             if any(not isinstance(claim, str) or (authenticated and claim != agent_id)
+                   or (agent_id != "unknown" and claim != agent_id)
                    or (not authenticated and is_enrolled(claim)) for claim in claims):
                 await websocket.close(code=1008)
                 break
@@ -814,7 +833,15 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                 break
 
             response_payload = None
+            committed = False
+            dashboard_events = []
+            new_incident_ids = []
+            incident_alerts = []
             async with AsyncSessionLocal() as session:
+                context = getattr(session, "info", None)
+                if not isinstance(context, dict):
+                    context = {}
+                context["defer_incident_events"] = True
                 try:
                     if msg_type == "NETWORK_SNAPSHOT":
                         await network_service.store_snapshot(session, agent_id, payload)
@@ -823,8 +850,12 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                     elif msg_type == "NETWORK_TRANSACTION":
                         await network_service.record_transaction(session, agent_id, payload.get("transaction", {}))
                     elif msg_type == "HEARTBEAT":
-                        response_payload, agent_id = await _handle_heartbeat(agent_id, data, session)
-                        if authenticated:
+                        response_payload, heartbeat_id = await _handle_heartbeat(agent_id, data, session)
+                        if heartbeat_id != agent_id:
+                            connection_manager.disconnect(agent_id)
+                            agent_id = heartbeat_id
+                            connection_manager.active_connections[agent_id] = websocket
+                        if authenticated and response_payload.get("message") != "Agent decommissioned":
                             response_payload["network_command"] = await network_service.pull_network_command(
                                 session, agent_id, reported_safety=payload.get("firewall_safety_version")
                             )
@@ -833,6 +864,10 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                     else:
                         response_payload = {"error": f"Unknown message type '{msg_type}'"}
                     await session.commit()
+                    committed = True
+                    dashboard_events = context.get("dashboard_events", [])
+                    new_incident_ids = context.get("new_incident_ids", [])
+                    incident_alerts = context.get("incident_alerts", [])
                 except (ValidationError, ValueError) as error:
                     await session.rollback()
                     logger.warning("Invalid %s for Agent '%s': %s", msg_type, agent_id, type(error).__name__)
@@ -844,9 +879,21 @@ async def agent_websocket_endpoint(websocket: WebSocket):
                     if not network_message:
                         response_payload = {"error": "Message processing failed"}
 
-            # Send WebSocket response outside of DB session to prevent connection holding
             if response_payload:
                 await websocket.send_json(response_payload)
+            if committed:
+                for incident_id in set(new_incident_ids):
+                    asyncio.create_task(_run_ai_triage(incident_id))
+                for alert in incident_alerts:
+                    asyncio.create_task(NotificationService().send_alert(alert))
+                for event in dashboard_events:
+                    await dashboard_manager.broadcast(event)
+                if msg_type in {"TELEMETRY_RISK", "PROCESS_LIST", "COMMAND_ACK", "AUTH_EVENT"}:
+                    sample = payload.get("activity_sample")
+                    version = sample.get("captured_at") if isinstance(sample, dict) else payload.get("timestamp")
+                    await dashboard_manager.broadcast({
+                        "type": "ACTIVITY_UPDATED", "agent_id": agent_id, "stream": msg_type, "version": version,
+                    })
     except (WebSocketDisconnect, RuntimeError):
         logger.info("Agent '%s' disconnected from WebSocket.", agent_id)
     finally:

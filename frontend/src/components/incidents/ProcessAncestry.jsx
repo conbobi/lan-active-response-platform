@@ -109,7 +109,7 @@ export default function ProcessAncestry({
               size="sm"
               iconLeft={<FiCpu size={13} />}
               onClick={() => {
-                navigate(`/investigate?tab=process&agent=${encodeURIComponent(targetAgentId)}&pid=${culpritPid || ''}&started=${culprit?.process_start_time || ''}`);
+                navigate(`/investigate?tab=process&agent=${encodeURIComponent(targetAgentId)}&incident=${encodeURIComponent(incData.id)}&pid=${culpritPid || ''}&started=${culprit?.process_start_time || ''}`);
               }}
             >
               🌳 View in Process Tree
@@ -118,7 +118,7 @@ export default function ProcessAncestry({
           <Button
             variant="danger"
             size="sm"
-            disabled={actionLoading || !evidence?.process || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
+            disabled={actionLoading || !evidence?.process || incData?.process_activity !== 'running' || !culpritPid || isKernelOrSystem({ pid: culpritPid, name: culpritName })}
             iconLeft={<FiLayers size={13} />}
             onClick={() => onAction && onAction('kill_process_tree', { pid: culpritPid, process_name: culpritName })}
           >

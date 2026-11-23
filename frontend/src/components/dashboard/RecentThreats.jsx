@@ -47,66 +47,22 @@ function extractAttackType(incident) {
   return incident.title || incident.description || 'Unknown Attack';
 }
 
-export default function RecentThreats({ incidents = [], agents = [], onSelectIncident }) {
+export default function RecentThreats({ incidents = [], onSelectIncident }) {
   const navigate = useNavigate();
   
-  const now = Date.now();
-  const MAX_THREAT_AGE_MS = 24 * 60 * 60 * 1000;
+  const threats = incidents.filter(incident => getScore(incident) >= 30).slice(0, 5);
 
-  const ALIVE_STATUSES = [
-    'active', 'online', 'ACTIVE',
-    'isolated', 'ISOLATED',
-    'quarantine', 'QUARANTINE',
-  ];
-
-  const isAgentAlive = (agent) => {
-    if (!agent) return false;
-    const status = String(agent.status || '').toLowerCase();
-    if (['dead', 'offline', 'inactive'].includes(status)) {
-      return false;
-    }
-    if (ALIVE_STATUSES.map(s => s.toLowerCase()).includes(status)) {
-      return true;
-    }
-    if (agent.last_seen) {
-      const age = Date.now() - new Date(agent.last_seen).getTime();
-      return age < 5 * 60 * 1000;
-    }
-    return false;
-  };
-
-  const aliveAgentIds = new Set(
-    (Array.isArray(agents) ? agents : [])
-      .filter(isAgentAlive)
-      .map(a => a.id)
-  );
-
-  const threats = (Array.isArray(incidents) ? incidents : [])
-    .filter(i => {
-      const score = getScore(i);
-      const st = String(i.status || '').toLowerCase();
-      const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
-      if (score < 30 || isResolved) return false;
-      const agentId = i.agent_id || i.agentId;
-      if (!aliveAgentIds.has(agentId)) return false;
-      const createdAt = new Date(i.created_at || i.createdAt || i.timestamp).getTime();
-      if (!isNaN(createdAt) && (now - createdAt) > MAX_THREAT_AGE_MS) return false;
-      return true;
-    })
-    .sort((a, b) => new Date(b.created_at || b.createdAt) - new Date(a.created_at || a.createdAt))
-    .slice(0, 5);
-  
   if (threats.length === 0) {
     return (
       <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
         <h3 style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
-          🚨 Recent Threats
+          Recent Detections
         </h3>
         <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--success)' }}>
           <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✅</div>
-          <div style={{ fontWeight: 600 }}>Không có mối đe dọa</div>
+          <div style={{ fontWeight: 600 }}>Chưa có phát hiện gần đây</div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Hệ thống đang an toàn trong 24h qua
+            Cửa sổ lịch sử 24 giờ
           </div>
         </div>
       </div>
@@ -117,7 +73,7 @@ export default function RecentThreats({ incidents = [], agents = [], onSelectInc
     <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h3 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-          🚨 Recent Threats
+          Recent Detections
         </h3>
         <button
           onClick={() => navigate('/incidents')}
@@ -171,7 +127,7 @@ export default function RecentThreats({ incidents = [], agents = [], onSelectInc
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem', 
                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {attackType}
+                    {attackType} · {incident.detection_activity || 'historical'}
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: '0.5rem' }}>
@@ -179,8 +135,9 @@ export default function RecentThreats({ incidents = [], agents = [], onSelectInc
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      const pid = incident.culprit_process?.pid || '';
-                      navigate(`/investigate?tab=process&agent=${encodeURIComponent(incident.agent_id)}${pid ? `&pid=${pid}` : ''}`);
+                      const proc = incident.culprit_process;
+                      const target = proc?.pid && proc.process_start_time ? `&pid=${proc.pid}&started=${proc.process_start_time}` : '';
+                      navigate(`/investigate?tab=process&agent=${encodeURIComponent(incident.agent_id)}&incident=${encodeURIComponent(incident.id)}${target}`);
                     }}
                     title="Open in Process Tree"
                     style={{

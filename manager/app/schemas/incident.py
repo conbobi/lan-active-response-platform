@@ -82,6 +82,20 @@ class IncidentOut(ORMBaseModel):
     factors_breakdown: Optional[list] = None
     story: Optional[str] = None
     detection_evidence: Optional[dict] = None
+    incident_status: Optional[str] = None
+    disposition: Optional[str] = None
+    detection_activity: str = "historical"
+    process_activity: Optional[str] = None
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    last_verified: Optional[datetime] = None
+    process_last_seen: Optional[datetime] = None
+    activity_expires_at: Optional[datetime] = None
+    activity_reason: Optional[str] = None
+    occurrence_count: int = 1
+    risk_calculated_at: Optional[datetime] = None
+    rule_version: Optional[str] = None
+    confidence: Optional[float] = None
 
 
 class AIAnalysisOut(ORMBaseModel):

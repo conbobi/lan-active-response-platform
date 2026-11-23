@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, status, Body, HTTPException
+from fastapi import APIRouter, Depends, status, Body, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,15 +35,16 @@ async def create_incident(dto: IncidentCreate, db: AsyncSession = Depends(get_db
 @router.get("", response_model=List[IncidentOut], include_in_schema=False)
 @router.get("/", response_model=List[IncidentOut])
 async def list_incidents(
-    skip: int = 0,
-    limit: int = 200,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
     active_only: bool = False,
-    hours: Optional[int] = None,
+    hours: Optional[int] = Query(None, ge=1, le=168),
+    finding: Optional[str] = Query(None, pattern="^network$"),
     db: AsyncSession = Depends(get_db)
 ):
     """List security incidents with optional active_only and hours filters."""
     service = IncidentService(db)
-    return await service.list_incidents(skip=skip, limit=limit, active_only=active_only, hours=hours)
+    return await service.list_incidents(skip=skip, limit=limit, active_only=active_only, hours=hours, finding=finding)
 
 
 @router.get("/{incident_id}/timeline", response_model=Dict[str, Any])

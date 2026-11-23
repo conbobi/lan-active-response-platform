@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import JSON, String, Float, Enum, Text, DateTime, ForeignKey
+from sqlalchemy import JSON, Index, String, Float, Enum, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 from app.schemas.enums import IncidentSeverity, IncidentStatus
@@ -8,6 +8,10 @@ from app.schemas.enums import IncidentSeverity, IncidentStatus
 
 class Incident(Base, TimestampMixin):
     __tablename__ = "incidents"
+    __table_args__ = (
+        Index("ix_incidents_agent_fingerprint_updated", "agent_id", "fingerprint", "updated_at"),
+        Index("ix_incidents_status_created", "status", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -21,6 +25,7 @@ class Incident(Base, TimestampMixin):
     agent_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("agents.id"), nullable=True)
     assigned_to: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     detection_evidence: Mapped[Optional[dict]] = mapped_column(JSON(none_as_null=True), nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

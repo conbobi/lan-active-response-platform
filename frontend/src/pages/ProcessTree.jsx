@@ -1,3 +1,4 @@
+import { getIncident } from '../api/incidents';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -82,6 +83,18 @@ export default function ProcessTree({ embedded = false }) {
   const queryAgent = searchParams.get('agent') || searchParams.get('agent_id');
   const requestedPid = searchParams.get('pid');
   const requestedStart = searchParams.get('started');
+  const historicalIncidentId = searchParams.get('incident');
+  const [historicalIncident, setHistoricalIncident] = useState(null);
+  useEffect(() => {
+    let current = true;
+    setHistoricalIncident(null);
+    if (historicalIncidentId) {
+      getIncident(historicalIncidentId).then((incident) => {
+        if (current) setHistoricalIncident(incident);
+      }).catch((error) => console.warn('Could not load historical process evidence', error));
+    }
+    return () => { current = false; };
+  }, [historicalIncidentId]);
 
   const { agents } = useAgents();
   const [selectedAgent, setSelectedAgent] = useState('');
@@ -90,6 +103,7 @@ export default function ProcessTree({ embedded = false }) {
   const {
     processTree,
     suspiciousProcesses,
+    processLive,
     loading,
     killing,
     error,
@@ -101,7 +115,7 @@ export default function ProcessTree({ embedded = false }) {
   } = useProcessTree(selectedAgent);
 
   const queryPid = useMemo(() => {
-    if (!requestedPid || !requestedStart) return requestedPid;
+    if (!requestedPid || !requestedStart || !processLive) return null;
     if (!processTree || selectedAgent !== queryAgent) return null;
     const nodes = [...(processTree.tree || (Array.isArray(processTree) ? processTree : [processTree]))];
     while (nodes.length) {
@@ -111,7 +125,7 @@ export default function ProcessTree({ embedded = false }) {
       nodes.push(...(node.children || []));
     }
     return null;
-  }, [requestedPid, requestedStart, queryAgent, selectedAgent, processTree]);
+  }, [requestedPid, requestedStart, queryAgent, selectedAgent, processTree, processLive]);
 
   const [expandedPids, setExpandedPids] = useState(new Set());
   const [killTarget, setKillTarget] = useState(null);
@@ -268,6 +282,7 @@ export default function ProcessTree({ embedded = false }) {
   const collapseAll = () => setExpandedPids(new Set());
 
   const openKillModal = (proc, isTreeMode = true) => {
+    if (!processLive) return;
     setKillTarget({ ...proc, defaultKillTree: isTreeMode });
   };
 
@@ -414,9 +429,24 @@ export default function ProcessTree({ embedded = false }) {
         </div>
       )}
 
+      {processTree && !processLive && <p role="status">Process snapshot chưa được xác minh hiện tại.
+        {processTree.observation?.last_seen && ` Last Seen ${new Date(processTree.observation.last_seen).toLocaleString()}`}
+      </p>}
+      {historicalIncident && !queryPid && (() => {
+        const process = historicalIncident.culprit_process;
+        return <section className="card" style={{ marginBottom: '1rem' }}>
+          <h3>{process ? 'Historical Process Evidence' : 'Network-only Detection'}</h3>
+          {process && <p>{process.name} · PID {process.pid} · PPID {process.parent_pid} · {historicalIncident.process_activity}</p>}
+          {process?.cmdline && <code>{process.cmdline}</code>}
+          {historicalIncident.detection_evidence?.ancestry?.map((parent) =>
+            <p key={parent.pid}>{parent.name} · PID {parent.pid} · PPID {parent.parent_pid}</p>)}
+          <p>Last Seen {historicalIncident.process_last_seen ? new Date(historicalIncident.process_last_seen).toLocaleString() : '—'}</p>
+          <a href={`/incidents?id=${encodeURIComponent(historicalIncident.id)}`}>View Incident</a>
+        </section>;
+      })()}
       {/* ===== Focus PID alert ===== */}
       {requestedPid && requestedStart && !queryPid && processTree && !loading && (
-        <p role="status">The observed process instance is no longer in the current Process Tree.</p>
+        <p role="status">Chưa xác minh được process instance này trong cây hiện tại.</p>
       )}
       {queryPid && (
         <div style={{
@@ -475,7 +505,7 @@ export default function ProcessTree({ embedded = false }) {
           active={activeTab === 'priority'}
           onClick={() => setActiveTab('priority')}
           icon={<FiShield size={14} />}
-          label="Priority / Flagged"
+          label="Priority / Flagged Processes"
           count={suspiciousProcesses.length}
           countTone={suspiciousProcesses.length > 0 ? 'critical' : 'success'}
         />
@@ -495,6 +525,7 @@ export default function ProcessTree({ embedded = false }) {
           background: 'var(--bg-secondary)',
           boxShadow: 'inset 4px 0 12px -4px var(--critical-glow)',
         }}>
+          <p>Tiến trình bị gắn cờ trong mẫu hiện tại. <a href="/incidents?finding=network">Network Findings</a></p>
           <h3 style={{
             fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem',
             color: 'var(--critical)', display: 'flex', alignItems: 'center',

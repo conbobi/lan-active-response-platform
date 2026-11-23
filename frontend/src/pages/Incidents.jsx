@@ -72,6 +72,7 @@ function formatTime(timestamp) {
 }
 
 export default function Incidents() {
+  const [searchParams] = useSearchParams();
   const {
     incidents,
     loading,
@@ -82,7 +83,7 @@ export default function Incidents() {
     handleUpdateStatus,
     handleAddNote,
     handleExecuteAction,
-  } = useIncidents();
+  } = useIncidents(searchParams.get('finding'));
 
   const navigate = useNavigate();
   const { events, loading: eventsLoading } = useEvents();
@@ -90,7 +91,7 @@ export default function Incidents() {
 
   // Filter States
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') === 'open' ? 'open' : 'all');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
   const [timeFilter, setTimeFilter] = useState('all');
@@ -98,7 +99,6 @@ export default function Incidents() {
   const itemsPerPage = 8;
 
   // Alerts queue states
-  const [searchParams] = useSearchParams();
   const [activeQueue, setActiveQueue] = useState(searchParams.get('tab') === 'alerts' ? 'alerts' : 'incidents');
   const [showChart, setShowChart] = useState(false);
   const [alertSearch, setAlertSearch] = useState('');
@@ -154,7 +154,7 @@ export default function Incidents() {
     const openCount = incidents.filter((i) => i.status === 'open' || i.status === 'investigating').length;
     const containedCount = incidents.filter((i) => i.status === 'contained').length;
     const resolvedCount = incidents.filter((i) => i.status === 'resolved').length;
-    const falsePositiveCount = incidents.filter((i) => i.status === 'false_positive').length;
+    const falsePositiveCount = incidents.filter((i) => i.disposition === 'false_positive' || i.status === 'false_positive').length;
     const closedCount = incidents.filter((i) => i.status === 'closed').length;
 
     return { total, openCount, containedCount, resolvedCount, falsePositiveCount, closedCount };
@@ -328,9 +328,9 @@ export default function Incidents() {
       // Status
       let matchStatus = true;
       if (statusFilter === 'open') {
-        matchStatus = inc.status === 'open' || inc.status === 'investigating';
+        matchStatus = ['open', 'investigating', 'contained'].includes(inc.incident_status || inc.status) && inc.disposition !== 'false_positive';
       } else if (statusFilter !== 'all') {
-        matchStatus = inc.status === statusFilter;
+        matchStatus = statusFilter === 'false_positive' ? inc.disposition === 'false_positive' || inc.status === statusFilter : inc.status === statusFilter;
       }
 
       // Severity

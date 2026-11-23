@@ -211,13 +211,15 @@ def is_kernel_thread(pid, ppid, name, exe, cmdline) -> bool:
     return False
 
 
-def collect_process_info():
+def collect_process_info(activity=None):
     """
     Thu thập thông tin toàn bộ tiến trình đang chạy trên host agent.
     Bao gồm PID, parent PID (ppid), name, exe, cmdline, cpu/memory %, và đánh dấu is_suspicious.
     Lọc bỏ các tiến trình nhân (kernel threads) như kthreadd, kworker, scsi_eh, jbd2.
     """
     processes = []
+    if activity is not None:
+        activity.update(version=1, captured_at=datetime.now(timezone.utc).isoformat(), complete=True)
     try:
         for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent', 'status', 'create_time']):
             try:
@@ -254,9 +256,14 @@ def collect_process_info():
                     "memory_percent": mem_pct,
                     "is_suspicious": is_suspicious
                 })
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            except psutil.AccessDenied:
+                if activity is not None:
+                    activity["complete"] = False
+            except psutil.NoSuchProcess:
                 continue
     except Exception as e:
+        if activity is not None:
+            activity["complete"] = False
         print(f"Error collecting process info: {e}", flush=True)
 
     return processes
@@ -284,8 +291,8 @@ def get_process_list(all_processes=None):
     normal_procs = [p for p in all_processes if not p["is_suspicious"]]
     return (suspicious_procs + normal_procs)[:30]
 
-def get_network_connections():
-    return collect_connections(global_connection_tracker)
+def get_network_connections(activity=None):
+    return collect_connections(global_connection_tracker, activity)
 
 
 def get_file_changes_count():
@@ -558,7 +565,8 @@ async def send_risk_telemetry(websocket):
         try:
             all_procs = collect_process_info()
             procs = get_process_list(all_procs)
-            conns = await asyncio.to_thread(get_network_connections)
+            activity = {}
+            conns = await asyncio.to_thread(get_network_connections, activity)
             file_changes = get_file_changes_count()
             registry_changes = collect_registry_changes()
             suspicious_cmds = collect_suspicious_commands(all_procs)
@@ -581,6 +589,7 @@ async def send_risk_telemetry(websocket):
                 "disk_usage": get_container_disk_percent(),
                 "process_list": procs,
                 "network_connections": conns,
+                "activity_sample": activity,
                 "file_changes_count": file_changes,
                 "suspicious_commands": suspicious_cmds,
                 "shadow_copy_deletion": shadow_copy_deletion,
@@ -619,12 +628,14 @@ async def send_process_list(websocket):
     await asyncio.sleep(2)
     while True:
         try:
-            procs = collect_process_info()
+            activity = {}
+            procs = collect_process_info(activity)
             message = {
                 "type": "PROCESS_LIST",
                 "payload": {
                     "agent_id": AGENT_ID,
                     "processes": procs,
+                    "activity_sample": activity,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 },
                 "wait_ack": False

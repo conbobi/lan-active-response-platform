@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import ipaddress
 import logging
 import posixpath
@@ -14,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rule_candidate import RuleCandidate
 from app.models.agent import Agent
+from app.services.agent.activity import process_identity, socket_key
+from app.core.agent_health import as_utc
 from app.models.incident import Incident
 from app.schemas.enums import IncidentSeverity, IncidentStatus
 from app.services.detection.network_shell import detect_network_shell
@@ -31,6 +35,7 @@ class RuleMatch:
     detail: str
     entity: Optional[str] = None
     evidence: Optional[Dict[str, Any]] = None
+    version: str = "builtin:1"
 
 
 LINUX_TEMP_DIRS = ("/tmp/", "/dev/shm/", "/var/tmp/")
@@ -434,6 +439,7 @@ class RuleEngine:
 
                     parsed_rules.append({
                         "id": str(r.id),
+                        "version": hashlib.sha256((r.rule_yaml or "").encode()).hexdigest()[:16],
                         "rule_name": r.rule_name or rule_dict.get("title", "Unnamed Rule"),
                         "severity": (r.severity or rule_dict.get("level", "medium")).lower(),
                         "mitre_techniques": mitre_list,
@@ -487,6 +493,7 @@ class RuleEngine:
                         mitre_techniques=rule["mitre_techniques"],
                         matched_event=event,
                         detail=self._build_detail(selection, event),
+                        version=rule.get("version", "sigma:1"),
                     ))
             except Exception as e:
                 logger.debug(f"_match_selection error: {e}")
@@ -647,20 +654,19 @@ class RuleEngine:
         agent_id: str,
         session: AsyncSession,
     ) -> List[Incident]:
-        """
-        Tạo Incident cho mỗi match.
-        DEDUP: nếu cùng (rule_name, agent_id) đã có incident mở trong 5 phút → bỏ qua.
-        """
+        """Aggregate one fingerprint per Agent in a sliding five-minute window."""
         now = datetime.now(timezone.utc)
-        cutoff_dt = now - timedelta(seconds=300)
-        if any(match.evidence for match in matches):
-            # Serialize concurrent reports for the same Agent before finding or inserting a session.
-            await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
+        cutoff_dt = now - timedelta(minutes=5)
+        await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
+        fingerprints = [(match, self._fingerprint(match)) for match in matches]
+        active_statuses = {IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED}
         recent_stmt = select(Incident).where(
-            Incident.agent_id == agent_id,
-            or_(Incident.created_at >= cutoff_dt,
-                Incident.detection_evidence.is_not(None) & (Incident.updated_at >= cutoff_dt)),
-        )
+            Incident.agent_id == agent_id, Incident.status.in_(active_statuses),
+            or_(Incident.label.is_(None), Incident.label != "false_positive"),
+            or_(Incident.fingerprint.is_(None),
+                Incident.fingerprint.in_({fingerprint for _, fingerprint in fingerprints})),
+            or_(Incident.created_at >= cutoff_dt, Incident.updated_at >= cutoff_dt),
+        ).order_by(Incident.updated_at.desc())
         recent = (await session.execute(recent_stmt)).scalars().all()
 
         sev_map = {
@@ -670,34 +676,23 @@ class RuleEngine:
             "critical": IncidentSeverity.CRITICAL,
         }
 
-        # Kiểm tra xem agent đã có incident Reverse Shell (T1059) nào trong 5 phút qua không
-        has_recent_shell_incident = any(
-            (
-                "T1059" in (inc.description or "")
-                or "reverse shell" in (inc.title or "").lower()
-                or "shell" in (inc.title or "").lower()
-            ) and not (inc.notes or "").startswith("rule_id:builtin_")
-            for inc in recent
-        )
-
         created = []
         updated = False
-        active_statuses = {IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED}
-        for m in matches:
-            existing = next((inc for inc in recent if (not m.evidence or inc.status in active_statuses)
-                             and self._is_same_rule_incident(inc, m)), None)
+        previous_socket = getattr(session, "info", {}).get("previous_socket_sample", {})
+        for m, fingerprint in fingerprints:
+            observed_at = ((m.evidence or {}).get("network", {}).get("observed_at")
+                           or (telemetry.get("activity_sample") or {}).get("captured_at")
+                           or telemetry.get("timestamp"))
+            observed = as_utc(observed_at)
+            observed_at = observed.isoformat() if observed else None
+            existing = next((inc for inc in recent
+                             if self._last_detection(inc, now) >= cutoff_dt
+                             and self._is_same_rule_incident(inc, m, fingerprint)), None)
             if existing is not None:
-                if m.evidence:
-                    updated |= self._aggregate_evidence(existing, m, now)
-                logger.debug(f"rule_engine: dedup skip rule={m.rule_name} agent={agent_id}")
-                continue
-
-            # Nếu đã có Reverse Shell incident gần đây, không sinh thêm generic network incident (T1071)
-            if has_recent_shell_incident and is_generic_network_match(m):
-                logger.info(
-                    f"rule_engine: suppressed T1071 rule '{m.rule_name}' for agent={agent_id} "
-                    f"due to active T1059 reverse shell in last 5m"
-                )
+                network = (m.evidence or {}).get("network")
+                recurrent = bool(network and previous_socket.get("complete")
+                                 and socket_key(network) not in previous_socket.get("tuples", []))
+                updated |= self._aggregate_evidence(existing, m, fingerprint, now, observed_at, recurrent)
                 continue
 
             inc_id = f"inc_{uuid.uuid4().hex[:12]}"
@@ -709,10 +704,14 @@ class RuleEngine:
                 severity=sev_map.get(m.severity.lower(), IncidentSeverity.MEDIUM),
                 status=IncidentStatus.OPEN,
                 risk_score=float(m.evidence["risk_score"] if m.evidence else self._severity_to_score(m.severity)),
-                detection_evidence=({**m.evidence, "observations": 1,
-                                     "first_received_at": now.isoformat(), "last_received_at": now.isoformat(),
-                                     "last_observed_at": m.evidence["network"].get("observed_at")}
-                                    if m.evidence else None),
+                fingerprint=fingerprint,
+                detection_evidence={
+                    **(m.evidence or self._historical_match(m)), "rule_id": m.rule_id, "rule_version": m.version,
+                    "observations": 1, "episodes": 1, "risk_calculated_at": now.isoformat(),
+                    "first_seen": observed_at or now.isoformat(),
+                    "first_received_at": now.isoformat(), "last_received_at": now.isoformat(),
+                    "last_observed_at": observed_at,
+                },
                 notes=(
                     f"rule_id:{m.rule_id} | entity:{m.entity}"
                     if m.entity is not None else f"rule_id:{m.rule_id} | Auto-generated by LARP AI Rule Engine"
@@ -724,42 +723,84 @@ class RuleEngine:
             recent.append(incident)
 
         if created or updated:
-            await session.commit()
-            for inc in created:
-                await session.refresh(inc)
+            if getattr(session, "info", {}).get("defer_incident_events") is True:
+                await session.flush()
+            else:
+                await session.commit()
+                for inc in created:
+                    await session.refresh(inc)
         return created
 
-    def _is_same_rule_incident(self, incident: Incident, match: RuleMatch) -> bool:
-        """Kiểm tra incident trùng lặp theo rule_id hoặc rule_name."""
+    @staticmethod
+    def _fingerprint(match):
+        if match.evidence and match.entity:
+            return match.entity
+        event = match.matched_event
+        identity = [match.rule_id, match.entity]
+        if match.entity is None:
+            identity.extend([process_identity(event), socket_key(event),
+                             event.get("src_ip"), event.get("dst_ip"), event.get("dst_port"), match.detail])
+        return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
+
+    @staticmethod
+    def _historical_match(match):
+        event = match.matched_event
+        saved = {}
+        identity = process_identity(event)
+        path = event.get("exe_path") or event.get("exe")
+        if identity and isinstance(path, str) and path:
+            saved["process"] = {
+                "pid": identity[0], "process_start_time": identity[1], "exe_path": path[:1024],
+                "parent_pid": event.get("parent_pid"), "cmdline": str(event.get("cmdline") or "")[:2048],
+                "name": str(event.get("process_name") or event.get("name") or posixpath.basename(path))[:128],
+            }
+        key = socket_key(event)
+        if key:
+            saved["network"] = dict(zip(("protocol", "src_ip", "src_port", "dst_ip", "dst_port"), key))
+        return saved
+
+    @staticmethod
+    def _last_detection(incident, now):
+        return (as_utc((incident.detection_evidence or {}).get("last_received_at"))
+                or as_utc(incident.created_at) or now)
+
+    @staticmethod
+    def _is_same_rule_incident(incident, match, fingerprint=None):
+        if incident.fingerprint:
+            return incident.fingerprint == fingerprint
         if match.evidence:
             evidence = incident.detection_evidence or {}
             return evidence.get("rule_id") == match.rule_id and evidence.get("entity") == match.entity
-        if match.entity is not None:
-            return incident.notes == f"rule_id:{match.rule_id} | entity:{match.entity}"
-        if incident.notes and f"rule_id:{match.rule_id}" in incident.notes:
-            return True
-        if incident.description and f"Rule ID: {match.rule_id}" in incident.description:
-            return True
-        return match.rule_name in (incident.title or "")
+        return match.entity is not None and incident.notes == f"rule_id:{match.rule_id} | entity:{match.entity}"
 
-    def _aggregate_evidence(self, incident: Incident, match: RuleMatch, now: datetime) -> bool:
-        incoming = match.evidence
-        existing = incident.detection_evidence
-        observed_at = incoming["network"].get("observed_at")
-        if observed_at and observed_at == existing.get("last_observed_at"):
+    def _aggregate_evidence(self, incident, match, fingerprint, now, observed_at, recurrent):
+        previous = incident.detection_evidence or {}
+        earlier = as_utc(previous.get("last_observed_at"))
+        if earlier and observed_at and as_utc(observed_at) <= earlier:
             return False
-        previous_rank = (existing["severity"] == "high", existing["risk_score"])
-        incoming_rank = (incoming["severity"] == "high", incoming["risk_score"])
-        latest = incoming if incoming_rank >= previous_rank else existing
+        incoming = match.evidence or {}
+        previous_rank = (previous.get("severity") == "high", incident.risk_score)
+        incoming_rank = (incoming.get("severity") == "high",
+                         incoming.get("risk_score", self._severity_to_score(match.severity)))
+        escalated = incoming_rank > previous_rank
+        latest = incoming if incoming and incoming_rank >= previous_rank else previous
+        incident.fingerprint = fingerprint
         incident.detection_evidence = {
-            **latest, "observations": existing["observations"] + 1,
-            "first_received_at": existing["first_received_at"], "last_received_at": now.isoformat(),
-            "last_observed_at": observed_at,
+            **latest, "rule_id": match.rule_id,
+            "rule_version": match.version if escalated else previous.get("rule_version", match.version),
+            "observations": previous.get("observations", 1) + 1,
+            "episodes": previous.get("episodes", 1) + int(recurrent),
+            "first_seen": previous.get("first_seen") or as_utc(incident.created_at).isoformat(),
+            "first_received_at": previous.get("first_received_at") or as_utc(incident.created_at).isoformat(),
+            "last_received_at": now.isoformat(), "last_observed_at": observed_at or previous.get("last_observed_at"),
+            "risk_calculated_at": now.isoformat() if escalated else previous.get("risk_calculated_at", now.isoformat()),
         }
-        if incoming_rank > previous_rank:
-            incident.risk_score = incoming["risk_score"]
-            incident.severity = IncidentSeverity(incoming["severity"])
-            incident.title = f"[{match.severity.upper()}] {match.rule_name}"
+        if previous.get("containment"):
+            incident.detection_evidence["containment"] = previous["containment"]
+        if escalated:
+            incident.risk_score = incoming_rank[1]
+            incident.severity = IncidentSeverity(match.severity)
+            incident.title = f"[{match.severity.upper()}] {match.rule_name}"[:256]
             incident.description = self._describe_match(match, incident.agent_id)
         incident.updated_at = now
         return True

@@ -28,6 +28,22 @@ def ensure_network_evidence_columns(connection):
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} JSON"))
 
 
+def ensure_activity_schema(connection):
+    inspector = inspect(connection)
+    datetime_type = "TIMESTAMP WITH TIME ZONE" if connection.dialect.name == "postgresql" else "DATETIME"
+    for table, column, datatype in (
+        ("agents", "decommissioned_at", datetime_type),
+        ("incidents", "fingerprint", "VARCHAR(64)"),
+    ):
+        if connection.dialect.name == "postgresql":
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {datatype}"))
+        elif not any(field["name"] == column for field in inspector.get_columns(table)):
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {datatype}"))
+    app.models.AgentActivity.__table__.create(connection, checkfirst=True)
+    for index in app.models.Incident.__table__.indexes:
+        index.create(connection, checkfirst=True)
+
+
 async def init_db() -> None:
     """Initialize database tables asynchronously."""
     async with async_engine.begin() as conn:

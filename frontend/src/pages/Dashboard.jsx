@@ -1,6 +1,7 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { FiRadio, FiRotateCw, FiShield } from 'react-icons/fi';
 import KpiCard from '../components/ui/KpiCard';
 import AgentTable from '../components/ui/AgentTable';
 import RecentAlerts from '../components/ui/RecentAlerts';
@@ -10,518 +11,144 @@ import HealthScoreGauge from '../components/dashboard/HealthScoreGauge';
 import RecentThreats from '../components/dashboard/RecentThreats';
 import ErrorState from '../components/ui/ErrorState';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import { getAgents, isolateAgent, deleteAgent, cleanupOfflineAgents } from '../api/agents';
-import { getIncidents, updateIncidentStatus } from '../api/incidents';
-import { getEvents } from '../api/events';
+import { cleanupOfflineAgents, deleteAgent, mapAgent } from '../api/agents';
+import { mapIncident } from '../api/incidents';
+import { mapEvent } from '../api/events';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
-import { useDashboardSocket } from '../hooks/useDashboardSocket';
-import { FiRadio, FiShield, FiAlertTriangle, FiRotateCw, FiTerminal, FiEye, FiCheckCircle } from 'react-icons/fi';
+import { useDashboardSummary } from '../hooks/useDashboardSummary';
 
-function FalsePositiveBanner() {
-    const [fpData, setFpData] = useState(null);
-
-    useEffect(() => {
-        let mounted = true;
-        async function check() {
-            try {
-                const res = await fetch('/api/v1/risk/verify-phase2');
-                if (!res.ok) return;
-                const data = await res.json();
-                if (mounted) setFpData(data);
-            } catch (err) {
-                // ignore
-            }
-        }
-        check();
-        const interval = setInterval(check, 15000);
-        return () => {
-            mounted = false;
-            clearInterval(interval);
-        };
-    }, []);
-
-    if (!fpData) return null;
-
-    const hasManagerFP = !fpData.manager_ip_bypassed;
-    const hasIdleFP = !fpData.idle_agents_safe;
-
-    if (!hasManagerFP && !hasIdleFP) {
-        return null;
-    }
-
-    return (
-        <div
-            style={{
-                backgroundColor: 'var(--error-dim)',
-                borderLeft: '4px solid var(--error)',
-                borderTop: '1px solid rgba(248, 81, 73, 0.25)',
-                borderRight: '1px solid rgba(248, 81, 73, 0.25)',
-                borderBottom: '1px solid rgba(248, 81, 73, 0.25)',
-                padding: '12px 16px',
-                marginBottom: '16px',
-                borderRadius: 'var(--radius-sm)',
-                boxShadow: '0 0 12px var(--error-glow)'
-            }}
-        >
-            <div style={{ fontWeight: 700, color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                ⚠️ Cảnh báo: Phát hiện False Positive trong hệ thống chấm điểm rủi ro
-            </div>
-            <ul style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '4px', paddingLeft: '20px' }}>
-                {hasManagerFP && (
-                    <li>• {fpData.details?.manager_ip_records ?? 0} bản ghi nhận diện nhầm kết nối Manager (172.19.0.3) là C2 Beaconing</li>
-                )}
-                {hasIdleFP && (
-                    <li>• Agent nhàn rỗi có điểm rủi ro bất thường (Max score: {fpData.details?.max_idle_score ?? 0})</li>
-                )}
-            </ul>
-        </div>
-    );
+function localTime(value) {
+    const time = value ? new Date(value) : null;
+    return time && Number.isFinite(time.getTime()) ? time.toLocaleString() : '—';
 }
 
 export default function Dashboard() {
     const navigate = useNavigate();
-    const [agents, setAgents] = useState([]);
-    const [incidents, setIncidents] = useState([]);
-    const [events, setEvents] = useState([]);
-    const [error, setError] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const { summary, error, loading, isConnected, snapshotReady, refresh } = useDashboardSummary();
+    const [now, setNow] = useState(Date.now);
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [selectedAgentTab, setSelectedAgentTab] = useState('Overview');
     const [selectedIncident, setSelectedIncident] = useState(null);
-    const [isolatingId, setIsolatingId] = useState(null);
 
-    const loadData = useCallback(async () => {
-        try {
-            const [agentsData, incidentsData, eventsData] = await Promise.all([
-                getAgents(),
-                getIncidents(),
-                getEvents(),
-            ]);
-
-            setAgents(Array.isArray(agentsData) ? agentsData : []);
-            setIncidents(Array.isArray(incidentsData) ? incidentsData : []);
-            setEvents(Array.isArray(eventsData) ? eventsData : []);
-            setError(null);
-        } catch (err) {
-            console.error('[Dashboard] loadData error:', err);
-            setError(err);
-        } finally {
-            setLoading(false);
-        }
+    useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
     }, []);
 
-    // Initial load + Real-time polling every 3s
-    useEffect(() => {
-        loadData();
-        const interval = setInterval(loadData, 3000);
-        return () => clearInterval(interval);
-    }, [loadData]);
+    if (!summary && error) {
+        return <ErrorState title="Không thể kết nối Manager" message={error.message} onRetry={refresh} />;
+    }
+    if (!summary && loading) return <SkeletonCard />;
+    if (!summary) return null;
 
-    const handleSocketMessage = useCallback((msg) => {
-        const evt = msg.event || msg.type;
-        if (
-            evt === 'heartbeat' ||
-            evt === 'dead_agent' ||
-            evt === 'AGENT_DELETED' ||
-            evt === 'TELEMETRY_RISK' ||
-            evt === 'INCIDENT_CREATED' ||
-            evt === 'INCIDENT_RESOLVED' ||
-            evt === 'INCIDENTS_RESOLVED' ||
-            evt === 'AGENT_UNISOLATED' ||
-            evt === 'INCIDENT_STATUS_CHANGED'
-        ) {
-            loadData();
+    const managerNow = now + summary.browserClockOffset;
+    const online = summary.health_counts.online || 0;
+    const agents = summary.agents.map(mapAgent);
+    const incidents = summary.incidents.map(mapIncident).map((incident) => {
+        if (incident.detection_activity === 'active' &&
+            (!isConnected || !snapshotReady || error || Date.parse(incident.activity_expires_at) <= managerNow)) {
+            return { ...incident, detection_activity: 'stale' };
         }
-    }, [loadData]);
+        return incident;
+    });
+    const networkFindings = summary.network_findings.map(mapIncident);
+    const candidate = mapIncident(summary.active_behavior);
+    const active = candidate && isConnected && snapshotReady && !error &&
+        Date.parse(candidate.activity_expires_at) > managerNow;
+    const incident = candidate || incidents.find((entry) =>
+        !['closed', 'resolved'].includes(entry.incident_status) && entry.disposition !== 'false_positive'
+    ) || incidents[0];
+    const uncertain = !isConnected || error || summary.health_counts.stale || summary.health_counts.offline ||
+        incident?.detection_activity === 'stale' || incident?.detection_activity === 'unknown' || Boolean(candidate && !active);
 
-    const handleDeleteAgent = useCallback(async (agentId, hostname) => {
-        if (!window.confirm(`Bạn có chắc chắn muốn gỡ bỏ agent "${hostname || agentId}" khỏi hệ thống?`)) {
-            return;
-        }
+    const archiveAgent = async (agentId, hostname) => {
+        if (!window.confirm(`Ngừng quản lý Agent "${hostname || agentId}"?`)) return;
         try {
             await deleteAgent(agentId);
-            toast.success(`Đã gỡ bỏ agent "${hostname || agentId}" thành công`);
-            loadData();
+            await refresh();
         } catch (err) {
-            toast.error(`Lỗi khi gỡ bỏ agent: ${err.message}`);
-        }
-    }, [loadData]);
-
-    const handleCleanupOffline = useCallback(async () => {
-        const offlineCount = agents.filter((a) =>
-            ['dead', 'offline', 'inactive'].includes(String(a.status || '').toLowerCase())
-        ).length;
-        if (!window.confirm(`Bạn có chắc chắn muốn dọn dẹp và gỡ bỏ tất cả ${offlineCount} agent offline không kết nối?`)) {
-            return;
-        }
-        try {
-            const res = await cleanupOfflineAgents();
-            toast.success(res.message || `Đã dọn dẹp ${res.deleted_count || offlineCount} agent offline thành công`);
-            loadData();
-        } catch (err) {
-            toast.error(`Lỗi dọn dẹp agent: ${err.message}`);
-        }
-    }, [agents, loadData]);
-
-    const { isConnected } = useDashboardSocket(handleSocketMessage);
-
-    // Urgent active incident for top banner triage (only un-resolved, active threats within 24h)
-    const criticalActiveIncident = useMemo(() => {
-        const now = Date.now();
-        const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-        return incidents.find((i) => {
-            const st = String(i.status || '').toLowerCase();
-            const isResolved = ['resolved', 'false_positive', 'reverted', 'closed'].includes(st);
-            if (isResolved) return false;
-
-            const isActive = ['open', 'investigating', 'contained', 'new'].includes(st);
-            if (!isActive) return false;
-
-            const score = Number(i.risk_score ?? i.riskScore ?? 0);
-            const sev = String(i.severity || '').toLowerCase();
-            const isThreat = score >= 50 || ['medium', 'high', 'critical'].includes(sev);
-            if (!isThreat) return false;
-
-            // Only consider incidents within 24 hours
-            const createdAt = new Date(i.created_at || i.createdAt || 0).getTime();
-            if (!isNaN(createdAt) && (now - createdAt) > MAX_AGE_MS) {
-                return false;
-            }
-
-            return true;
-        });
-    }, [incidents]);
-
-    const isHighOrCriticalThreat = useMemo(() => {
-        if (!criticalActiveIncident) return false;
-        const score = Number(criticalActiveIncident.risk_score ?? criticalActiveIncident.riskScore ?? 0);
-        const sev = String(criticalActiveIncident.severity || '').toLowerCase();
-        return score >= 70 || ['high', 'critical'].includes(sev);
-    }, [criticalActiveIncident]);
-
-    const handleQuickIsolate = async (agentId) => {
-        if (!agentId) return;
-        if (!window.confirm(`Xác nhận cô lập khẩn cấp host ${agentId}? Tất cả kết nối mạng ngoại trừ LARP Server sẽ bị ngắt lập tức.`)) {
-            return;
-        }
-        setIsolatingId(agentId);
-        try {
-            await isolateAgent(agentId, true);
-            toast.success(`Đã phát lệnh cô lập agent ${agentId} thành công!`);
-            loadData();
-        } catch (err) {
-            toast.error(`Cô lập thất bại: ${err.message || 'Lỗi mạng'}`);
-        } finally {
-            setIsolatingId(null);
+            toast.error(err.message);
         }
     };
 
-    if (error) {
-        return (
-            <ErrorState
-                title="Không thể kết nối Manager"
-                message={`${error.message || 'Lỗi mạng'}. Kiểm tra backend tại http://localhost:8005`}
-                onRetry={loadData}
-            />
-        );
-    }
-
-    const totalOnline = agents.filter((a) => a.status === 'online' || a.status === 'active' || a.status === 'ACTIVE').length;
-    const alertsToday = events.filter((e) => new Date(e.timestamp).toDateString() === new Date().toDateString()).length;
-    const blockedIps = events.filter((e) => e.type === 'block_ip').length;
-    const isolatedAgents = agents.filter((a) => a.status === 'isolated' || a.is_isolated).length;
-    const unresolvedIncidents = incidents.filter((i) => {
-        const st = String(i.status || '').toLowerCase();
-        return !['resolved', 'closed', 'false_positive'].includes(st);
-    }).length;
+    const archiveOffline = async () => {
+        if (!window.confirm('Ngừng quản lý các Agent đang offline?')) return;
+        try {
+            await cleanupOfflineAgents();
+            await refresh();
+        } catch (err) {
+            toast.error(err.message);
+        }
+    };
 
     return (
         <div>
-            <FalsePositiveBanner />
-
-            {/* Zone 0: Urgent Critical Threat Banner OR All Clear Banner */}
-            {criticalActiveIncident ? (
-                <div
-                    onClick={() => setSelectedIncident(criticalActiveIncident)}
-                    style={{
-                        background: isHighOrCriticalThreat
-                            ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.22) 0%, rgba(22, 32, 50, 0.95) 100%)'
-                            : 'linear-gradient(90deg, rgba(244, 63, 94, 0.18) 0%, rgba(22, 32, 50, 0.95) 100%)',
-                        border: isHighOrCriticalThreat ? '1px solid var(--error)' : '1px solid rgba(239, 68, 68, 0.45)',
-                        borderLeft: isHighOrCriticalThreat ? '5px solid var(--error)' : '5px solid #f43f5e',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '1rem 1.25rem',
-                        marginBottom: '1.25rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '1rem',
-                        flexWrap: 'wrap',
-                        boxShadow: '0 0 16px rgba(239, 68, 68, 0.25)',
-                        cursor: 'pointer',
-                        transition: 'filter 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
-                >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-                        <div
-                            style={{
-                                width: 36,
-                                height: 36,
-                                borderRadius: '50%',
-                                background: 'rgba(239, 68, 68, 0.25)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: 'var(--error)',
-                                flexShrink: 0,
-                            }}
-                        >
-                            <FiAlertTriangle size={20} />
-                        </div>
-                        <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                <span style={{ fontWeight: 800, color: isHighOrCriticalThreat ? 'var(--critical)' : '#f87171', fontSize: '0.95rem', letterSpacing: '0.02em' }}>
-                                    {isHighOrCriticalThreat ? '🔴 CRITICAL THREAT ACTIVE: ' : '🚨 ACTIVE THREAT DETECTED: '}
-                                    {criticalActiveIncident.title || 'High Risk Incident'}
-                                </span>
-                                <span style={{
-                                    fontSize: '0.75rem',
-                                    fontWeight: 700,
-                                    padding: '0.1rem 0.5rem',
-                                    borderRadius: '999px',
-                                    background: isHighOrCriticalThreat ? 'var(--error)' : '#f43f5e',
-                                    color: '#ffffff',
-                                }}>
-                                    SCORE {Math.round(criticalActiveIncident.risk_score ?? criticalActiveIncident.riskScore ?? 100)}/100
-                                </span>
-                            </div>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                                Target Host: <strong style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.agent_id || criticalActiveIncident.agentId || 'Unknown Host'}</strong>
-                                {(criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name) ? (
-                                    <span> • Culprit: <code style={{ color: 'var(--text-primary)' }}>{criticalActiveIncident.culprit_process?.name || criticalActiveIncident.culpritProcess?.name}</code> (PID {criticalActiveIncident.culprit_process?.pid || criticalActiveIncident.culpritProcess?.pid || '—'})</span>
-                                ) : (
-                                    <span> • Phân loại: <code style={{ color: 'var(--text-secondary)' }}>Host / Network Telemetry (Chưa gắn PID)</code></span>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
-                        <Button
-                            variant="primary"
-                            size="sm"
-                            iconLeft={<FiShield size={14} />}
-                            disabled={isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
-                            onClick={() => handleQuickIsolate(criticalActiveIncident.agent_id || criticalActiveIncident.agentId)}
-                            style={{
-                                background: isHighOrCriticalThreat ? 'var(--error)' : '#e11d48',
-                                borderColor: isHighOrCriticalThreat ? 'var(--error)' : '#f43f5e',
-                                color: '#ffffff',
-                                fontWeight: 700
-                            }}
-                        >
-                            {isolatingId === (criticalActiveIncident.agent_id || criticalActiveIncident.agentId) ? 'Isolating...' : '1-Click Isolate Host'}
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                                const targetAgent = criticalActiveIncident.agent_id || criticalActiveIncident.agentId || '';
-                                const pid = criticalActiveIncident.culprit_process?.pid || criticalActiveIncident.culpritProcess?.pid || '';
-                                const started = criticalActiveIncident.culprit_process?.process_start_time || criticalActiveIncident.culpritProcess?.process_start_time;
-                                navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${pid && started ? `&pid=${pid}&started=${started}` : ''}`);
-                            }}
-                        >
-                            🌳 View in Process Tree
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            iconLeft={<FiEye size={13} />}
-                            onClick={() => setSelectedIncident(criticalActiveIncident)}
-                        >
-                            Triage Storyline
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            iconLeft={<FiCheckCircle size={13} />}
-                            onClick={async () => {
-                                try {
-                                    await updateIncidentStatus(criticalActiveIncident.id, 'false_positive');
-                                    toast.success(`Đã xác nhận False Positive cho sự cố ${criticalActiveIncident.id}`);
-                                    loadData();
-                                } catch (err) {
-                                    toast.error(`Lỗi cập nhật: ${err.message}`);
-                                }
-                            }}
-                        >
-                            Mark False Positive
-                        </Button>
-                    </div>
-                </div>
-            ) : unresolvedIncidents > 0 ? (
-                <div
-                    style={{
-                        background: 'linear-gradient(90deg, rgba(245, 158, 11, 0.15) 0%, rgba(22, 32, 50, 0.85) 100%)',
-                        border: '1px solid rgba(245, 158, 11, 0.3)',
-                        borderLeft: '5px solid var(--warning)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '0.85rem 1.25rem',
-                        marginBottom: '1.25rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '1rem',
-                        flexWrap: 'wrap',
-                    }}
-                >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <div
-                            style={{
-                                width: 32,
-                                height: 32,
-                                borderRadius: '50%',
-                                background: 'rgba(245, 158, 11, 0.2)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: 'var(--warning)',
-                                flexShrink: 0,
-                            }}
-                        >
-                            <FiAlertTriangle size={18} />
-                        </div>
-                        <div>
-                            <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: '0.9rem' }}>
-                                ⚠️ {unresolvedIncidents} Unresolved Security {unresolvedIncidents === 1 ? 'Incident' : 'Incidents'} Require Review
-                            </div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                Security anomalies detected on monitored hosts.
-                            </div>
-                        </div>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={() => navigate('/incidents')}>
-                        View Incidents
-                    </Button>
-                </div>
-            ) : (
-                <div
-                    style={{
-                        background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.12) 0%, rgba(22, 32, 50, 0.85) 100%)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
-                        borderLeft: '5px solid var(--success)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '0.85rem 1.25rem',
-                        marginBottom: '1.25rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '1rem',
-                        flexWrap: 'wrap',
-                    }}
-                >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <div
-                            style={{
-                                width: 32,
-                                height: 32,
-                                borderRadius: '50%',
-                                background: 'rgba(16, 185, 129, 0.2)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: 'var(--success)',
-                                flexShrink: 0,
-                            }}
-                        >
-                            <FiShield size={18} />
-                        </div>
-                        <div>
-                            <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: '0.9rem' }}>
-                                🟢 All Systems Operational — No Active Threats (Last 24h)
-                            </div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                Endpoint posture normal. Protection active across {totalOnline} connected {totalOnline === 1 ? 'agent' : 'agents'}.
-                            </div>
-                        </div>
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={loadData} iconLeft={<FiRotateCw size={13} />}>
-                        Sync Status
-                    </Button>
-                </div>
-            )}
-
-            {/* Header */}
-            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                        <h1 className="page-title">Security Operations Dashboard</h1>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '12px', background: isConnected ? 'rgba(0,192,123,0.12)' : 'rgba(239,68,68,0.12)', color: isConnected ? 'var(--success)' : 'var(--error)' }}>
-                            <FiRadio size={12} />
-                            <span>{isConnected ? 'LIVE WS' : 'OFFLINE'}</span>
-                        </div>
-                    </div>
-                    <p className="page-subtitle">Real-time threat monitoring, posture scoring, and active endpoint response</p>
+                    <h1 className="page-title">Security Operations Dashboard</h1>
+                    <span><FiRadio size={13} /> {isConnected ? 'Live updates' : 'WebSocket reconnecting'}</span>
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={13} />} onClick={loadData}>
-                        Refresh
-                    </Button>
-                    <Button variant="primary" size="sm" iconLeft={<FiShield size={14} />} onClick={() => navigate('/incidents')}>
-                        Incidents Queue ({unresolvedIncidents})
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <Button variant="outline" size="sm" iconLeft={<FiRotateCw size={13} />} onClick={refresh}>Refresh</Button>
+                    <Button size="sm" iconLeft={<FiShield size={14} />} onClick={() => navigate('/incidents?status=open')}>
+                        Incidents Queue ({summary.incident_queue})
                     </Button>
                 </div>
             </div>
 
-            {/* Zone 1: Health Score Gauge Posture */}
-            {loading ? <SkeletonCard /> : <HealthScoreGauge agents={agents} incidents={incidents} loading={loading} />}
+            <div className="card" style={{
+                padding: '1rem 1.25rem', marginBottom: '1.25rem',
+                borderLeft: `4px solid var(--${active ? 'error' : 'warning'})`,
+            }}>
+                <h2>{active ? 'ACTIVE THREAT DETECTED' : incident ? 'Historical Security Incident' :
+                    uncertain ? 'Unknown / Stale' : 'No verified active behavior'}</h2>
+                {incident && (
+                    <>
+                        <p>{incident.title} · {incident.agent_id} · {incident.incident_status || incident.status}</p>
+                        <p>
+                            {active ? 'Detection Risk Score' : 'Historical Risk Score'} {incident.riskScore}/100
+                            {incident.confidence != null && ` · Confidence ${Math.round(incident.confidence * 100)}%`}
+                            {uncertain && !active && ' · Unknown / Stale'}
+                        </p>
+                        <p style={{ color: 'var(--text-secondary)' }}>
+                            First Seen {localTime(incident.first_seen)} · Last Seen {localTime(incident.last_seen)}
+                            {' · '}Last Verified {localTime(incident.last_verified)}
+                            {incident.resolved_at && ` · Resolved At ${localTime(incident.resolved_at)}`}
+                        </p>
+                        <Button size="sm" variant="outline" onClick={() => setSelectedIncident(incident)}>Review incident</Button>
+                    </>
+                )}
+            </div>
 
-            {/* KPI Cards Row (Clean, accurate values without simulated trends) */}
+            <HealthScoreGauge summary={summary} activityVerified={Boolean(active)} />
             <div className="grid-4" style={{ marginBottom: '1.25rem' }}>
-                <KpiCard type="agents" label="Active Endpoints" value={`${totalOnline}/${agents.length || 0}`} />
-                <KpiCard type="alerts" label="Telemetry Alerts Today" value={alertsToday} />
-                <KpiCard type="blocked" label="Firewall Blocks Active" value={blockedIps} />
-                <KpiCard icon={<FiShield size={20} />} label="Isolated Hosts" color="var(--warning)" value={isolatedAgents} />
+                <KpiCard type="agents" label="Online Endpoints" value={`${online}/${summary.total_agents}`} />
+                <KpiCard type="alerts" label="Telemetry Alerts Today (UTC)" value={summary.alerts_today} />
+                <KpiCard type="blocked" label="Block Events Today (UTC)" value={summary.block_events_today} />
+                <KpiCard icon={<FiShield size={20} />} label="Open Incident Queue" value={summary.incident_queue} />
             </div>
 
-            {/* Middle Grid: Agents Table + Recent Threats with 1-click links */}
             <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
-                <AgentTable
-                    agents={agents}
-                    onViewAgent={(agent, tab = 'Overview') => {
-                        setSelectedAgent(agent);
-                        setSelectedAgentTab(tab);
-                    }}
-                    onDeleteAgent={handleDeleteAgent}
-                    onCleanupOffline={handleCleanupOffline}
-                />
-                <RecentThreats incidents={incidents} agents={agents} onSelectIncident={setSelectedIncident} />
+                <AgentTable agents={agents} onDeleteAgent={archiveAgent} onCleanupOffline={archiveOffline}
+                    onViewAgent={(agent, tab = 'Overview') => { setSelectedAgent(agent); setSelectedAgentTab(tab); }} />
+                <RecentThreats incidents={incidents} onSelectIncident={setSelectedIncident} />
             </div>
-
-            {/* Full-width Recent Alerts Stream */}
-            <div style={{ marginBottom: '1.25rem' }}>
-                <RecentAlerts events={events} />
-            </div>
-
-            {selectedAgent && (
-                <AgentDetailModal
-                    agent={selectedAgent}
-                    onClose={() => setSelectedAgent(null)}
-                    onDeleteAgent={handleDeleteAgent}
-                    initialTab={selectedAgentTab}
-                />
-            )}
-            {selectedIncident && (
-                <IncidentDetailModal
-                    incident={selectedIncident}
-                    isOpen={!!selectedIncident}
-                    onClose={() => setSelectedIncident(null)}
-                    onRefresh={loadData}
-                />
-            )}
+            <section className="card" style={{ marginBottom: '1.25rem' }}>
+                <h3>Network Findings</h3>
+                {networkFindings.length === 0 && <p>Chưa có network finding trong hàng đợi.</p>}
+                {networkFindings.slice(0, 5).map((finding) => (
+                    <p key={finding.id}>
+                        <Button size="sm" variant="ghost" onClick={() => setSelectedIncident(finding)}>{finding.title}</Button>
+                        {' · '}{finding.culprit_process ? 'Process-linked' : 'Network-only Detection'}
+                    </p>
+                ))}
+                <Button size="sm" variant="outline" onClick={() => navigate('/incidents?finding=network')}>View Network Findings</Button>
+            </section>
+            <RecentAlerts events={summary.events.map(mapEvent)} />
+            {selectedAgent && <AgentDetailModal agent={selectedAgent} initialTab={selectedAgentTab}
+                onClose={() => setSelectedAgent(null)} onDeleteAgent={archiveAgent} />}
+            {selectedIncident && <IncidentDetailModal incident={selectedIncident} isOpen
+                onClose={() => setSelectedIncident(null)} onRefresh={refresh} />}
         </div>
     );
 }

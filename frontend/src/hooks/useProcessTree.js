@@ -1,6 +1,6 @@
 // src/hooks/useProcessTree.js
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getProcessTree, getSuspiciousProcesses, killProcess } from '../api/process';
+import { getProcessTree, killProcess } from '../api/process';
 import { useDashboardSocket } from './useDashboardSocket';
 
 export const useProcessTree = (agentId = '') => {
@@ -13,6 +13,8 @@ export const useProcessTree = (agentId = '') => {
   const [actionSuccess, setActionSuccess] = useState(null);
 
   const killTimerRef = useRef(null);
+  const requestId = useRef(0);
+  const [now, setNow] = useState(Date.now);
 
   // Clear any pending timeout on unmount
   useEffect(() => {
@@ -32,57 +34,53 @@ export const useProcessTree = (agentId = '') => {
 
   const fetchData = useCallback(async (targetAgentId = selectedAgentId, showLoading = true) => {
     if (!targetAgentId) return;
+    const request = ++requestId.current;
     if (showLoading) setLoading(true);
     setError(null);
 
     try {
-      const [treeData, suspiciousData] = await Promise.all([
-        getProcessTree(targetAgentId).catch((err) => {
-          console.warn(`Failed to fetch process tree for ${targetAgentId}:`, err);
-          return null;
-        }),
-        getSuspiciousProcesses(targetAgentId).catch((err) => {
-          console.warn(`Failed to fetch suspicious processes for ${targetAgentId}:`, err);
-          return [];
-        }),
-      ]);
-
+      const treeData = await getProcessTree(targetAgentId);
+      if (request !== requestId.current) return;
       setProcessTree(treeData);
-      setSuspiciousProcesses(Array.isArray(suspiciousData) ? suspiciousData : []);
+      setSuspiciousProcesses(treeData?.flagged_processes || []);
     } catch (err) {
+      if (request !== requestId.current) return;
       console.error('Error in useProcessTree fetchData:', err);
       setError(err.message || 'Failed to fetch process tree telemetry');
     } finally {
-      if (showLoading) setLoading(false);
+      if (request === requestId.current) setLoading(false);
     }
   }, [selectedAgentId]);
 
-  // Initial fetch and auto-polling every 30 seconds
-  useEffect(() => {
-    if (selectedAgentId) {
-      fetchData(selectedAgentId, true);
-
-      const interval = setInterval(() => {
-        fetchData(selectedAgentId, false);
-      }, 30000);
-
-      return () => clearInterval(interval);
+  const refresh = useCallback(() => fetchData(selectedAgentId, false), [fetchData, selectedAgentId]);
+  const resync = useCallback(() => {
+    setProcessTree(null);
+    refresh();
+  }, [refresh]);
+  const { isConnected } = useDashboardSocket(useCallback((message) => {
+    if (message.type === 'ACTIVITY_UPDATED' && message.stream === 'PROCESS_LIST' && message.agent_id === selectedAgentId) {
+      refresh();
     }
-  }, [selectedAgentId, fetchData]);
+  }, [selectedAgentId, refresh]), resync);
 
-  // Realtime WebSocket updates if PROCESS_LIST arrives for this agent
-  useDashboardSocket(
-    useCallback((msg) => {
-      if (msg && (msg.type === 'PROCESS_LIST' || msg.type === 'TELEMETRY_RISK')) {
-        const msgAgentId = msg.payload?.agent_id || msg.agent_id;
-        if (!selectedAgentId || msgAgentId === selectedAgentId) {
-          fetchData(selectedAgentId, false);
-        }
-      }
-    }, [selectedAgentId, fetchData])
-  );
+  useEffect(() => {
+    setProcessTree(null);
+    setSuspiciousProcesses([]);
+    fetchData(selectedAgentId);
+    const fallback = setInterval(refresh, 60000);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      requestId.current++;
+      clearInterval(tick);
+      clearInterval(fallback);
+    };
+  }, [selectedAgentId, fetchData, refresh]);
+
+  const processLive = isConnected && !error && processTree?.observation?.status === 'running' &&
+    Date.parse(processTree.observation.expires_at) > now;
 
   const queueTermination = async ({ pid, reason, killTree, target }) => {
+    if (!processLive) throw new Error('Process observation is stale. Refresh before sending a response.');
     setKilling(true);
     setError(null);
     try {
@@ -102,7 +100,8 @@ export const useProcessTree = (agentId = '') => {
     selectedAgentId,
     setSelectedAgentId,
     processTree,
-    suspiciousProcesses,
+    suspiciousProcesses: processLive ? suspiciousProcesses : [],
+    processLive,
     loading,
     killing,
     error,

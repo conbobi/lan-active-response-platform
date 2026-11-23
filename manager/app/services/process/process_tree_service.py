@@ -1,8 +1,13 @@
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.command import Command
+from app.models.agent import Agent
+from app.models.agent_activity import AgentActivity
+from app.services.agent.activity import process_observation
 from app.repositories.process_info_repository import ProcessInfoRepository
 
 logger = logging.getLogger(__name__)
@@ -19,12 +24,13 @@ class ProcessTreeService:
         self.session = session
         self.process_repo = ProcessInfoRepository(session)
 
-    async def build_tree(self, agent_id: str) -> Dict[str, Any]:
+    async def build_tree(self, agent_id: str, processes=None) -> Dict[str, Any]:
         """
         Fetch latest process telemetry for an agent and format process hierarchy into a structured JSON tree.
         Natural roots = processes with parent_pid not in snapshot, parent_pid = 0/None, or parent_pid = pid (self-loop).
         """
-        processes = await self.process_repo.get_by_agent(agent_id, limit=500)
+        if processes is None:
+            processes = await self.process_repo.get_by_agent(agent_id, limit=500)
         if not processes:
             return {"agent_id": agent_id, "total_processes": 0, "root_count": 0, "tree": []}
 
@@ -94,11 +100,12 @@ class ProcessTreeService:
             "children": children,
         }
 
-    async def find_suspicious_process(self, agent_id: str) -> List[Dict[str, Any]]:
+    async def find_suspicious_process(self, agent_id: str, processes=None) -> List[Dict[str, Any]]:
         """
         Identify suspicious processes for an agent and trace their parent execution chain.
         """
-        processes = await self.process_repo.get_by_agent(agent_id, limit=500)
+        if processes is None:
+            processes = await self.process_repo.get_by_agent(agent_id, limit=500)
         proc_map = {p.pid: p for p in processes}
 
         suspicious_list = []
@@ -138,6 +145,23 @@ class ProcessTreeService:
                 })
 
         return suspicious_list
+
+    async def snapshot(self, agent_id):
+        row = (await self.session.execute(select(Agent, AgentActivity).outerjoin(AgentActivity).where(
+            Agent.id == agent_id,
+        ))).one_or_none()
+        agent, activity = row if row else (None, None)
+        sample = activity.samples.get("process", {}) if activity else {}
+        observation = process_observation(agent, sample, datetime.now(timezone.utc))
+        processes = await self.process_repo.get_by_agent(agent_id, limit=500)
+        tree = await self.build_tree(agent_id, processes)
+        flagged = []
+        if observation["status"] == "running":
+            identities = sample.get("processes", {})
+            live_processes = [proc for proc in processes if proc.process_start_time is not None
+                              and identities.get(str(proc.pid)) == proc.process_start_time]
+            flagged = await self.find_suspicious_process(agent_id, live_processes)
+        return {**tree, "observation": observation, "flagged_processes": flagged}
 
     async def queue_termination(self, agent_id: str, params: dict, tree: bool = False) -> Command:
         from app.services.response.response_action_service import ResponseActionService

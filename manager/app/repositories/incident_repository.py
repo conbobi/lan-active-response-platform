@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from sqlalchemy import select, desc
+from sqlalchemy import String, cast, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.incident import Incident
 from app.schemas.enums import IncidentStatus
@@ -9,17 +9,22 @@ from app.repositories.base import SqlAlchemyRepository
 
 logger = logging.getLogger("larp.repositories.incident")
 
-ACTIVE_STATUSES = [
-    IncidentStatus.OPEN,
-    IncidentStatus.INVESTIGATING,
-    IncidentStatus.CONTAINED,
-    "OPEN",
-    "INVESTIGATING",
-    "CONTAINED",
-    "open",
-    "investigating",
-    "contained",
-]
+ACTIVE_STATUSES = (IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED)
+
+
+def open_incident_filter():
+    return Incident.status.in_(ACTIVE_STATUSES) & or_(Incident.label.is_(None), Incident.label != "false_positive")
+
+
+def network_finding_filter():
+    evidence = cast(Incident.detection_evidence, String)
+    return or_(
+        evidence.contains('"network"'), evidence.contains('"network_connection"'),
+        evidence.contains('"c2_communication"'), evidence.contains('"http_beaconing"'),
+        Incident.description.ilike("%direct connection to c2 port%"),
+        Incident.description.ilike("%'network_connection'%"),
+        Incident.description.ilike("%'c2_communication'%"),
+    )
 
 
 class IncidentRepository(SqlAlchemyRepository[Incident]):
@@ -45,7 +50,7 @@ class IncidentRepository(SqlAlchemyRepository[Incident]):
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         stmt = (
             select(Incident)
-            .where(Incident.status.in_(ACTIVE_STATUSES))
+            .where(open_incident_filter())
             .where(Incident.created_at >= cutoff)
             .order_by(desc(Incident.risk_score), desc(Incident.created_at))
             .limit(limit)
@@ -55,45 +60,19 @@ class IncidentRepository(SqlAlchemyRepository[Incident]):
         logger.info(f"Found {len(items)} incidents for dashboard (limit={limit}, hours={hours})")
         return items
 
-    async def resolve_active_incidents_for_agent(
-        self, agent_id: str, resolved_reason: str = "Auto-resolved after agent unisolated"
-    ) -> List[Incident]:
-        """Auto-resolve active incidents for a given agent and record resolution note."""
-        now = datetime.now(timezone.utc)
-        stmt = (
-            select(Incident)
-            .where(
-                Incident.agent_id == agent_id,
-                Incident.status.in_([
-                    IncidentStatus.OPEN,
-                    IncidentStatus.INVESTIGATING,
-                    IncidentStatus.CONTAINED,
-                ])
-            )
-        )
-        result = await self.session.execute(stmt)
-        incidents = list(result.scalars().all())
-        for inc in incidents:
-            inc.status = IncidentStatus.RESOLVED
-            inc.resolved_at = now
-            note_content = f"Incident auto-resolved: {resolved_reason}."
-            if inc.notes:
-                inc.notes += f"\n{note_content}"
-            else:
-                inc.notes = note_content
-        await self.session.flush()
-        return incidents
-
     async def list(
         self,
         skip: int = 0,
         limit: int = 100,
         active_only: bool = False,
-        hours: Optional[int] = None
+        hours: Optional[int] = None,
+        finding: Optional[str] = None,
     ) -> List[Incident]:
         stmt = select(Incident)
         if active_only:
-            stmt = stmt.where(Incident.status.in_(ACTIVE_STATUSES))
+            stmt = stmt.where(open_incident_filter())
+        if finding == "network":
+            stmt = stmt.where(network_finding_filter())
         if hours is not None and hours > 0:
             cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
             stmt = stmt.where(Incident.created_at >= cutoff)

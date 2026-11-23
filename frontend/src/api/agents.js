@@ -14,19 +14,27 @@ export const getAgents = async () => {
   const response = await api.get('/agents/');
   // Backend trả về list các agent, map sang định dạng frontend cần
   const list = Array.isArray(response) ? response : [];
-  return list.map((agent) => ({
+  return list.map(mapAgent);
+};
+
+export const mapAgent = (agent) => {
+  const health = agent.health || mapStatus(agent.status, false);
+  return {
     id: agent.id,
     hostname: agent.hostname || agent.id,
     ip: agent.ip_address || agent.ip,
-    status: mapStatus(agent.status, agent.is_isolated),
+    health,
+    status: health === 'online' ? mapStatus(agent.status, agent.is_isolated) : health,
     cpu: agent.cpu || 0,
     ram: agent.ram || 0,
     disk: agent.disk || 0,
     isProbe: agent.is_probe,
     is_isolated: agent.is_isolated,
     last_seen: agent.last_seen,
-  }));
+    decommissioned_at: agent.decommissioned_at,
+  };
 };
+
 export const isolateAgent = async (agentId, confirmed = false) => {
   return await api.post(`/agents/${agentId}/isolate`, { confirmed });
 };

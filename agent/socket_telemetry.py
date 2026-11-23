@@ -145,9 +145,11 @@ def socket_holders(row, sample_started):
     return [], "access_denied" if denied else "owner_changed_or_exited"
 
 
-def collect_connections(tracker):
+def collect_connections(tracker, activity=None):
     started = time.time()
     observed_at = datetime.fromtimestamp(started, timezone.utc)
+    if activity is not None:
+        activity.update(version=1, captured_at=observed_at.isoformat(), complete=False)
     errors = {}
     try:
         rows = socket_rows(errors)
@@ -209,4 +211,6 @@ def collect_connections(tracker):
         any(os.path.basename(holder["exe_path"]) in SHELLS for holder in event["holders"]),
         event["exe_path"].startswith(("/tmp/", "/dev/shm/", "/var/tmp/")),
     ), reverse=True)
+    if activity is not None:
+        activity["complete"] = not errors and len(tracked) <= SOCKET_LIMIT
     return tracked[:SOCKET_LIMIT]

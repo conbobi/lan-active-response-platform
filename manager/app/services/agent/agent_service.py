@@ -2,21 +2,11 @@ import uuid
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent import Agent
+from app.models.agent_activity import AgentActivity
 from app.models.agent_history import AgentHistory
-from app.models.flow import Flow
-from app.models.command import Command
-from app.models.process_info import ProcessInfo
-from app.models.event import Event
-from app.models.auth_event import AuthEvent
-from app.models.agent_baseline import AgentBaseline
-from app.models.whitelist import WhitelistEntry
-from app.models.risk_score import RiskScoreRecord
-from app.models.response_action import ResponseAction
-from app.models.agent_group import AgentGroupMember
-from app.models.incident import Incident
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.agent_history_repository import AgentHistoryRepository
 from app.schemas.agent import AgentCreate
@@ -24,6 +14,7 @@ from app.schemas.heartbeat import HeartbeatDTO
 from app.schemas.enums import AgentStatus
 from app.core.exceptions import AgentNotFoundError, ConflictError
 from app.services.core.base import AbstractService
+from app.core.agent_health import OFFLINE_AFTER, as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +38,15 @@ class AgentService(AbstractService[AgentRepository]):
         return await self.repository.add(agent)
 
     async def update_heartbeat(self, dto: HeartbeatDTO) -> Agent:
-        agent = await self.repository.get(dto.agent_id)
+        now = datetime.now(timezone.utc)
+        captured = as_utc(dto.timestamp)
+        if captured is None or not now - OFFLINE_AFTER <= captured <= now + timedelta(seconds=30):
+            raise ValueError("Heartbeat timestamp outside the accepted window")
+        context = getattr(self.session, "info", {})
+        sequenced = context.get("defer_incident_events") is True
+        agent = (await self.session.get(Agent, dto.agent_id, with_for_update=True)
+                 if sequenced else await self.repository.get(dto.agent_id))
+        previous_health = agent.health if agent else None
         if not agent:
             # Auto register if unknown agent sends heartbeat
             agent = Agent(
@@ -59,23 +58,33 @@ class AgentService(AbstractService[AgentRepository]):
             )
             await self.repository.add(agent)
             logger.info(f"[HEARTBEAT] Auto-registered new agent '{dto.agent_id}' (hostname: {agent.hostname})")
-        else:
-            if dto.hostname and agent.hostname != dto.hostname:
-                agent.hostname = dto.hostname
 
-        # Cập nhật tất cả thông tin từ heartbeat
+        if agent.decommissioned_at is not None:
+            return agent
+        if sequenced:
+            activity = await self.session.get(AgentActivity, agent.id)
+            samples = dict(activity.samples) if activity else {}
+            previous = as_utc(samples.get("heartbeat_at"))
+            if previous and captured <= previous:
+                return agent
+            samples["heartbeat_at"] = captured.isoformat()
+            if activity:
+                activity.samples = samples
+            else:
+                self.session.add(AgentActivity(agent_id=agent.id, samples=samples))
+            if previous_health != "online":
+                context.setdefault("dashboard_events", []).append({"type": "ACTIVITY_UPDATED", "agent_id": agent.id})
 
+        if dto.hostname:
+            agent.hostname = dto.hostname
         agent.update_heartbeat(
             cpu=dto.cpu,
             ram=dto.ram,
             disk=dto.disk,
-            timestamp=dto.timestamp,
-            ip_address=dto.ip_address,       # Nếu model hỗ trợ
-            mac_address=dto.mac_address       # Nếu model hỗ trợ
+            timestamp=now,
+            ip_address=dto.ip_address,
+            mac_address=dto.mac_address,
         )
-        # Hoặc gán trực tiếp nếu update_heartbeat không có tham số ip/mac
-        agent.ip_address = dto.ip_address
-        agent.mac_address = dto.mac_address
 
         history_repo = AgentHistoryRepository(self.session)
         history_entry = AgentHistory(
@@ -94,6 +103,8 @@ class AgentService(AbstractService[AgentRepository]):
     async def process_heartbeat(self, dto: HeartbeatDTO) -> Agent:
         """Process agent heartbeat and broadcast update to dashboard."""
         agent = await self.update_heartbeat(dto)
+        if getattr(self.session, "info", {}).get("defer_incident_events") is True:
+            return agent
         try:
             from app.websocket.dashboard_connection_manager import dashboard_manager
             await dashboard_manager.broadcast({
@@ -147,104 +158,21 @@ class AgentService(AbstractService[AgentRepository]):
         return agent
 
     async def list_agents(self, skip: int = 0, limit: int = 100, deduplicate: bool = True) -> List[Agent]:
-        if not deduplicate:
-            return await self.repository.list(skip=skip, limit=limit)
-
-        agents = await self.repository.list(skip=0, limit=10000)
-        latest_by_hostname = {}
-        for a in agents:
-            key = a.hostname or a.id
-            if key not in latest_by_hostname:
-                latest_by_hostname[key] = a
-                continue
-
-            existing = latest_by_hostname[key]
-            a_status = getattr(a.status, "value", str(a.status)).lower()
-            e_status = getattr(existing.status, "value", str(existing.status)).lower()
-            a_active = a_status in ("active", "online")
-            e_active = e_status in ("active", "online")
-
-            if a_active and not e_active:
-                latest_by_hostname[key] = a
-            elif not a_active and e_active:
-                pass
-            else:
-                a_ts = a.last_seen or a.created_at
-                e_ts = existing.last_seen or existing.created_at
-                if a_ts and (not e_ts or a_ts > e_ts):
-                    latest_by_hostname[key] = a
-
-        deduped = list(latest_by_hostname.values())
-        deduped.sort(
-            key=lambda x: (
-                1 if getattr(x.status, "value", str(x.status)).lower() in ("active", "online") else 0,
-                x.last_seen or x.created_at or datetime.min.replace(tzinfo=timezone.utc)
-            ),
-            reverse=True
-        )
-        return deduped[skip : skip + limit]
+        stmt = select(Agent).order_by(Agent.last_seen.desc(), Agent.id).offset(skip).limit(limit)
+        return list((await self.session.execute(stmt)).scalars().all())
 
     async def delete_agent(self, agent_id: str) -> bool:
         agent = await self.repository.get(agent_id)
         if not agent:
             raise AgentNotFoundError(f"Agent '{agent_id}' not found.")
-
-        # Clean up related records across all tables referencing agent_id
-        await self.session.execute(delete(Flow).where(Flow.agent_id == agent_id))
-        await self.session.execute(delete(Command).where(Command.agent_id == agent_id))
-        await self.session.execute(delete(ProcessInfo).where(ProcessInfo.agent_id == agent_id))
-        await self.session.execute(delete(Event).where(Event.agent_id == agent_id))
-        await self.session.execute(delete(AuthEvent).where(AuthEvent.agent_id == agent_id))
-        await self.session.execute(delete(AgentBaseline).where(AgentBaseline.agent_id == agent_id))
-        await self.session.execute(delete(AgentHistory).where(AgentHistory.agent_id == agent_id))
-        await self.session.execute(delete(WhitelistEntry).where(WhitelistEntry.agent_id == agent_id))
-        await self.session.execute(delete(RiskScoreRecord).where(RiskScoreRecord.agent_id == agent_id))
-        await self.session.execute(delete(ResponseAction).where(ResponseAction.agent_id == agent_id))
-        await self.session.execute(delete(AgentGroupMember).where(AgentGroupMember.agent_id == agent_id))
-
-        # Unlink incidents
-        await self.session.execute(
-            update(Incident).where(Incident.agent_id == agent_id).values(agent_id=None)
-        )
-
-        deleted = await self.repository.delete(agent_id)
-        await self.session.flush()
-
-        try:
-            from app.websocket.dashboard_connection_manager import dashboard_manager
-            await dashboard_manager.broadcast({
-                "type": "AGENT_DELETED",
-                "event": "AGENT_DELETED",
-                "agent_id": agent_id
-            })
-        except Exception as e:
-            logger.warning(f"Failed to broadcast agent deletion: {e}")
-
-        return deleted
+        if agent.decommissioned_at is None:
+            agent.decommissioned_at = datetime.now(timezone.utc)
+            await self.session.flush()
+        return True
 
     async def delete_offline_agents(self) -> int:
-        """Xóa toàn bộ các agent có trạng thái DEAD hoặc offline quá 5 phút."""
-        stmt = select(Agent).where(
-            (Agent.status == AgentStatus.DEAD) |
-            (Agent.status == AgentStatus.QUARANTINE)
-        )
-        res = await self.session.execute(stmt)
-        dead_candidates = list(res.scalars().all())
-
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(minutes=5)
-        stmt_stale = select(Agent).where(Agent.last_seen < cutoff)
-        res_stale = await self.session.execute(stmt_stale)
-        for a in res_stale.scalars().all():
-            if not any(x.id == a.id for x in dead_candidates):
-                dead_candidates.append(a)
-
-        deleted_count = 0
-        for ag in dead_candidates:
-            # Không bao giờ xóa agent đang gửi heartbeat (last_seen trong vòng 1 phút)
-            if ag.last_seen and (now - ag.last_seen).total_seconds() < 60:
-                continue
-            await self.delete_agent(ag.id)
-            deleted_count += 1
-
-        return deleted_count
+        statement = update(Agent).where(Agent.last_seen <= now - OFFLINE_AFTER,
+                                        Agent.decommissioned_at.is_(None)).values(decommissioned_at=now)
+        result = await self.session.execute(statement)
+        return result.rowcount

@@ -28,58 +28,8 @@ export default function HeroBanner({
   if (!incident) return null;
 
   const culprit = incident.culpritProcess || incident.culprit_process || null;
-  const parent = incident.parentProcess || incident.parent_process || null;
 
-  // Generate natural language human narrative
-  const generateNarrative = () => {
-    // If backend already generated a factual story, prioritize it
-    if (incident.story) {
-      let text = incident.story;
-      if (isIsolated) {
-        text += ` Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId || incident.agent_id} để ngăn chặn lây lan.`;
-      }
-      return text;
-    }
-
-    const score = incident.riskScore || incident.risk_score || 50;
-
-    if (!culprit) {
-      let text = `Hệ thống phân tích rủi ro kích hoạt điểm đe dọa ${score}/100 trên máy trạm ${incident.agentId || incident.agent_id || 'N/A'}. `;
-      if (isIsolated) {
-        text += `Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId || incident.agent_id} để ngăn chặn lây lan.`;
-      }
-      return text;
-    }
-
-    const pName = culprit.name || 'tiến trình không xác định';
-    const pid = culprit.pid !== undefined && culprit.pid !== null ? culprit.pid : 'N/A';
-    const parts = [`Tiến trình \`${pName}\` (PID ${pid})`];
-
-    // Parent handling: strictly factual, avoid hallucinated 'bash'
-    if (parent && parent.name && parent.name !== 'bash') {
-      const parentPidStr = parent.pid !== undefined && parent.pid !== null ? ` (PID ${parent.pid})` : '';
-      parts.push(`được khởi chạy bởi \`${parent.name}\`${parentPidStr}`);
-    } else if (culprit.parent_pid !== undefined && culprit.parent_pid !== null && culprit.parent_pid !== 0 && culprit.parent_pid !== 1000) {
-      parts.push(`có parent PID ${culprit.parent_pid} (không xác định tên)`);
-    }
-
-    // Exe path: strictly factual, do not invent /tmp/ or Temp
-    const exe = culprit.exe_path || culprit.exe || culprit.path;
-    if (exe && !exe.includes('/tmp/System Idle') && !exe.includes('C:\\Temp\\System Idle')) {
-      parts.push(`hoạt động từ \`${exe}\``);
-    }
-
-    parts.push(`Hệ thống phân tích rủi ro kích hoạt điểm đe dọa ${score}/100.`);
-
-    if (isIsolated) {
-      parts.push(`Chính sách an ninh tự động đã CÔ LẬP MẠNG máy trạm ${incident.agentId || incident.agent_id} để ngăn chặn lây lan.`);
-    } else if (score >= 70) {
-      parts.push(`Khuyến nghị cô lập máy trạm ${incident.agentId || incident.agent_id} hoặc tiêu diệt cây tiến trình ngay lập tức.`);
-    }
-
-    return parts.join(' ');
-  };
-
+  const generateNarrative = () => incident.story || incident.description || 'Chưa có bằng chứng chi tiết.';
   const isFalsePositive = incident.status === 'false_positive' || incident.label === 'false_positive';
   const isResolved = incident.status === 'resolved' || incident.status === 'closed' || incident.label === 'benign';
   const isInactive = isFalsePositive || isResolved;
@@ -254,7 +204,7 @@ export default function HeroBanner({
                 </Button>
               )}
 
-              {incident.detection_evidence?.process && culprit?.pid && !isKernelOrSystem(culprit) && (
+              {incident.detection_evidence?.process && incident.process_activity === 'running' && culprit?.pid && !isKernelOrSystem(culprit) && (
                 <Button
                   variant="warning"
                   size="sm"
@@ -274,7 +224,7 @@ export default function HeroBanner({
             onClick={() => {
               const targetAgent = incident.agentId || incident.agent_id || incident.agent_hostname || '';
               const target = culprit?.pid && culprit.process_start_time ? `&pid=${culprit.pid}&started=${culprit.process_start_time}` : '';
-              navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}${target}`);
+              navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}&incident=${encodeURIComponent(incident.id)}${target}`);
             }}
             title="Open culprit process in interactive root cause tree"
           >
@@ -300,6 +250,10 @@ export default function HeroBanner({
           📖 Auto-Generated Threat Storyline
         </div>
         {generateNarrative()}
+                  <span style={{ display: 'block' }}>
+                    {incident.detection_activity || 'historical'} · {incident.incident_status || incident.status}
+                    {incident.disposition && ` · ${incident.disposition}`}
+                  </span>
       </div>
 
       {/* Metric Cards Row */}

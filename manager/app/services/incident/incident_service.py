@@ -1,12 +1,16 @@
 import uuid
+import hashlib
+import json
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.incident import Incident
+from app.models.agent import Agent
+from app.services.agent.activity import attach_incident_activity
 from app.models.incident_note import IncidentNote
 from app.models.command import Command
 from app.models.process_info import ProcessInfo
@@ -68,7 +72,6 @@ async def _safe_trigger_ai_triage(incident_id: str):
     """Background task: Chạy AI triage an toàn với sleep 0.8s và retry loop để đảm bảo transaction đã commit."""
     import asyncio
     from app.core.database import AsyncSessionLocal
-    from app.models.incident import Incident
     from app.services.ai.ai_triage_service import AITriageService
 
     logger.info(f"Triggering AI Triage for incident {incident_id}")
@@ -128,8 +131,12 @@ class IncidentService(AbstractService[IncidentRepository]):
 
         # Fire-and-forget AI triage (không block incident creation)
         try:
-            import asyncio
-            asyncio.create_task(_safe_trigger_ai_triage(created.id))
+            context = getattr(self.session, "info", {})
+            if context.get("defer_incident_events") is True:
+                context.setdefault("new_incident_ids", []).append(created.id)
+            else:
+                import asyncio
+                asyncio.create_task(_safe_trigger_ai_triage(created.id))
         except Exception as e:
             logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
 
@@ -147,33 +154,40 @@ class IncidentService(AbstractService[IncidentRepository]):
             "risk_source:brute_force"
             if auth_alert else "Auto-generated incident on risk assessment threshold breach."
         )
-        stmt = (
-            select(Incident)
-            .where(
-                Incident.agent_id == agent_id,
-                Incident.notes == notes,
-                Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED])
-            )
-            .order_by(Incident.created_at.desc())
-        )
-        result = await self.session.execute(stmt)
-        existing = result.scalars().first()
+        now = datetime.now(timezone.utc)
+        source = "brute_force" if auth_alert else "risk_assessment"
+        rule_ids = sorted(key for key in factors if key not in {"total_score", "score", "_scores"})
+        fingerprint = hashlib.sha256(json.dumps([source, rule_ids]).encode()).hexdigest()
+        await self.session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
+        stmt = select(Incident).where(
+            Incident.agent_id == agent_id, Incident.fingerprint == fingerprint,
+            Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED]),
+            or_(Incident.label.is_(None), Incident.label != "false_positive"),
+            Incident.updated_at >= now - timedelta(minutes=5),
+        ).order_by(Incident.updated_at.desc())
+        existing = (await self.session.execute(stmt)).scalars().first()
 
         severity = IncidentSeverity.CRITICAL if risk_score >= 85.0 else (
             IncidentSeverity.HIGH if risk_score >= 70.0 else IncidentSeverity.MEDIUM
         )
         scores = factors.get("_scores", {})
-        evidence = {"factors": [
+        evidence = {"rule_id": source, "rule_version": "risk:1", "risk_calculated_at": now.isoformat(),
+                    "first_seen": now.isoformat(), "last_received_at": now.isoformat(), "observations": 1, "factors": [
             {"rule": key, "score": scores.get(key), "reason": str(value)}
             for key, value in factors.items() if key not in {"_scores", "total_score", "score"}
         ]}
 
         if existing:
-            if existing.detection_evidence is None or risk_score > existing.risk_score:
-                existing.detection_evidence = evidence
-            existing.risk_score = max(existing.risk_score, risk_score)
-            if severity == IncidentSeverity.CRITICAL and existing.severity != IncidentSeverity.CRITICAL:
-                existing.severity = IncidentSeverity.CRITICAL
+            previous = existing.detection_evidence or {}
+            best = evidence if not previous or risk_score > existing.risk_score else previous
+            existing.detection_evidence = {
+                **best, "first_seen": previous.get("first_seen", now.isoformat()),
+                "last_received_at": now.isoformat(), "observations": previous.get("observations", 1) + 1,
+            }
+            existing.updated_at = now
+            if risk_score > existing.risk_score:
+                existing.risk_score = risk_score
+                existing.severity = severity
             await self.session.flush()
             logger.info(f"Updated existing incident '{existing.id}' for agent '{agent_id}' with score {risk_score}.")
             return existing
@@ -195,18 +209,19 @@ class IncidentService(AbstractService[IncidentRepository]):
             risk_score=risk_score,
             notes=notes,
             detection_evidence=evidence,
+            fingerprint=fingerprint,
         )
         created = await self.repository.add(inc)
         await self.session.flush()
 
         await self.add_note(inc_id, f"Automated incident created due to risk score {risk_score}.", user="system")
 
-        # Fire-and-forget AI triage (không block incident creation)
-        try:
+        context = getattr(self.session, "info", {})
+        if context.get("defer_incident_events") is True:
+            context.setdefault("new_incident_ids", []).append(created.id)
+        else:
             import asyncio
             asyncio.create_task(_safe_trigger_ai_triage(created.id))
-        except Exception as e:
-            logger.error(f"Failed to trigger AI triage for incident {created.id}: {e}")
 
         # Trigger notification
         msg = (
@@ -216,14 +231,36 @@ class IncidentService(AbstractService[IncidentRepository]):
             f"<b>Risk Score:</b> {risk_score}/100\n"
             f"<b>Title:</b> {title}"
         )
-        await self.notification_service.send_alert(msg)
+        if context.get("defer_incident_events") is True:
+            context.setdefault("incident_alerts", []).append(msg)
+        else:
+            await self.notification_service.send_alert(msg)
 
         logger.warning(f"Automated incident '{inc_id}' created for agent '{agent_id}'.")
         return created
 
     async def update_incident(self, incident_id: str, dto: IncidentUpdate) -> Incident:
+        await self.session.execute(select(Incident.id).where(Incident.id == incident_id).with_for_update())
         inc = await self.get_incident(incident_id)
         old_status = inc.status
+        requested_status = dto.status
+        if requested_status == IncidentStatus.FALSE_POSITIVE:
+            dto = dto.model_copy(update={"status": None, "label": "false_positive"})
+        if dto.status and dto.status != old_status:
+            allowed = {
+                IncidentStatus.OPEN: {IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED, IncidentStatus.RESOLVED, IncidentStatus.CLOSED},
+                IncidentStatus.INVESTIGATING: {IncidentStatus.OPEN, IncidentStatus.CONTAINED, IncidentStatus.RESOLVED, IncidentStatus.CLOSED},
+                IncidentStatus.CONTAINED: {IncidentStatus.INVESTIGATING, IncidentStatus.RESOLVED, IncidentStatus.CLOSED},
+                IncidentStatus.RESOLVED: {IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CLOSED},
+                IncidentStatus.CLOSED: {IncidentStatus.OPEN},
+                IncidentStatus.FALSE_POSITIVE: {IncidentStatus.OPEN, IncidentStatus.CLOSED},
+            }
+            if dto.status not in allowed[old_status]:
+                raise BadRequestError("Invalid incident lifecycle transition")
+            if dto.status in {IncidentStatus.RESOLVED, IncidentStatus.CLOSED}:
+                inc.resolved_at = inc.resolved_at or datetime.now(timezone.utc)
+            else:
+                inc.resolved_at = None
 
         # If label is provided, set labeled_at = now()
         if dto.label is not None:
@@ -251,14 +288,15 @@ class IncidentService(AbstractService[IncidentRepository]):
 
         await self.session.flush()
 
-        if dto.status and dto.status != old_status:
-            status_val = dto.status.value if hasattr(dto.status, "value") else str(dto.status)
+        if (dto.status and dto.status != old_status) or requested_status == IncidentStatus.FALSE_POSITIVE:
+            status_val = (dto.status or requested_status).value
             old_status_val = old_status.value if hasattr(old_status, "value") else str(old_status)
             await self.add_note(
                 incident_id,
                 f"Incident status updated from '{old_status_val}' to '{status_val}'.",
                 user=dto.assigned_to or (dto.labeled_by or "admin")
             )
+            await self.session.commit()
             msg = f"🔔 <b>INCIDENT STATUS CHANGED</b>\n<b>ID:</b> {incident_id}\n<b>New Status:</b> {status_val}"
             await self.notification_service.send_alert(msg)
 
@@ -276,9 +314,10 @@ class IncidentService(AbstractService[IncidentRepository]):
             except Exception as e:
                 logger.warning(f"Failed to broadcast incident status update to dashboard: {e}")
 
+        await attach_incident_activity(self.session, [inc])
         return inc
 
-    async def _enrich_incident(self, inc: Incident) -> Incident:
+    async def _enrich_incident(self, inc: Incident, *, stored_only=False) -> Incident:
         """Enrich incident with structured fields: culprit_process, parent_process, network_indicators, factors_breakdown."""
         if inc.detection_evidence:
             evidence = inc.detection_evidence
@@ -299,6 +338,13 @@ class IncidentService(AbstractService[IncidentRepository]):
             inc.network_indicators = []
             inc.factors_breakdown = []
             inc.story = "Legacy network alert. Socket-to-process evidence was unavailable."
+            return inc
+        if stored_only:
+            inc.culprit_process = None
+            inc.parent_process = None
+            inc.network_indicators = []
+            inc.factors_breakdown = []
+            inc.story = (inc.description or "").split("\n", 1)[0]
             return inc
         agent_id = inc.agent_id
         desc_lower = (inc.description or "").lower()
@@ -492,7 +538,8 @@ class IncidentService(AbstractService[IncidentRepository]):
         inc = await self.repository.get(incident_id)
         if not inc:
             raise NotFoundError(f"Incident '{incident_id}' not found.")
-        await self._enrich_incident(inc)
+        await self._enrich_incident(inc, stored_only=True)
+        await attach_incident_activity(self.session, [inc])
         return inc
 
     async def list_incidents(
@@ -500,88 +547,32 @@ class IncidentService(AbstractService[IncidentRepository]):
         skip: int = 0,
         limit: int = 200,
         active_only: bool = False,
-        hours: Optional[int] = None
+        hours: Optional[int] = None,
+        finding: Optional[str] = None,
     ) -> List[Incident]:
-        items = await self.repository.list(skip=skip, limit=limit, active_only=active_only, hours=hours)
+        items = await self.repository.list(skip=skip, limit=limit, active_only=active_only, hours=hours, finding=finding)
         for inc in items:
-            await self._enrich_incident(inc)
-        return items
+            await self._enrich_incident(inc, stored_only=True)
+        return await attach_incident_activity(self.session, items)
 
     async def assign_incident(self, incident_id: str, user_id: str) -> Incident:
-        inc = await self.get_incident(incident_id)
-        inc.assign_to(user_id)
-        await self.add_note(incident_id, f"Incident assigned to analyst '{user_id}'. Status set to INVESTIGATING.", user=user_id)
-        await self.session.flush()
-        return inc
+        return await self.update_incident(incident_id, IncidentUpdate(
+            assigned_to=user_id, status=IncidentStatus.INVESTIGATING,
+        ))
 
     async def contain_incident(self, incident_id: str, user: str = "admin") -> Incident:
-        inc = await self.get_incident(incident_id)
-        inc.status = IncidentStatus.CONTAINED
-        await self.add_note(incident_id, f"Incident marked as CONTAINED by {user}.", user=user)
-        await self.session.flush()
-        return inc
+        return await self.update_incident(incident_id, IncidentUpdate(status=IncidentStatus.CONTAINED))
 
     async def resolve_incident(self, incident_id: str, user: str = "admin") -> Incident:
-        inc = await self.get_incident(incident_id)
-        inc.resolve()
-        await self.add_note(incident_id, f"Incident marked as RESOLVED by {user}.", user=user)
-        await self.session.flush()
-
-        try:
-            from app.websocket.dashboard_connection_manager import dashboard_manager
-            await dashboard_manager.broadcast({
-                "type": "INCIDENT_RESOLVED",
-                "event": "INCIDENT_RESOLVED",
-                "incident_id": inc.id,
-                "agent_id": inc.agent_id,
-                "status": "resolved"
-            })
-        except Exception as e:
-            logger.warning(f"Failed to broadcast incident resolution to dashboard: {e}")
-
-        return inc
+        return await self.update_incident(incident_id, IncidentUpdate(status=IncidentStatus.RESOLVED))
 
     async def mark_false_positive(self, incident_id: str, user: str = "admin") -> Incident:
-        inc = await self.get_incident(incident_id)
-        inc.mark_false_positive()
-        await self.add_note(incident_id, f"Incident flagged as FALSE_POSITIVE by {user}.", user=user)
-        await self.session.flush()
-
-        try:
-            from app.websocket.dashboard_connection_manager import dashboard_manager
-            await dashboard_manager.broadcast({
-                "type": "INCIDENT_RESOLVED",
-                "event": "INCIDENT_RESOLVED",
-                "incident_id": inc.id,
-                "agent_id": inc.agent_id,
-                "status": "false_positive"
-            })
-        except Exception as e:
-            logger.warning(f"Failed to broadcast false positive to dashboard: {e}")
-
-        return inc
+        return await self.update_incident(incident_id, IncidentUpdate(
+            status=IncidentStatus.FALSE_POSITIVE, labeled_by=user,
+        ))
 
     async def close_incident(self, incident_id: str, user: str = "admin") -> Incident:
-        inc = await self.get_incident(incident_id)
-        if not inc.label:
-            logger.warning(f"Closing incident {incident_id} without label — AI feedback unavailable")
-        inc.status = IncidentStatus.CLOSED
-        await self.add_note(incident_id, f"Incident CLOSED by {user}.", user=user)
-        await self.session.flush()
-
-        try:
-            from app.websocket.dashboard_connection_manager import dashboard_manager
-            await dashboard_manager.broadcast({
-                "type": "INCIDENT_RESOLVED",
-                "event": "INCIDENT_RESOLVED",
-                "incident_id": inc.id,
-                "agent_id": inc.agent_id,
-                "status": "closed"
-            })
-        except Exception as e:
-            logger.warning(f"Failed to broadcast incident close to dashboard: {e}")
-
-        return inc
+        return await self.update_incident(incident_id, IncidentUpdate(status=IncidentStatus.CLOSED))
 
     async def execute_action(
         self,
@@ -647,7 +638,7 @@ class IncidentService(AbstractService[IncidentRepository]):
 
         elif action_type == "kill_process_tree":
             process = (inc.detection_evidence or {}).get("process")
-            if not process or params.get("pid") != process["pid"]:
+            if inc.process_activity != "running" or not process or params.get("pid") != process["pid"]:
                 raise BadRequestError("The incident has no verified process identity for this PID")
             from app.services.response.response_action_service import ResponseActionService
             act = await ResponseActionService(self.session).create_and_apply_action(

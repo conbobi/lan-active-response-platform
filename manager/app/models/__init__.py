@@ -1,5 +1,6 @@
 from app.models.base import Base, TimestampMixin
 from app.models.agent import Agent
+from app.models.agent_activity import AgentActivity
 from app.models.flow import Flow
 from app.models.command import Command
 from app.models.process_info import ProcessInfo
@@ -35,6 +36,7 @@ __all__ = [
     "Base",
     "TimestampMixin",
     "Agent",
+    "AgentActivity",
     "Flow",
     "Command",
     "ProcessInfo",

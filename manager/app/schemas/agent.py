@@ -36,6 +36,8 @@ class AgentOut(ORMBaseModel):
     disk: float
     is_isolated: bool
     last_seen: datetime
+    health: str = "stale"
+    decommissioned_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     

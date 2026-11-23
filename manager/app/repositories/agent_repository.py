@@ -30,6 +30,7 @@ class AgentRepository(SqlAlchemyRepository[Agent]):
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=threshold_seconds)
         stmt = select(Agent).where(
             Agent.last_seen < cutoff,
+            Agent.decommissioned_at.is_(None),
             Agent.status.in_([AgentStatus.ACTIVE, AgentStatus.ISOLATED])
         )
         result = await self.session.execute(stmt)

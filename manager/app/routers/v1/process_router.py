@@ -23,18 +23,20 @@ class KillProcessRequest(BaseModel):
 
 
 
+@router.get("/{agent_id}/snapshot", response_model=Dict[str, Any])
 @router.get("/{agent_id}/tree", response_model=Dict[str, Any])
 async def get_process_tree(agent_id: str, db: AsyncSession = Depends(get_db)):
     """Retrieve process hierarchy tree graph for an agent."""
     service = ProcessTreeService(db)
-    return await service.build_tree(agent_id)
+    return await service.snapshot(agent_id)
 
 
 @router.get("/{agent_id}/suspicious", response_model=List[Dict[str, Any]])
 async def get_suspicious_processes(agent_id: str, db: AsyncSession = Depends(get_db)):
     """Find suspicious processes and trace parent execution chain."""
     service = ProcessTreeService(db)
-    return await service.find_suspicious_process(agent_id)
+    snapshot = await service.snapshot(agent_id)
+    return snapshot["flagged_processes"]
 
 
 @router.post("/{agent_id}/kill", response_model=CommandOut, status_code=status.HTTP_202_ACCEPTED)

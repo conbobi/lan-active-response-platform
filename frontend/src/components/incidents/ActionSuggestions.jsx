@@ -48,7 +48,7 @@ export default function ActionSuggestions({
     });
   }
 
-  if (incident?.detection_evidence?.process && culprit?.pid && !isKernelOrSystem(culprit)) {
+  if (incident?.detection_evidence?.process && incident.process_activity === 'running' && culprit?.pid && !isKernelOrSystem(culprit)) {
     suggestions.push({
       id: 'kill_tree',
       title: `Tiêu diệt cây tiến trình: ${culprit.name} (PID ${culprit.pid})`,

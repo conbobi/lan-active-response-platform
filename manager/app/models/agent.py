@@ -4,6 +4,7 @@ from sqlalchemy import String, Float, Boolean, DateTime, Enum
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 from app.schemas.enums import AgentStatus
+from app.core.agent_health import agent_health
 
 
 class Agent(Base, TimestampMixin):
@@ -23,6 +24,12 @@ class Agent(Base, TimestampMixin):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
+    decommissioned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def health(self):
+        return agent_health(self)
+
     def activate(self):
         self.is_isolated = False
         self.status = AgentStatus.ACTIVE

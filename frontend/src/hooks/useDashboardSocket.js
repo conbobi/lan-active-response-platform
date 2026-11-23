@@ -1,67 +1,64 @@
-// src/hooks/useDashboardSocket.js
 import { useEffect, useRef, useState } from 'react';
 
-export const useDashboardSocket = (onMessage) => {
+export function connectDashboard(url, handlers, transport = globalThis) {
+  let socket;
+  let retry;
+  let stopped = false;
+
+  function connect() {
+    if (stopped) return;
+    try {
+      const current = new transport.WebSocket(url);
+      socket = current;
+      current.onopen = () => {
+        if (!stopped && socket === current) handlers.open();
+      };
+      current.onmessage = ({ data }) => {
+        if (stopped || socket !== current) return;
+        try {
+          handlers.message(JSON.parse(data));
+        } catch (error) {
+          console.warn('Invalid Dashboard WebSocket event', error);
+        }
+      };
+      current.onclose = () => {
+        if (stopped || socket !== current) return;
+        socket = null;
+        handlers.close();
+        retry = transport.setTimeout(connect, 3000);
+      };
+    } catch (error) {
+      console.warn('Could not connect Dashboard WebSocket', error);
+      retry = transport.setTimeout(connect, 3000);
+    }
+  }
+
+  connect();
+  return () => {
+    stopped = true;
+    transport.clearTimeout(retry);
+    socket?.close();
+  };
+}
+
+export const useDashboardSocket = (onMessage, onConnect) => {
   const [isConnected, setIsConnected] = useState(false);
-  const socketRef = useRef(null);
+  const callbacks = useRef({ onMessage, onConnect });
+  useEffect(() => {
+    callbacks.current = { onMessage, onConnect };
+  }, [onMessage, onConnect]);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    // Proxied via Vite in dev and Nginx in production
-    const wsUrl = `${protocol}//${host}/ws/dashboard`;
-
-    let ws;
-    let reconnectTimeout = null;
-    let isUnmounted = false;
-
-    const connect = () => {
-      if (isUnmounted) return;
-      try {
-        ws = new WebSocket(wsUrl);
-        socketRef.current = ws;
-
-        ws.onopen = () => {
-          setIsConnected(true);
-          console.log('[WebSocket] Connected to /ws/dashboard');
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (onMessage) onMessage(data);
-          } catch (e) {
-            console.error('[WebSocket] Failed to parse message:', event.data);
-          }
-        };
-
-        ws.onerror = (err) => {
-          console.warn('[WebSocket] Dashboard WS connection error:', err);
-        };
-
-        ws.onclose = () => {
-          setIsConnected(false);
-          console.log('[WebSocket] Dashboard WS connection closed. Retrying in 3s...');
-          if (!isUnmounted) {
-            reconnectTimeout = setTimeout(connect, 3000);
-          }
-        };
-      } catch (err) {
-        console.warn('[WebSocket] Failed to initialize WebSocket:', err);
-        if (!isUnmounted) {
-          reconnectTimeout = setTimeout(connect, 3000);
-        }
-      }
-    };
-
-    connect();
-
-    return () => {
-      isUnmounted = true;
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (ws) ws.close();
-    };
-  }, [onMessage]);
+    return connectDashboard(`${protocol}//${window.location.host}/ws/dashboard`, {
+      open: () => {
+        setIsConnected(true);
+        callbacks.current.onConnect?.();
+      },
+      message: (data) => callbacks.current.onMessage?.(data),
+      close: () => setIsConnected(false),
+    });
+  }, []);
 
   return { isConnected };
 };

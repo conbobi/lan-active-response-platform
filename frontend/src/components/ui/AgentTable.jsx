@@ -46,7 +46,7 @@ export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onClean
               title="Xóa toàn bộ các agent đã mất kết nối khỏi hệ thống"
             >
               <FiTrash2 size={12} />
-              Dọn dẹp offline ({offlineAgents.length})
+              Ngừng quản lý offline ({offlineAgents.length})
             </button>
           )}
         </div>
@@ -65,6 +65,8 @@ export default function AgentTable({ agents, onViewAgent, onDeleteAgent, onClean
             <option value="all">All</option>
             <option value="online">Online</option>
             <option value="offline">Offline</option>
+            <option value="stale">Stale</option>
+            <option value="decommissioned">Decommissioned</option>
           </select>
         </div>
       </div>

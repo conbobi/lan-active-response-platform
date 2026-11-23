@@ -19,6 +19,7 @@ export const mapIncident = (inc) => {
   const story = inc.story || inc.storyline || '';
 
   return {
+    ...inc,
     id: inc.id,
     title: inc.title || inc.name || `Incident #${inc.id}`,
     description: inc.description || 'No detailed description provided.',
@@ -33,7 +34,7 @@ export const mapIncident = (inc) => {
     notes: inc.notes || '',
     resolvedAt,
     resolved_at: resolvedAt,
-    label: inc.label || null,
+    label: inc.disposition || inc.label || null,
     labelReason,
     label_reason: labelReason,
     labeledBy,
@@ -57,9 +58,9 @@ export const mapIncident = (inc) => {
   };
 };
 
-export const getIncidents = async () => {
+export const getIncidents = async (params = {}) => {
   try {
-    const data = await api.get('/incidents/');
+    const data = await api.get('/incidents/', { params });
     return Array.isArray(data) ? data.map(mapIncident) : [];
   } catch (err) {
     console.error('API /incidents/ error:', err);

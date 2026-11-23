@@ -1,102 +1,96 @@
 from datetime import datetime, timezone
-from typing import Dict, Any, List
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.repositories.incident_repository import IncidentRepository
-from app.repositories.agent_repository import AgentRepository
-from app.schemas.enums import IncidentStatus
+
+from sqlalchemy import case, func, select, tuple_
+
+from app.models.agent import Agent
+from app.models.agent_activity import AgentActivity
+from app.models.event import Event
+from app.models.incident import Incident
+from app.repositories.incident_repository import IncidentRepository, open_incident_filter
+from app.schemas.agent import AgentOut
+from app.schemas.incident import IncidentOut
+from app.services.agent.activity import attach_incident_activity, observation_expiry
+from app.core.agent_health import OFFLINE_AFTER, STALE_AFTER
+from app.services.incident.incident_service import IncidentService
 
 
 class DashboardService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session):
         self.session = session
-        self.incident_repo = IncidentRepository(session)
-        self.agent_repo = AgentRepository(session)
 
-    async def get_summary(self, hours: int = 24) -> Dict[str, Any]:
-        """
-        Aggregate dashboard summary: health score, active incident counts, agent statuses.
-        Follows the exact posture scoring formula:
-        - Priority 1: Unresolved critical incident on alive agent (score >= 85) -> max(0, 40 - count * 15), level 'critical'
-        - Priority 2: Unresolved medium incidents (30 <= score < 85) -> count >= 3 -> score 55, level 'warning'
-        - Priority 3: Offline agents -> offline >= 2 -> score 70, level 'warning'
-        - Safe: 100
-        """
-        active_incidents = await self.incident_repo.get_active_incidents_for_dashboard(limit=100, hours=hours)
-        all_agents = await self.agent_repo.list(skip=0, limit=1000)
-
-        # Deduplicate agents by hostname or id
-        unique_agents = {}
-        for a in all_agents:
-            key = a.hostname or a.id
-            if key not in unique_agents:
-                unique_agents[key] = a
-
-        agents_list = list(unique_agents.values())
+    async def get_summary(self, hours=24, limit=50, offset=0):
         now = datetime.now(timezone.utc)
+        health_column = case(
+            (Agent.decommissioned_at.is_not(None), "decommissioned"),
+            (Agent.last_seen <= now - OFFLINE_AFTER, "offline"),
+            (Agent.last_seen <= now - STALE_AFTER, "stale"),
+            else_="online",
+        ).label("health")
+        health_counts = dict((await self.session.execute(
+            select(health_column, func.count()).group_by(health_column)
+        )).all())
+        agents = (await self.session.execute(select(Agent).order_by(
+            Agent.last_seen.desc(), Agent.id,
+        ).offset(offset).limit(limit))).scalars().all()
+        queue_count = await self.session.scalar(select(func.count()).select_from(Incident).where(open_incident_filter()))
+        repo = IncidentRepository(self.session)
+        history = await repo.list(limit=limit, hours=hours)
+        network_findings = await repo.list(limit=limit, active_only=True, finding="network")
 
-        # Helper to check if agent is alive
-        def is_alive(a) -> bool:
-            status = str(a.status or "").lower()
-            if status in ("dead", "offline", "inactive"):
-                return False
-            if status in ("active", "online", "isolated", "quarantine"):
-                return True
-            if a.last_seen:
-                # 5 minutes
-                age = (now - a.last_seen).total_seconds()
-                return age < 300
-            return False
+        # Active behavior can span multiple days. Resolve current fingerprints before applying the history window.
+        live = (await self.session.execute(select(Agent.id, AgentActivity.samples).join(AgentActivity).where(
+            Agent.decommissioned_at.is_(None), Agent.last_seen > now - STALE_AFTER,
+        ))).all()
+        keys = []
+        for agent_id, samples in live:
+            sample = samples.get("socket", {})
+            expiry = observation_expiry(sample)
+            if expiry and expiry > now:
+                keys.extend((agent_id, entity) for entity in sample.get("detections", ()))
+        candidates = []
+        for start in range(0, len(keys), 200):
+            candidates.extend((await self.session.execute(select(Incident).where(
+                open_incident_filter(),
+                tuple_(Incident.agent_id, Incident.fingerprint).in_(keys[start:start + 200]),
+            ).order_by(Incident.updated_at.desc()))).scalars().all())
+        current = {}
+        for incident in candidates:
+            current.setdefault((incident.agent_id, incident.fingerprint), incident)
 
-        alive_map = {a.id: is_alive(a) for a in agents_list}
-        alive_agents_count = sum(1 for a in agents_list if is_alive(a))
-        offline_agents_count = len(agents_list) - alive_agents_count
+        records = list({incident.id: incident for incident in [*history, *network_findings, *current.values()]}.values())
+        service = IncidentService(self.session)
+        for incident in records:
+            await service._enrich_incident(incident, stored_only=True)
+        await attach_incident_activity(self.session, records, now)
+        active = sorted((incident for incident in current.values() if incident.detection_activity == "active"),
+                        key=lambda incident: incident.risk_score, reverse=True)
 
-        unresolved_critical = []
-        unresolved_medium = []
-
-        for inc in active_incidents:
-            score = inc.risk_score or 0.0
-            agent_alive = alive_map.get(inc.agent_id, False)
-            if not agent_alive:
-                continue
-
-            if score >= 85:
-                unresolved_critical.append(inc)
-            elif score >= 30:
-                unresolved_medium.append(inc)
-
-        health_score = 100
-        level = "safe"
-
-        if len(unresolved_critical) > 0:
-            health_score = max(0, 40 - len(unresolved_critical) * 15)
-            level = "critical"
-        elif len(unresolved_medium) >= 3:
-            health_score = min(health_score, 55)
-            level = "warning"
-        elif offline_agents_count >= 2:
-            health_score = min(health_score, 70)
-            level = "warning"
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        events = (await self.session.execute(select(Event).order_by(Event.created_at.desc()).limit(25))).scalars().all()
+        event_counts = dict((await self.session.execute(select(Event.event_type, func.count()).where(
+            Event.created_at >= today,
+        ).group_by(Event.event_type))).all())
+        level = "critical" if any(inc.risk_score >= 85 for inc in active) else (
+            "warning" if active or health_counts.get("offline", 0) or health_counts.get("stale", 0) else "unverified"
+        )
 
         return {
-            "health_score": health_score,
+            "as_of": now.isoformat(),
+            "health_counts": health_counts,
+            "alive_agents": health_counts.get("online", 0),
+            "offline_agents": health_counts.get("offline", 0),
+            "total_agents": sum(health_counts.values()),
             "health_level": level,
-            "active_incidents": len(active_incidents),
-            "critical_incidents": len(unresolved_critical),
-            "medium_incidents": len(unresolved_medium),
-            "total_agents": len(agents_list),
-            "alive_agents": alive_agents_count,
-            "offline_agents": offline_agents_count,
-            "incidents": [
-                {
-                    "id": inc.id,
-                    "title": inc.title,
-                    "agent_id": inc.agent_id,
-                    "status": inc.status.value if hasattr(inc.status, "value") else str(inc.status),
-                    "risk_score": inc.risk_score,
-                    "created_at": inc.created_at.isoformat() if inc.created_at else None,
-                }
-                for inc in active_incidents
-            ]
+            "health_score": 40 if level == "critical" else 70 if level == "warning" else 100,
+            "incident_queue": queue_count,
+            "active_incidents": len(active),
+            "active_behavior": IncidentOut.model_validate(active[0]).model_dump(mode="json") if active else None,
+            "incidents": [IncidentOut.model_validate(incident).model_dump(mode="json") for incident in history],
+            "network_findings": [IncidentOut.model_validate(incident).model_dump(mode="json") for incident in network_findings],
+            "agents": [AgentOut.model_validate(agent).model_dump(mode="json") for agent in agents],
+            "events": [{"id": event.id, "type": event.event_type, "timestamp": event.created_at,
+                        "agent_id": event.agent_id, "severity": event.severity, "details": event.details}
+                       for event in events],
+            "alerts_today": sum(event_counts.values()),
+            "block_events_today": event_counts.get("block_ip", 0),
         }
-
