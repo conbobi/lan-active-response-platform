@@ -692,3 +692,77 @@ class IncidentService(AbstractService[IncidentRepository]):
         stmt = select(IncidentNote).where(IncidentNote.incident_id == incident_id).order_by(IncidentNote.created_at.asc())
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def delete_incident(self, incident_id: str) -> bool:
+        """Xóa vĩnh viễn một incident và dữ liệu quan hệ liên quan khỏi PostgreSQL."""
+        inc = await self.repository.get(incident_id)
+        if not inc:
+            raise NotFoundError(f"Incident '{incident_id}' not found.")
+
+        from app.models.incident_note import IncidentNote
+        from app.models.ai_analysis import AIAnalysis
+        from app.models.response_action import ResponseAction
+        from sqlalchemy import delete, update
+
+        # 1. Xóa incident_notes
+        await self.session.execute(delete(IncidentNote).where(IncidentNote.incident_id == incident_id))
+
+        # 2. Xóa ai_analysis
+        await self.session.execute(delete(AIAnalysis).where(AIAnalysis.incident_id == incident_id))
+
+        # 3. Gỡ liên kết response_actions
+        await self.session.execute(
+            update(ResponseAction).where(ResponseAction.incident_id == incident_id).values(incident_id=None)
+        )
+
+        # 4. Xóa incident
+        await self.session.delete(inc)
+        await self.session.commit()
+        return True
+
+    async def bulk_resolve(self, incident_ids: List[str]) -> int:
+        """Đánh dấu đã giải quyết (resolved) cho nhiều incidents cùng lúc."""
+        if not incident_ids:
+            return 0
+        from sqlalchemy import update
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(Incident)
+            .where(Incident.id.in_(incident_ids))
+            .values(status=IncidentStatus.RESOLVED, resolved_at=now)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount or 0
+
+    async def bulk_delete(self, incident_ids: List[str]) -> int:
+        """Xóa vĩnh viễn nhiều incidents khỏi PostgreSQL."""
+        if not incident_ids:
+            return 0
+        from app.models.incident_note import IncidentNote
+        from app.models.ai_analysis import AIAnalysis
+        from app.models.response_action import ResponseAction
+        from sqlalchemy import delete, update
+
+        # 1. Xóa notes liên quan
+        await self.session.execute(
+            delete(IncidentNote).where(IncidentNote.incident_id.in_(incident_ids))
+        )
+
+        # 2. Xóa ai_analysis liên quan
+        await self.session.execute(
+            delete(AIAnalysis).where(AIAnalysis.incident_id.in_(incident_ids))
+        )
+
+        # 3. Gỡ liên kết response_actions
+        await self.session.execute(
+            update(ResponseAction).where(ResponseAction.incident_id.in_(incident_ids)).values(incident_id=None)
+        )
+
+        # 4. Xóa incidents
+        result = await self.session.execute(
+            delete(Incident).where(Incident.id.in_(incident_ids))
+        )
+        await self.session.commit()
+        return result.rowcount or 0
+

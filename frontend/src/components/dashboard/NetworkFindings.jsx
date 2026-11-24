@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiGlobe, FiRadio, FiActivity, FiArrowRight, FiLink2 } from 'react-icons/fi';
+import { FiGlobe, FiRadio, FiActivity, FiArrowRight, FiLink2, FiTrash2 } from 'react-icons/fi';
 
 function getScore(item) {
   const v = item?.risk_score ?? item?.riskScore ?? item?.score;
@@ -17,7 +17,7 @@ function getTimeAgo(timestamp) {
   return `${Math.floor(hours / 24)}d trước`;
 }
 
-export default function NetworkFindings({ findings = [], onSelectFinding }) {
+export default function NetworkFindings({ findings = [], onSelectFinding, onDeleteFinding, onClearAll }) {
   const navigate = useNavigate();
   const rows = findings.slice(0, 5);
 
@@ -54,7 +54,7 @@ export default function NetworkFindings({ findings = [], onSelectFinding }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <FiGlobe size={16} color="var(--primary)" />
-          <h3 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+          <h3 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)', margin: 0 }}>
             Network Findings
           </h3>
           <span style={{
@@ -68,11 +68,33 @@ export default function NetworkFindings({ findings = [], onSelectFinding }) {
             {findings.length}
           </span>
         </div>
-        <button
-          onClick={() => navigate('/incidents?finding=network')}
-          style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-          Xem tất cả <FiArrowRight size={12} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          {onClearAll && (
+            <button
+              onClick={() => onClearAll(rows)}
+              title="Xóa danh sách findings này khỏi database"
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--error, #ef4444)',
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem'
+              }}>
+              <FiTrash2 size={12} /> Xóa lịch sử
+            </button>
+          )}
+          <button
+            onClick={() => navigate('/incidents?finding=network')}
+            style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            Xem tất cả <FiArrowRight size={12} />
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1 }}>
@@ -153,7 +175,7 @@ export default function NetworkFindings({ findings = [], onSelectFinding }) {
                   </div>
                 </div>
 
-                <div style={{ marginLeft: '0.5rem', display: 'flex', alignItems: 'center' }}>
+                <div style={{ marginLeft: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                   <span style={{
                     fontSize: '0.72rem',
                     fontWeight: 700,
@@ -166,6 +188,30 @@ export default function NetworkFindings({ findings = [], onSelectFinding }) {
                   }}>
                     {score}
                   </span>
+                  {onDeleteFinding && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteFinding(finding, e);
+                      }}
+                      title="Xóa phát hiện mạng này"
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-tertiary)',
+                        cursor: 'pointer',
+                        padding: '0.2rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        borderRadius: '4px',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--error, #ef4444)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                    >
+                      <FiTrash2 size={13} />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

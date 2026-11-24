@@ -22,3 +22,24 @@ export const getEvents = async () => {
   }
 };
 
+export const deleteEvent = async (eventId) => {
+  try {
+    const data = await api.delete(`/events/${eventId}`);
+    return data;
+  } catch (err) {
+    console.error(`API deleteEvent error for ${eventId}:`, err);
+    throw err;
+  }
+};
+
+export const clearEvents = async () => {
+  try {
+    const data = await api.delete('/events/');
+    return data;
+  } catch (err) {
+    console.error('API clearEvents error:', err);
+    throw err;
+  }
+};
+
+

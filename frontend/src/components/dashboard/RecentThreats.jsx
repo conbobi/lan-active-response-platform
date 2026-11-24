@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { FiTrash2 } from 'react-icons/fi';
 
 function getScore(i) {
   const v = i?.risk_score ?? i?.riskScore ?? i?.score;
@@ -47,7 +48,7 @@ function extractAttackType(incident) {
   return incident.title || incident.description || 'Unknown Attack';
 }
 
-export default function RecentThreats({ incidents = [], onSelectIncident }) {
+export default function RecentThreats({ incidents = [], onSelectIncident, onDeleteIncident, onClearAll }) {
   const navigate = useNavigate();
   
   const threats = incidents.filter(incident => getScore(incident) >= 30).slice(0, 5);
@@ -72,14 +73,48 @@ export default function RecentThreats({ incidents = [], onSelectIncident }) {
   return (
     <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h3 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-          Recent Detections
-        </h3>
-        <button
-          onClick={() => navigate('/incidents')}
-          style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
-          Xem tất cả →
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h3 style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)', margin: 0 }}>
+            Recent Detections
+          </h3>
+          <span style={{
+            fontSize: '0.7rem',
+            fontWeight: 600,
+            background: 'rgba(239, 68, 68, 0.15)',
+            color: 'var(--error, #ef4444)',
+            padding: '0.1rem 0.45rem',
+            borderRadius: '9999px',
+          }}>
+            {threats.length}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          {onClearAll && (
+            <button
+              onClick={() => onClearAll(threats)}
+              title="Xóa danh sách phát hiện này khỏi database"
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--error, #ef4444)',
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                padding: '0.2rem 0.5rem',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem'
+              }}>
+              <FiTrash2 size={12} /> Xóa lịch sử
+            </button>
+          )}
+          <button
+            onClick={() => navigate('/incidents')}
+            style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>
+            Xem tất cả →
+          </button>
+        </div>
       </div>
       
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -163,6 +198,30 @@ export default function RecentThreats({ incidents = [], onSelectIncident }) {
                   }}>
                     {score}
                   </span>
+                  {onDeleteIncident && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteIncident(incident, e);
+                      }}
+                      title="Xóa phát hiện này"
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-tertiary)',
+                        cursor: 'pointer',
+                        padding: '0.2rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        borderRadius: '4px',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--error, #ef4444)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                    >
+                      <FiTrash2 size={13} />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

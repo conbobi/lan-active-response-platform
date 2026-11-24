@@ -9,7 +9,9 @@ import {
     FiClock,
     FiCheckCircle,
     FiActivity,
-    FiArrowRight
+    FiArrowRight,
+    FiTrash2,
+    FiCheck
 } from 'react-icons/fi';
 import KpiCard from '../components/ui/KpiCard';
 import AgentTable from '../components/ui/AgentTable';
@@ -21,10 +23,11 @@ import HealthScoreGauge from '../components/dashboard/HealthScoreGauge';
 import RecentThreats from '../components/dashboard/RecentThreats';
 import NetworkFindings from '../components/dashboard/NetworkFindings';
 import ErrorState from '../components/ui/ErrorState';
+import ConfirmDeleteModal from '../components/ui/ConfirmDeleteModal';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { cleanupOfflineAgents, deleteAgent, mapAgent } from '../api/agents';
-import { mapIncident } from '../api/incidents';
-import { mapEvent } from '../api/events';
+import { mapIncident, deleteIncident, bulkDeleteIncidents } from '../api/incidents';
+import { mapEvent, clearEvents } from '../api/events';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
 import { useDashboardSummary } from '../hooks/useDashboardSummary';
 
@@ -40,6 +43,16 @@ export default function Dashboard() {
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [selectedAgentTab, setSelectedAgentTab] = useState('Overview');
     const [selectedIncident, setSelectedIncident] = useState(null);
+    const [deleteModal, setDeleteModal] = useState({
+        isOpen: false,
+        type: 'single',
+        ids: [],
+        title: '',
+        message: '',
+        itemDescription: '',
+        itemCount: 1,
+    });
+    const [isDeleting, setIsDeleting] = useState(false);
 
     useEffect(() => {
         const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -91,6 +104,83 @@ export default function Dashboard() {
             toast.error(err.message);
         }
     };
+
+    const promptDeleteIncident = (inc, e) => {
+        if (e) e.stopPropagation();
+        setDeleteModal({
+            isOpen: true,
+            type: 'single',
+            ids: [inc.id],
+            title: 'Xác nhận xóa sự cố',
+            message: `Bạn đang yêu cầu xóa vĩnh viễn sự cố "${inc.title}" (ID: ${inc.id}) khỏi cơ sở dữ liệu PostgreSQL. Dữ liệu sau khi xóa sẽ không thể phục hồi!`,
+            itemDescription: `${inc.title} [${inc.id}]`,
+            itemCount: 1,
+        });
+    };
+
+    const promptClearThreats = (threatList) => {
+        const ids = threatList.map(t => t.id).filter(Boolean);
+        if (ids.length === 0) return;
+        setDeleteModal({
+            isOpen: true,
+            type: 'bulk_threats',
+            ids,
+            title: 'Xóa lịch sử phát hiện (Recent Detections)',
+            message: `Bạn đang yêu cầu xóa vĩnh viễn ${ids.length} phát hiện mối đe dọa gần đây khỏi cơ sở dữ liệu PostgreSQL.`,
+            itemDescription: `${ids.length} sự cố phát hiện trong Recent Detections`,
+            itemCount: ids.length,
+        });
+    };
+
+    const promptClearFindings = (findingList) => {
+        const ids = findingList.map(f => f.id).filter(Boolean);
+        if (ids.length === 0) return;
+        setDeleteModal({
+            isOpen: true,
+            type: 'bulk_findings',
+            ids,
+            title: 'Xóa lịch sử Network Findings',
+            message: `Bạn đang yêu cầu xóa vĩnh viễn ${ids.length} phát hiện mạng (Network Findings) khỏi cơ sở dữ liệu PostgreSQL.`,
+            itemDescription: `${ids.length} network finding incidents`,
+            itemCount: ids.length,
+        });
+    };
+
+    const promptClearAlerts = () => {
+        const count = summary.events.length;
+        setDeleteModal({
+            isOpen: true,
+            type: 'events',
+            ids: [],
+            title: 'Xóa toàn bộ lịch sử Telemetry Alerts',
+            message: `Bạn đang yêu cầu xóa vĩnh viễn toàn bộ ${count} telemetry alert events khỏi cơ sở dữ liệu PostgreSQL.`,
+            itemDescription: `${count} telemetry events`,
+            itemCount: count,
+        });
+    };
+
+    const handleConfirmDelete = async () => {
+        setIsDeleting(true);
+        try {
+            if (deleteModal.type === 'single') {
+                await deleteIncident(deleteModal.ids[0]);
+                toast.success('Đã xóa sự cố thành công');
+            } else if (deleteModal.type === 'bulk_threats' || deleteModal.type === 'bulk_findings') {
+                await bulkDeleteIncidents(deleteModal.ids);
+                toast.success(`Đã xóa ${deleteModal.ids.length} sự cố khỏi cơ sở dữ liệu`);
+            } else if (deleteModal.type === 'events') {
+                await clearEvents();
+                toast.success('Đã xóa toàn bộ lịch sử alerts');
+            }
+            setDeleteModal(prev => ({ ...prev, isOpen: false }));
+            await refresh();
+        } catch (err) {
+            toast.error(err.message || 'Xóa thất bại');
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
 
     const scoreVal = incident ? (incident.riskScore || incident.risk_score || 0) : 0;
     const isCriticalRisk = scoreVal >= 70;
@@ -184,10 +274,34 @@ export default function Dashboard() {
                     </div>
 
                     {incident && (
-                        <Button size="sm" variant={active ? "primary" : "outline"} iconRight={<FiArrowRight size={13} />}
-                                onClick={() => setSelectedIncident(incident)}>
-                            Xem chi tiết sự cố
-                        </Button>
+                        <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            {incident.status !== 'resolved' && incident.incident_status !== 'resolved' && (
+                                <Button size="sm" variant="ghost" iconLeft={<FiCheck size={13} color="var(--success)" />}
+                                        onClick={async (e) => {
+                                            e.stopPropagation();
+                                            try {
+                                                const { bulkResolveIncidents } = await import('../api/incidents');
+                                                await bulkResolveIncidents([incident.id]);
+                                                toast.success('Đã giải quyết sự cố');
+                                                await refresh();
+                                            } catch (err) {
+                                                toast.error(err.message);
+                                            }
+                                        }}
+                                        title="Đánh dấu sự cố đã được giải quyết">
+                                    Đã giải quyết
+                                </Button>
+                            )}
+                            <Button size="sm" variant="ghost" iconLeft={<FiTrash2 size={13} color="var(--error)" />}
+                                    onClick={(e) => promptDeleteIncident(incident, e)}
+                                    title="Xóa sự cố này khỏi database">
+                                Xóa sự cố
+                            </Button>
+                            <Button size="sm" variant={active ? "primary" : "outline"} iconRight={<FiArrowRight size={13} />}
+                                    onClick={() => setSelectedIncident(incident)}>
+                                Xem chi tiết sự cố
+                            </Button>
+                        </div>
                     )}
                 </div>
 
@@ -305,8 +419,18 @@ export default function Dashboard() {
 
             {/* 5. Threat Detections & Network Findings (Balanced 2-Columns Grid) */}
             <div className="grid-2" style={{ marginBottom: '1.25rem', alignItems: 'stretch' }}>
-                <RecentThreats incidents={incidents} onSelectIncident={setSelectedIncident} />
-                <NetworkFindings findings={networkFindings} onSelectFinding={setSelectedIncident} />
+                <RecentThreats
+                    incidents={incidents}
+                    onSelectIncident={setSelectedIncident}
+                    onDeleteIncident={promptDeleteIncident}
+                    onClearAll={promptClearThreats}
+                />
+                <NetworkFindings
+                    findings={networkFindings}
+                    onSelectFinding={setSelectedIncident}
+                    onDeleteFinding={promptDeleteIncident}
+                    onClearAll={promptClearFindings}
+                />
             </div>
 
             {/* 6. Managed Endpoints (Full Width for Spacious Table Layout) */}
@@ -316,13 +440,28 @@ export default function Dashboard() {
             </div>
 
             {/* 7. Recent Telemetry Alerts Feed */}
-            <RecentAlerts events={summary.events.map(mapEvent)} />
+            <RecentAlerts
+                events={summary.events.map(mapEvent)}
+                onClearAlerts={promptClearAlerts}
+            />
 
             {/* Modals */}
             {selectedAgent && <AgentDetailModal agent={selectedAgent} initialTab={selectedAgentTab}
                 onClose={() => setSelectedAgent(null)} onDeleteAgent={archiveAgent} />}
             {selectedIncident && <IncidentDetailModal incident={selectedIncident} isOpen
                 onClose={() => setSelectedIncident(null)} onRefresh={refresh} />}
+
+            {/* Safety Confirmation Modal for Deletion */}
+            <ConfirmDeleteModal
+                isOpen={deleteModal.isOpen}
+                onClose={() => setDeleteModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={handleConfirmDelete}
+                title={deleteModal.title}
+                message={deleteModal.message}
+                itemCount={deleteModal.itemCount}
+                itemDescription={deleteModal.itemDescription}
+                loading={isDeleting}
+            />
         </div>
     );
 }

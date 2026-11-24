@@ -114,22 +114,30 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
     if has_auth_configured and request.url.path.startswith("/api/"):
         read = request.method in {"GET", "HEAD", "OPTIONS"}
         is_legacy_commands = request.url.path.startswith(f"{settings.API_V1_STR}/commands")
-        action_path = any(part in request.url.path.split("/") for part in {"actions", "kill", "kill_tree"})
 
-        # 1. Legacy raw command injection endpoint (/commands) strictly requires legacy admin token if configured
-        if is_legacy_commands and not read:
-            kind, _, token = request.headers.get("authorization", "").partition(" ")
-            is_valid_legacy = token_matches(token.strip(), settings.NETWORK_LEGACY_ADMIN_TOKEN)
-            if kind.lower() != "bearer" or not is_valid_legacy:
-                return JSONResponse({"detail": "Legacy administration requires its administrator token"}, status_code=401)
+        # Explicitly exempt management resources (incidents, events, alerts, dashboard, agents)
+        is_exempt_management = any(
+            request.url.path.startswith(f"{settings.API_V1_STR}/{prefix}")
+            for prefix in {"incidents", "events", "alerts", "dashboard", "agents"}
+        )
 
-        # 2. Modern actions and process kill endpoints use unified authorization (operators and legacy admin)
-        elif not network and (action_path or not read):
-            auth_header = request.headers.get("authorization", "")
-            try:
-                verify_operator_or_admin(auth_header, write=True)
-            except HTTPException as exc:
-                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if not is_exempt_management:
+            action_path = any(part in request.url.path.split("/") for part in {"kill", "kill_tree"}) or request.url.path.startswith(f"{settings.API_V1_STR}/actions")
+
+            # 1. Legacy raw command injection endpoint (/commands) strictly requires legacy admin token if configured
+            if is_legacy_commands and not read:
+                kind, _, token = request.headers.get("authorization", "").partition(" ")
+                is_valid_legacy = token_matches(token.strip(), settings.NETWORK_LEGACY_ADMIN_TOKEN)
+                if kind.lower() != "bearer" or not is_valid_legacy:
+                    return JSONResponse({"detail": "Legacy administration requires its administrator token"}, status_code=401)
+
+            # 2. Modern actions and process kill endpoints use unified authorization (operators and legacy admin)
+            elif not network and action_path:
+                auth_header = request.headers.get("authorization", "")
+                try:
+                    verify_operator_or_admin(auth_header, write=True)
+                except HTTPException as exc:
+                    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
     response = await call_next(request)
     if network:

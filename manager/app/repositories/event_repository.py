@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.event import Event
 from app.repositories.base import SqlAlchemyRepository
@@ -21,3 +21,15 @@ class EventRepository(SqlAlchemyRepository[Event]):
             await self.session.flush()
             await self.session.refresh(ev)
         return ev
+
+    async def clear_all(self) -> int:
+        result = await self.session.execute(delete(Event))
+        await self.session.commit()
+        return result.rowcount or 0
+
+    async def delete_by_id(self, event_id: str) -> bool:
+        stmt = delete(Event).where(Event.id == event_id)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return (result.rowcount or 0) > 0
+

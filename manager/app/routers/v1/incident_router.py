@@ -17,6 +17,7 @@ from app.schemas.incident import (
     IncidentNoteOut,
     AIAnalysisOut,
     AIAnalysisRateDTO,
+    BulkIncidentIdsDTO,
 )
 from app.services.incident.incident_service import IncidentService
 from app.services.incident.incident_timeline_service import IncidentTimelineService
@@ -45,6 +46,33 @@ async def list_incidents(
     """List security incidents with optional active_only and hours filters."""
     service = IncidentService(db)
     return await service.list_incidents(skip=skip, limit=limit, active_only=active_only, hours=hours, finding=finding)
+
+
+@router.post("/bulk-resolve", response_model=Dict[str, Any])
+@router.post("/bulk-resolve/", response_model=Dict[str, Any], include_in_schema=False)
+async def bulk_resolve_incidents(dto: BulkIncidentIdsDTO, db: AsyncSession = Depends(get_db)):
+    """Đánh dấu đã giải quyết (resolved) cho danh sách incident IDs."""
+    service = IncidentService(db)
+    count = await service.bulk_resolve(dto.incident_ids)
+    return {"message": "Incidents resolved successfully", "resolved_count": count, "incident_ids": dto.incident_ids}
+
+
+@router.post("/bulk-delete", response_model=Dict[str, Any])
+@router.post("/bulk-delete/", response_model=Dict[str, Any], include_in_schema=False)
+async def bulk_delete_incidents(dto: BulkIncidentIdsDTO, db: AsyncSession = Depends(get_db)):
+    """Xóa vĩnh viễn danh sách incidents khỏi cơ sở dữ liệu PostgreSQL."""
+    service = IncidentService(db)
+    count = await service.bulk_delete(dto.incident_ids)
+    return {"message": "Incidents deleted successfully", "deleted_count": count, "incident_ids": dto.incident_ids}
+
+
+@router.delete("/{incident_id}", response_model=Dict[str, Any])
+@router.delete("/{incident_id}/", response_model=Dict[str, Any], include_in_schema=False)
+async def delete_incident(incident_id: str, db: AsyncSession = Depends(get_db)):
+    """Xóa vĩnh viễn một incident khỏi cơ sở dữ liệu PostgreSQL."""
+    service = IncidentService(db)
+    await service.delete_incident(incident_id)
+    return {"message": f"Incident {incident_id} deleted successfully", "incident_id": incident_id}
 
 
 @router.get("/{incident_id}/timeline", response_model=Dict[str, Any])

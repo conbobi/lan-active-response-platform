@@ -2,13 +2,14 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import useIncidents from '../hooks/useIncidents';
-import { getIncident } from '../api/incidents';
+import { getIncident, bulkResolveIncidents, bulkDeleteIncidents, deleteIncident } from '../api/incidents';
 import { useAgents } from '../hooks/useAgents';
 import { useEvents } from '../hooks/useEvents';
 import IncidentDetailModal from '../components/incidents/IncidentDetailModal';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import ConfirmDeleteModal from '../components/ui/ConfirmDeleteModal';
 import FilterTabs from '../components/ui/FilterTabs';
 import Dropdown from '../components/ui/Dropdown';
 import ErrorState from '../components/ui/ErrorState';
@@ -39,7 +40,12 @@ import {
   FiCornerDownRight,
   FiSend,
   FiGlobe,
-  FiTrendingUp
+  FiTrendingUp,
+  FiTrash2,
+  FiCalendar,
+  FiCheckSquare,
+  FiSquare,
+  FiCheck
 } from 'react-icons/fi';
 
 import {
@@ -95,6 +101,17 @@ export default function Incidents() {
   const [severityFilter, setSeverityFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
   const [timeFilter, setTimeFilter] = useState('all');
+  const [customDate, setCustomDate] = useState('');
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isBulkActing, setIsBulkActing] = useState(false);
+  const [deleteModal, setDeleteModal] = useState({
+    isOpen: false,
+    ids: [],
+    title: '',
+    message: '',
+    itemDescription: '',
+    count: 0,
+  });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
 
@@ -307,10 +324,12 @@ export default function Incidents() {
   ];
 
   const timeOptions = [
-    { value: 'all', label: 'All Time' },
-    { value: 'today', label: 'Today' },
-    { value: '7days', label: 'Last 7 Days' },
-    { value: '30days', label: 'Last 30 Days' },
+    { value: 'all', label: 'Tất cả thời gian' },
+    { value: 'today', label: 'Hôm nay' },
+    { value: 'yesterday', label: 'Hôm qua' },
+    { value: '7days', label: '7 ngày qua' },
+    { value: '30days', label: '30 ngày qua' },
+    { value: 'custom', label: 'Chọn ngày cụ thể' },
   ];
 
   // Filtering Logic
@@ -339,23 +358,32 @@ export default function Incidents() {
       // Agent
       const matchAgent = agentFilter === 'all' || inc.agentId === agentFilter;
 
-      // Time Range
+      // Time Range / Date Filter
       let matchTime = true;
       if (timeFilter !== 'all') {
-        const createdMs = new Date(inc.createdAt).getTime();
+        const createdDate = new Date(inc.createdAt);
+        const createdMs = createdDate.getTime();
         const nowMs = Date.now();
+        const createdDateStr = createdDate.toISOString().slice(0, 10);
+        const todayDateStr = new Date().toISOString().slice(0, 10);
+
         if (timeFilter === 'today') {
-          matchTime = nowMs - createdMs <= 86400000;
+          matchTime = createdDateStr === todayDateStr || nowMs - createdMs <= 86400000;
+        } else if (timeFilter === 'yesterday') {
+          const yesterdayStr = new Date(nowMs - 86400000).toISOString().slice(0, 10);
+          matchTime = createdDateStr === yesterdayStr;
         } else if (timeFilter === '7days') {
           matchTime = nowMs - createdMs <= 7 * 86400000;
         } else if (timeFilter === '30days') {
           matchTime = nowMs - createdMs <= 30 * 86400000;
+        } else if (timeFilter === 'custom' && customDate) {
+          matchTime = createdDateStr === customDate;
         }
       }
 
       return matchSearch && matchStatus && matchSeverity && matchAgent && matchTime;
     });
-  }, [incidents, searchTerm, statusFilter, severityFilter, agentFilter, timeFilter]);
+  }, [incidents, searchTerm, statusFilter, severityFilter, agentFilter, timeFilter, customDate]);
 
   // Pagination
   const totalPages = Math.ceil(filteredIncidents.length / itemsPerPage) || 1;
@@ -363,6 +391,94 @@ export default function Incidents() {
     const start = (currentPage - 1) * itemsPerPage;
     return filteredIncidents.slice(start, start + itemsPerPage);
   }, [filteredIncidents, currentPage]);
+
+  // Multi-selection helpers
+  const isAllPageSelected = paginatedIncidents.length > 0 && paginatedIncidents.every(i => selectedIds.includes(i.id));
+  const isSomePageSelected = paginatedIncidents.some(i => selectedIds.includes(i.id)) && !isAllPageSelected;
+
+  const toggleSelectPage = () => {
+    if (isAllPageSelected) {
+      const pageIds = new Set(paginatedIncidents.map(i => i.id));
+      setSelectedIds(prev => prev.filter(id => !pageIds.has(id)));
+    } else {
+      const pageIds = paginatedIncidents.map(i => i.id);
+      setSelectedIds(prev => Array.from(new Set([...prev, ...pageIds])));
+    }
+  };
+
+  const toggleSelectId = (id, e) => {
+    if (e) e.stopPropagation();
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const selectAllFiltered = () => {
+    setSelectedIds(filteredIncidents.map(i => i.id));
+    toast.success(`Đã chọn tất cả ${filteredIncidents.length} sự cố đang lọc`);
+  };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+  };
+
+  const handleBulkResolve = async () => {
+    if (selectedIds.length === 0) return;
+    setIsBulkActing(true);
+    try {
+      await bulkResolveIncidents(selectedIds);
+      toast.success(`Đã đánh dấu giải quyết ${selectedIds.length} sự cố thành công!`);
+      setSelectedIds([]);
+      await refreshIncidents();
+    } catch (err) {
+      toast.error(`Giải quyết hàng loạt thất bại: ${err.message}`);
+    } finally {
+      setIsBulkActing(false);
+    }
+  };
+
+  const promptBulkDelete = () => {
+    if (selectedIds.length === 0) return;
+    setDeleteModal({
+      isOpen: true,
+      ids: selectedIds,
+      title: `Xác nhận xóa ${selectedIds.length} sự cố khỏi Database`,
+      message: `Bạn đang yêu cầu xóa vĩnh viễn ${selectedIds.length} sự cố đã chọn khỏi cơ sở dữ liệu PostgreSQL. Hành động này không thể hoàn tác!`,
+      itemDescription: `${selectedIds.length} sự cố đã chọn`,
+      count: selectedIds.length,
+    });
+  };
+
+  const promptDeleteSingle = (inc, e) => {
+    if (e) e.stopPropagation();
+    setDeleteModal({
+      isOpen: true,
+      ids: [inc.id],
+      title: `Xác nhận xóa sự cố ${inc.id}`,
+      message: `Bạn đang yêu cầu xóa vĩnh viễn sự cố "${inc.title}" (ID: ${inc.id}) khỏi cơ sở dữ liệu PostgreSQL. Dữ liệu sau khi xóa sẽ không thể phục hồi!`,
+      itemDescription: `${inc.title} [${inc.id}]`,
+      count: 1,
+    });
+  };
+
+  const handleExecuteDelete = async () => {
+    setIsBulkActing(true);
+    try {
+      await bulkDeleteIncidents(deleteModal.ids);
+      toast.success(`Đã xóa ${deleteModal.ids.length} sự cố khỏi cơ sở dữ liệu!`);
+      setSelectedIds(prev => prev.filter(id => !deleteModal.ids.includes(id)));
+      setDeleteModal(prev => ({ ...prev, isOpen: false }));
+      if (selectedIncident && deleteModal.ids.includes(selectedIncident.id)) {
+        setSelectedIncident(null);
+      }
+      await refreshIncidents();
+    } catch (err) {
+      toast.error(`Xóa thất bại: ${err.message}`);
+    } finally {
+      setIsBulkActing(false);
+    }
+  };
+
 
   // Handlers
   const openAssignModal = (inc, e) => {
@@ -623,14 +739,141 @@ export default function Incidents() {
             value={timeFilter}
             onChange={(val) => { setTimeFilter(val); setCurrentPage(1); }}
           />
+
+          {/* Specific Date Picker when 'custom' is selected */}
+          {timeFilter === 'custom' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <input
+                type="date"
+                value={customDate}
+                onChange={(e) => { setCustomDate(e.target.value); setCurrentPage(1); }}
+                style={{
+                  padding: '0.45rem 0.65rem',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.85rem',
+                }}
+              />
+            </div>
+          )}
+
+          {filteredIncidents.length > 0 && (
+            <button
+              type="button"
+              onClick={selectAllFiltered}
+              style={{
+                fontSize: '0.8rem',
+                padding: '0.5rem 0.75rem',
+                background: 'rgba(56, 189, 248, 0.1)',
+                border: '1px solid rgba(56, 189, 248, 0.3)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--primary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                whiteSpace: 'nowrap',
+              }}
+              title="Chọn tất cả các sự cố thỏa mãn bộ lọc hiện tại"
+            >
+              <FiCheckSquare size={13} /> Chọn tất cả ({filteredIncidents.length})
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Bulk Actions Bar */}
+      {selectedIds.length > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0.75rem 1.25rem',
+          background: 'rgba(56, 189, 248, 0.08)',
+          border: '1px solid rgba(56, 189, 248, 0.3)',
+          borderRadius: '8px',
+          marginBottom: '1rem',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              color: 'var(--primary)',
+            }}>
+              <FiCheckSquare size={16} /> Đã chọn {selectedIds.length} sự cố
+            </span>
+            {selectedIds.length < filteredIncidents.length && (
+              <button
+                type="button"
+                onClick={selectAllFiltered}
+                style={{
+                  fontSize: '0.78rem',
+                  color: 'var(--text-secondary)',
+                  background: 'none',
+                  border: 'none',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                }}
+              >
+                (Chọn toàn bộ {filteredIncidents.length} sự cố đang lọc)
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <Button
+              variant="outline"
+              size="sm"
+              iconLeft={<FiCheck size={13} color="var(--success)" />}
+              onClick={handleBulkResolve}
+              disabled={isBulkActing}
+            >
+              Đã giải quyết ({selectedIds.length})
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              iconLeft={<FiTrash2 size={13} />}
+              onClick={promptBulkDelete}
+              disabled={isBulkActing}
+            >
+              Xóa khỏi Database ({selectedIds.length})
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearSelection}
+              disabled={isBulkActing}
+            >
+              Bỏ chọn
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Incidents Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <table className="data-table">
           <thead>
             <tr>
+              <th style={{ width: '40px', textAlign: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={isAllPageSelected}
+                  ref={el => { if (el) el.indeterminate = isSomePageSelected; }}
+                  onChange={toggleSelectPage}
+                  style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                  title="Chọn tất cả sự cố trên trang này"
+                />
+              </th>
               <th>Incident ID</th>
               <th>Title & Telemetry Summary</th>
               <th>Severity</th>
@@ -644,13 +887,13 @@ export default function Incidents() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="8" style={{ padding: '1rem' }}>
+                <td colSpan="9" style={{ padding: '1rem' }}>
                   <SkeletonTable rows={5} />
                 </td>
               </tr>
             ) : paginatedIncidents.length === 0 ? (
               <tr>
-                <td colSpan="8" style={{ textAlign: 'center', padding: '1rem' }}>
+                <td colSpan="9" style={{ textAlign: 'center', padding: '1rem' }}>
                   <EmptyState
                     icon="📭"
                     title="Chưa có sự cố"
@@ -663,8 +906,16 @@ export default function Incidents() {
                 <tr
                   key={inc.id}
                   onClick={() => setSelectedIncident(inc)}
-                  style={{ cursor: 'pointer', transition: 'background 0.2s' }}
+                  style={{ cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.includes(inc.id) ? 'rgba(56, 189, 248, 0.05)' : undefined }}
                 >
+                  <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(inc.id)}
+                      onChange={(e) => toggleSelectId(inc.id, e)}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    />
+                  </td>
                   <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--primary)' }}>
                     {inc.id}
                   </td>
@@ -760,6 +1011,13 @@ export default function Incidents() {
                           Resolve
                         </Button>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconLeft={<FiTrash2 size={13} color="var(--error)" />}
+                        onClick={(e) => promptDeleteSingle(inc, e)}
+                        title="Xóa sự cố này khỏi Database"
+                      />
                     </div>
                   </td>
                 </tr>
@@ -1093,6 +1351,18 @@ export default function Incidents() {
           </form>
         )}
       </Modal>
+
+      {/* Safety Confirmation Modal for Deletion */}
+      <ConfirmDeleteModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={handleExecuteDelete}
+        title={deleteModal.title}
+        message={deleteModal.message}
+        itemDescription={deleteModal.itemDescription}
+        itemCount={deleteModal.count}
+        loading={isBulkActing}
+      />
     </div>
   );
 }

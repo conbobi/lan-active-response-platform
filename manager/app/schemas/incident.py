@@ -59,6 +59,10 @@ class IncidentLabelUpdate(BaseModel):
     labeled_by: Optional[str] = "current_user"
 
 
+class BulkIncidentIdsDTO(BaseModel):
+    incident_ids: List[str]
+
+
 class IncidentOut(ORMBaseModel):
     id: str
     title: str

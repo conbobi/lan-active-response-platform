@@ -35,3 +35,21 @@ async def create_event(dto: EventCreate, db: AsyncSession = Depends(get_db)):
     )
     created = await repo.add(event)
     return created
+
+@router.delete("/", status_code=200)
+@router.post("/clear", status_code=200)
+async def clear_events(db: AsyncSession = Depends(get_db)):
+    """Xóa tất cả các event alerts khỏi database."""
+    repo = EventRepository(db)
+    count = await repo.clear_all()
+    return {"message": "All events cleared", "deleted_count": count}
+
+@router.delete("/{event_id}", status_code=200)
+async def delete_event(event_id: str, db: AsyncSession = Depends(get_db)):
+    """Xóa một event alert cụ thể."""
+    repo = EventRepository(db)
+    deleted = await repo.delete_by_id(event_id)
+    if not deleted:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"message": f"Event {event_id} deleted"}

@@ -98,6 +98,37 @@ export const getIncidentNotes = async (incidentId) => {
   }
 };
 
+export const deleteIncident = async (incidentId) => {
+  try {
+    const data = await api.delete(`/incidents/${incidentId}`);
+    return data;
+  } catch (err) {
+    console.error(`API deleteIncident error for ${incidentId}:`, err);
+    throw err;
+  }
+};
+
+export const bulkResolveIncidents = async (incidentIds) => {
+  try {
+    const data = await api.post('/incidents/bulk-resolve', { incident_ids: incidentIds });
+    return data;
+  } catch (err) {
+    console.error('API bulkResolveIncidents error:', err);
+    throw err;
+  }
+};
+
+export const bulkDeleteIncidents = async (incidentIds) => {
+  try {
+    const data = await api.post('/incidents/bulk-delete', { incident_ids: incidentIds });
+    return data;
+  } catch (err) {
+    console.error('API bulkDeleteIncidents error:', err);
+    throw err;
+  }
+};
+
+
 export const addIncidentNote = async (incidentId, content, user = 'admin') => {
   try {
     return await api.post(`/incidents/${incidentId}/notes`, { content, user });
