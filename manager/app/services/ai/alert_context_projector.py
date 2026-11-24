@@ -18,6 +18,8 @@ from app.services.agent.activity import process_identity, socket_key
 from app.services.detection.network_shell import RULE_ID, detect_network_shell
 from app.services.rule_engine import RuleEngine, match_endpoint_telemetry
 
+from app.services.detection.behavior_evidence import BEHAVIORS, SCAN, SQLI, technique_for
+
 NA = "N/A"
 WINDOW = timedelta(minutes=2)
 FIM_RULE = "builtin_linux_sensitive_file_change"
@@ -353,6 +355,55 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
             "new_hash": _value(fields.get("new_hash") or (detail[4] if detail else None)),
         })
 
+    behavior = _mapping(evidence.get("behavior"))
+    has_behavior = (isinstance(behavior.get("classification"), str) and behavior["classification"] in BEHAVIORS
+                    and isinstance(behavior.get("source_event_ids"), list)
+                    and bool(behavior["source_event_ids"]))
+    if has_behavior:
+        fields = (
+            "evidence_id", "evidence_type", "source", "classification", "service", "source_ip",
+            "username", "account_count", "authentication_status", "failed_attempts",
+            "successful_attempts", "error_attempts", "first_attempt_at", "last_attempt_at",
+            "detection_window_seconds", "time_basis", "request_method", "request_path",
+            "http_status", "request_id", "http_event_id", "user_agent", "payload_indicators",
+            "exploitation_outcome", "brute_force_criteria", "protocol", "direction",
+            "destination_ip", "connection_count", "automation_hint", "legacy_duplicate_status",
+            "timestamp_resolution", "indicator_event_count",
+        )
+        fact = {field: behavior[field] for field in fields if behavior.get(field) is not None}
+        event_ids = behavior["source_event_ids"]
+        ordered_ids = list(dict.fromkeys([*behavior.get("indicator_source_event_ids", []), *event_ids]))
+        fact.update(
+            id=f"F{len(result.facts) + 1}", kind="behavior",
+            source_event_ids=ordered_ids[:5], source_event_count=len(event_ids),
+            omitted_source_event_ids=max(0, len(event_ids) - 5),
+        )
+        if behavior.get("source_ips"):
+            fact["source_ips"] = behavior["source_ips"][:8]
+        if behavior.get("classification") == SCAN:
+            fact["destination_port_count"] = len(behavior.get("destination_ports", []))
+            fact["destination_ports"] = behavior.get("destination_ports", [])[:16]
+            fact["connections"] = [
+                {**sample, "holders": (sample.get("holders") or [])[:2]}
+                for sample in _records(behavior.get("connections"))[:5]
+            ]
+        has_original_time = not set(fact.get("time_basis", ())) & {
+            "agent_receipt", "manager_receipt", "legacy_receipt",
+        }
+        has_request = bool(fact.get("request_method") and fact.get("request_path"))
+        if not has_original_time:
+            result.missing.append("source_attempt_timestamps")
+        if behavior.get("classification") == SQLI and not has_request:
+            result.missing.append("http_request_metadata")
+        fact["evidence_completeness"] = "complete" if has_original_time and not (
+            behavior.get("classification") == SQLI and not has_request
+        ) else "partial"
+        technique = technique_for(behavior)
+        if technique:
+            fact["verified_technique"] = technique
+        result.facts.append(fact)
+        result.mandatory.add(fact["id"])
+
     for factor in _records(evidence.get("factors")):
         name = _value(factor.get("rule"))
         fact = {
@@ -360,6 +411,8 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
             "kind": "authentication" if name == AUTH_RULE else "risk_factor",
             "rule": name, "score": _value(factor.get("score")), "reason": _value(factor.get("reason")),
         }
+        if name == AUTH_RULE and has_behavior:
+            continue
         if name == AUTH_RULE:
             auth = {**_mapping(evidence.get("auth")), **factor}
             reason = fact["reason"]
@@ -368,7 +421,10 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
                 r"|([\w-]+) login for '([^']+)' from (\S+) after \d+ failed attempts for the same account and source",
                 reason if isinstance(reason, str) else "",
             )
+            count = re.search(r"\b(\d{1,10}) failed (?:logins|attempts)\b", reason) if isinstance(reason, str) else None
             fact.update({
+                "reported_failed_attempts": int(count[1]) if count else NA,
+                "evidence_completeness": "partial",
                 "account": _value(auth.get("account") or auth.get("username") or (match[3] or match[5] if match else None)),
                 "source_ip": _value(auth.get("source_ip") or (match[2] or match[6] if match else None)),
                 "service": _value(auth.get("service") or (match[1] or match[4] if match else None)),
@@ -377,7 +433,9 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
             })
         result.facts.append(fact)
 
-    if rule_id == AUTH_RULE and not any(fact["kind"] == "authentication" for fact in result.facts):
+    if rule_id == AUTH_RULE and not has_behavior:
+        result.missing.append("auth_event_references")
+    if rule_id == AUTH_RULE and not has_behavior and not any(fact["kind"] == "authentication" for fact in result.facts):
         auth = _mapping(evidence.get("auth")) or evidence
         result.facts.append({
             "id": f"F{len(result.facts) + 1}", "source": "incident_snapshot", "kind": "authentication",

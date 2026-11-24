@@ -155,6 +155,9 @@ class RiskAssessmentService:
     async def evaluate(
         self, agent_id: str, data: Union[RiskAssessmentDTO, Dict[str, Any]],
         *, auth_history_before: Optional[datetime] = None,
+        flow_observations=(),
+        trusted_web=False,
+        detection_findings=None,
     ) -> Tuple[float, Dict[str, Any]]:
         """
         Evaluate composite risk score (0 - 100) using dynamic rules in RiskRuleRegistry,
@@ -203,6 +206,7 @@ class RiskAssessmentService:
             "session": self.session,
             "agent_id": agent_id,
             "auth_history_before": auth_history_before,
+            "flow_observations": flow_observations,
         }
 
         rule_scores: Dict[str, float] = {}
@@ -229,6 +233,16 @@ class RiskAssessmentService:
                         weighted_score = min(weighted_score, limit)
                     rule_scores[rule.rule_id] = weighted_score
                     factors[rule.rule_id] = reason
+                    can_publish = (
+                        (rule.rule_id == "brute_force" and auth_history_before is not None)
+                        or (rule.rule_id == "web_attack" and trusted_web)
+                        or rule.rule_id == "network_service_scanning"
+                    )
+                    if detection_findings is not None and can_publish:
+                        for points, evidence in context.get("behavior_findings", {}).get(rule.rule_id, ()):
+                            if evidence.get("source_event_ids"):
+                                multiplier = rule.base_score / 30.0 if rule.rule_id == "brute_force" else 1.0
+                                detection_findings.append((rule.rule_id, min(100.0, points * multiplier * rule.weight), evidence))
                     logger.info(f"[EVALUATE] Agent {agent_id} - Rule {rule.rule_id}: raw={rule_score}, debounced={debounced_score}, weighted={weighted_score}")
                 else:
                     agent_counters.pop(rule.rule_id, None)
@@ -274,12 +288,18 @@ class RiskAssessmentService:
         data: Union[RiskAssessmentDTO, Dict[str, Any]],
         *,
         auth_history_before: Optional[datetime] = None,
+        flow_observations=(),
+        trusted_web=False,
     ) -> RiskScoreRecord:
         """
         Process assessment, calculate raw + smoothed score via EMA, store record, check whitelist,
         and execute auto-isolation, incident creation, & alert based on smoothed score.
         """
-        raw_score, factors = await self.evaluate(agent_id, data, auth_history_before=auth_history_before)
+        findings = []
+        raw_score, factors = await self.evaluate(
+            agent_id, data, auth_history_before=auth_history_before,
+            flow_observations=flow_observations, trusted_web=trusted_web, detection_findings=findings,
+        )
 
         # 2. Lấy smoothed_score gần nhất từ DB (hỗ trợ cả mock trong unit test)
         latest = None
@@ -363,7 +383,23 @@ class RiskAssessmentService:
             other_scores = {key: value for key, value in factors.get("_scores", {}).items()
                             if key != NETWORK_SHELL_RULE_ID}
             incident_score = min(100.0, apply_category_cap(other_scores))
-        if incident_score >= incident_creation_th:
+        if findings:
+            incident_service = IncidentService(self.session)
+            for key, score, evidence in findings:
+                if score < incident_creation_th:
+                    continue
+                reason = f"{evidence['classification']} from {evidence.get('source_ip') or 'multiple sources'}"
+                if evidence["evidence_type"] == "authentication":
+                    reason += f" with {evidence['failed_attempts']} recorded failures"
+                incident = await incident_service.create_from_risk(
+                    agent_id, score,
+                    {key: reason, "_scores": {key: score}, "total_score": score},
+                    behavior=evidence,
+                )
+                if getattr(record, "incident", None) is None:
+                    record.incident = incident
+        elif (auth_history_before is None and incident_score >= incident_creation_th
+              and (not trusted_web or raw_score >= incident_creation_th)):
             incident_service = IncidentService(self.session)
             incident_factors = {key: value for key, value in factors.items() if key != NETWORK_SHELL_RULE_ID}
             if NETWORK_SHELL_RULE_ID in factors:

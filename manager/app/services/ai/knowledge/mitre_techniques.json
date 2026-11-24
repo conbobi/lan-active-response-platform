@@ -155,6 +155,14 @@
     "name": "Brute Force",
     "tactic": "credential-access"
   },
+  "T1046": {
+    "name": "Network Service Discovery",
+    "tactic": "discovery"
+  },
+  "T1190": {
+    "name": "Exploit Public-Facing Application",
+    "tactic": "initial-access"
+  },
   "T1555": {
     "name": "Credentials from Password Stores",
     "tactic": "credential-access"

@@ -18,6 +18,7 @@ function getTimeAgo(timestamp) {
 }
 
 function extractAttackType(incident) {
+  if (incident.detection_evidence?.behavior?.classification) return incident.detection_evidence.behavior.classification;
   if (incident.detection_evidence?.classification) return incident.detection_evidence.classification;
   if (incident.parent_process?.name && incident.culprit_process?.name) {
     return `${incident.parent_process.name} → ${incident.culprit_process.name}`;

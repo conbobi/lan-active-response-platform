@@ -21,10 +21,12 @@ from app.repositories.command_repository import CommandRepository
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 from app.schemas.enums import IncidentSeverity, IncidentStatus, CommandStatus
 from app.core.exceptions import NotFoundError, BadRequestError
+from app.core.agent_health import as_utc
 from app.services.core.base import AbstractService
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.common.notification_service import NotificationService
 from app.services.detection.network_reputation_service import NetworkReputationService
+from app.services.detection.behavior_evidence import SQLI
 
 logger = logging.getLogger(__name__)
 
@@ -146,18 +148,29 @@ class IncidentService(AbstractService[IncidentRepository]):
         self,
         agent_id: str,
         risk_score: float,
-        factors: Dict[str, Any]
+        factors: Dict[str, Any],
+        *,
+        behavior: Optional[dict] = None,
     ) -> Incident:
         """Deduplicate active risk incidents by agent and detection source."""
         auth_alert = factors.get("brute_force")
+        source = behavior["classification"] if behavior else "brute_force" if auth_alert else "risk_assessment"
         notes = (
-            "risk_source:brute_force"
-            if auth_alert else "Auto-generated incident on risk assessment threshold breach."
+            f"risk_source:{source}"
+            if behavior or auth_alert else "Auto-generated incident on risk assessment threshold breach."
         )
         now = datetime.now(timezone.utc)
-        source = "brute_force" if auth_alert else "risk_assessment"
         rule_ids = sorted(key for key in factors if key not in {"total_score", "score", "_scores"})
-        fingerprint = hashlib.sha256(json.dumps([source, rule_ids]).encode()).hexdigest()
+        identity = [source, rule_ids]
+        if behavior:
+            identity = [
+                source, behavior.get("evidence_type"), behavior.get("service"),
+                behavior.get("source_ip"), behavior.get("username"), behavior.get("destination_ip"),
+                behavior.get("protocol"), behavior.get("request_path") if behavior["evidence_type"] == "http" else None,
+            ]
+            if source == SQLI and behavior.get("request_path"):
+                identity = [source, behavior.get("service"), behavior.get("source_ip"), behavior["request_path"]]
+        fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
         await self.session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
         stmt = select(Incident).where(
             Incident.agent_id == agent_id, Incident.fingerprint == fingerprint,
@@ -171,18 +184,49 @@ class IncidentService(AbstractService[IncidentRepository]):
             IncidentSeverity.HIGH if risk_score >= 70.0 else IncidentSeverity.MEDIUM
         )
         scores = factors.get("_scores", {})
-        evidence = {"rule_id": source, "rule_version": "risk:1", "risk_calculated_at": now.isoformat(),
+        evidence = {"rule_id": source, "rule_version": "risk:2" if behavior else "risk:1", "risk_calculated_at": now.isoformat(),
                     "first_seen": now.isoformat(), "last_received_at": now.isoformat(), "observations": 1, "factors": [
             {"rule": key, "score": scores.get(key), "reason": str(value)}
             for key, value in factors.items() if key not in {"_scores", "total_score", "score"}
         ]}
+        if behavior:
+            evidence["behavior"] = behavior
 
         if existing:
             previous = existing.detection_evidence or {}
-            best = evidence if not previous or risk_score > existing.risk_score else previous
+            prior_observation = previous.get("behavior", {})
+            if behavior and prior_observation.get("evidence_id") == behavior.get("evidence_id"):
+                return existing
+            newer = behavior and (behavior.get("last_attempt_at") or "") >= (prior_observation.get("last_attempt_at") or "")
+            if source == SQLI and prior_observation and behavior and prior_observation["evidence_type"] != behavior["evidence_type"]:
+                old_time = as_utc(prior_observation.get("last_attempt_at"))
+                new_time = as_utc(behavior.get("last_attempt_at"))
+                same_request = (
+                    behavior.get("request_id") and behavior["request_id"] == prior_observation.get("request_id")
+                    and behavior.get("request_method") == prior_observation.get("request_method")
+                    and old_time and new_time and abs(old_time - new_time) <= timedelta(seconds=5)
+                )
+                if behavior["evidence_type"] == "http":
+                    if not same_request:
+                        return existing
+                    evidence = previous.copy()
+                    evidence["behavior"] = {
+                        **prior_observation, "http_event_id": behavior["source_event_ids"][0],
+                        "http_status": behavior.get("http_status") or prior_observation.get("http_status"),
+                    }
+                    newer = True
+                elif same_request:
+                    evidence["behavior"] = {
+                        **behavior, "http_event_id": prior_observation["source_event_ids"][0],
+                        "http_status": behavior.get("http_status") or prior_observation.get("http_status"),
+                    }
+                    newer = True
+            else:
+                same_request = False
+            best = evidence if newer or not previous or risk_score > existing.risk_score else previous
             existing.detection_evidence = {
                 **best, "first_seen": previous.get("first_seen", now.isoformat()),
-                "last_received_at": now.isoformat(), "observations": previous.get("observations", 1) + 1,
+                "last_received_at": now.isoformat(), "observations": previous.get("observations", 1) + int(not same_request),
             }
             existing.updated_at = now
             if risk_score > existing.risk_score:
@@ -194,8 +238,9 @@ class IncidentService(AbstractService[IncidentRepository]):
 
         inc_id = f"inc_{uuid.uuid4().hex[:12]}"
         title = (
-            f"Authentication Risk on Agent '{agent_id}' (Score: {risk_score})"
-            if auth_alert else f"High Risk Threat Spike on Agent '{agent_id}' (Score: {risk_score})"
+            f"{source.replace('_', ' ').capitalize()} on Agent '{agent_id}' (Score: {risk_score})" if behavior
+            else f"Authentication Risk on Agent '{agent_id}' (Score: {risk_score})" if auth_alert
+            else f"High Risk Threat Spike on Agent '{agent_id}' (Score: {risk_score})"
         )
         desc = f"Automated incident generated due to risk score {risk_score}.\nFactors: {factors}"
 

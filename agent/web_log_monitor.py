@@ -1,11 +1,16 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import re
-import urllib.parse
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, Callable
+
+if __package__:
+    from .vulnerable_web.http_evidence import SQL_PATTERNS, safe_http_target
+else:
+    from vulnerable_web.http_evidence import SQL_PATTERNS, safe_http_target
 
 logger = logging.getLogger("larp_agent.web_log_monitor")
 
@@ -42,9 +47,6 @@ class WebLogMonitor:
     RE_CLIENT_IP = re.compile(
         r'(?i)(?:client_ip|client-ip|remote_addr|src_ip|ip)["\s:=]+"?([0-9a-fA-F.:]+)',
         re.IGNORECASE
-    )
-    RE_GENERIC_IP = re.compile(
-        r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
     )
     RE_USER_AGENT = re.compile(
         r'(?i)"?User-Agent"?\s*[:=]\s*(?:\[\s*"([^"]+)"\s*\]|"([^"]+)"|([^\s,}\]]+))',
@@ -94,18 +96,22 @@ class WebLogMonitor:
 
         now_iso = datetime.now(timezone.utc).isoformat()
         message_body = line_str
+        journal_timestamp = None
 
         # 1. Handle journalctl -o json format: {"MESSAGE": "...", "__REALTIME_TIMESTAMP": "..."}
         if line_str.startswith("{") and line_str.endswith("}"):
             try:
                 journal_entry = json.loads(line_str)
                 if isinstance(journal_entry, dict):
+                    stamp = journal_entry.get("__REALTIME_TIMESTAMP")
+                    if isinstance(stamp, str) and stamp.isascii() and stamp.isdecimal() and len(stamp) <= 17:
+                        journal_timestamp = datetime.fromtimestamp(int(stamp) / 1_000_000, timezone.utc).isoformat()
                     if "MESSAGE" in journal_entry:
                         message_body = str(journal_entry["MESSAGE"]).strip()
                     elif "message" in journal_entry:
                         message_body = str(journal_entry["message"]).strip()
-            except Exception:
-                pass
+            except (ValueError, OverflowError, OSError):
+                logger.debug("Invalid journal envelope for HTTP observation")
 
         # 2. Check if message_body is itself a JSON object from cloudflared / web app
         if message_body.startswith("{") and message_body.endswith("}"):
@@ -144,31 +150,28 @@ class WebLogMonitor:
                     if not user_agent:
                         user_agent = str(payload.get("user_agent") or payload.get("user-agent") or "")
 
-                    # Extract path and method
-                    path = str(payload.get("path") or payload.get("url") or payload.get("uri") or "/")
-                    method = str(payload.get("method") or payload.get("http_method") or "GET").upper()
-                    host = str(payload.get("host") or payload.get("hostname") or "")
-                    status_code = int(payload.get("status") or payload.get("status_code") or 200)
-
-                    # Unquote URL path for SQLi/traversal analysis
-                    try:
-                        path = urllib.parse.unquote(path)
-                    except Exception:
-                        pass
-
-                    if src_ip or user_agent or path != "/" or method != "GET":
+                    target = str(payload.get("path") or payload.get("url") or payload.get("uri") or "")
+                    path, indicators = safe_http_target(target)
+                    provided = payload.get("payload_indicators")
+                    if isinstance(provided, list):
+                        indicators.update(item for item in provided if isinstance(item, str) and item in SQL_PATTERNS)
+                    method = str(payload.get("method") or payload.get("http_method") or "").upper()
+                    if path and method in {"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}:
+                        stamp = payload.get("timestamp")
+                        request_id = payload.get("request_id")
+                        if request_id is None and stamp:
+                            request_id = hashlib.sha256(message_body.encode()).hexdigest()
                         return {
                             "src_ip": str(src_ip or "unknown").strip(),
-                            "host": host,
-                            "path": path,
-                            "http_method": method,
-                            "user_agent": user_agent,
-                            "status_code": status_code,
-                            "timestamp": now_iso,
-                            "raw_message": message_body[:1024]
+                            "host": str(payload.get("host") or payload.get("hostname") or "")[:128],
+                            "path": path, "http_method": method, "user_agent": user_agent[:256],
+                            "status_code": payload.get("status_code") or payload.get("status"),
+                            "timestamp": stamp or journal_timestamp or now_iso, "request_id": request_id,
+                            "timestamp_source": "log" if stamp or journal_timestamp else "agent_receipt",
+                            "service": payload.get("service"), "payload_indicators": sorted(indicators),
                         }
-            except Exception:
-                pass
+            except (ValueError, TypeError, OverflowError):
+                logger.debug("Invalid structured HTTP observation")
 
         # 3. Unstructured / Semi-structured text parsing (Regex fallback)
         # Must contain signs of an HTTP request or cloudflared proxy event
@@ -191,27 +194,13 @@ class WebLogMonitor:
             if p_match:
                 path = p_match.group(1)
 
-        # Unquote path
-        try:
-            path = urllib.parse.unquote(path)
-        except Exception:
-            pass
-
-        # Extract Client IP (Cf-Connecting-Ip is highest priority)
+        path, indicators = safe_http_target(path)
+        if not req_match and not m_match:
+            return None
         src_ip = "unknown"
-        cf_match = cls.RE_IP_HEADER.search(message_body)
-        if cf_match:
-            src_ip = cf_match.group(1)
-        else:
-            cl_match = cls.RE_CLIENT_IP.search(message_body)
-            if cl_match:
-                src_ip = cl_match.group(1)
-            else:
-                # Find any IPv4 not equal to localhost
-                all_ips = cls.RE_GENERIC_IP.findall(message_body)
-                valid_ips = [ip for ip in all_ips if not ip.startswith("127.") and ip != "0.0.0.0"]
-                if valid_ips:
-                    src_ip = valid_ips[0]
+        ip_match = cls.RE_IP_HEADER.search(message_body) or cls.RE_CLIENT_IP.search(message_body)
+        if ip_match:
+            src_ip = ip_match[1]
 
         # Extract User-Agent
         user_agent = ""
@@ -227,13 +216,13 @@ class WebLogMonitor:
             host = host_match.group(1) or host_match.group(2) or ""
 
         # Extract Status Code
-        status_code = 200
+        status_code = None
         st_match = cls.RE_STATUS.search(message_body)
         if st_match:
             try:
                 status_code = int(st_match.group(1) or st_match.group(2))
-            except Exception:
-                status_code = 200
+            except (TypeError, ValueError):
+                status_code = None
 
         # Discard irrelevant system noise lines (e.g. cloudflared internal healthcheck pings without client IP or user agent)
         if src_ip == "unknown" and not user_agent and path == "/":
@@ -242,12 +231,13 @@ class WebLogMonitor:
         return {
             "src_ip": src_ip.strip(),
             "host": host.strip(),
-            "path": path.strip(),
+            "path": path,
             "http_method": method.strip(),
             "user_agent": user_agent.strip(),
             "status_code": status_code,
-            "timestamp": now_iso,
-            "raw_message": message_body[:1024]
+            "timestamp": journal_timestamp or now_iso,
+            "timestamp_source": "log" if journal_timestamp else "agent_receipt",
+            "payload_indicators": sorted(indicators)
         }
 
 
@@ -267,12 +257,7 @@ async def send_web_log(ws, log_data: Dict[str, Any], agent_id: Optional[str] = N
     }
     try:
         await ws.send(json.dumps(message))
-        print(
-            f"[{aid}] [WebLogMonitor] Dispatched WEB_ACCESS_LOG: "
-            f"{log_data.get('src_ip')} {log_data.get('http_method')} {log_data.get('path')} "
-            f"(UA: '{log_data.get('user_agent')}')",
-            flush=True
-        )
+        logger.debug("Dispatched WEB_ACCESS_LOG for Agent %s", aid)
         return True
     except Exception as e:
         logger.warning(f"Failed to send WEB_ACCESS_LOG over WebSocket: {e}")
@@ -282,7 +267,8 @@ async def send_web_log(ws, log_data: Dict[str, Any], agent_id: Optional[str] = N
 async def tail_cloudflared_logs(
     ws=None,
     callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    stop_event: Optional[asyncio.Event] = None
+    stop_event: Optional[asyncio.Event] = None,
+    *, fallback=True,
 ):
     """
     Continuously tails cloudflared and web access logs using `journalctl -u cloudflared -u vulnerable_web -f -o json`.
@@ -325,7 +311,8 @@ async def tail_cloudflared_logs(
                                 flush=True
                             )
                             print(f"[{AGENT_ID}] [WebLogMonitor] Switching to fallback log file monitoring...", flush=True)
-                            await _tail_fallback_files(ws, callback, stop_event)
+                            if fallback:
+                                await _tail_fallback_files(ws, callback, stop_event)
                             return
                     break
 
@@ -346,7 +333,8 @@ async def tail_cloudflared_logs(
         except FileNotFoundError:
             # journalctl command not found (e.g. non-systemd container)
             print(f"[{AGENT_ID}] [WebLogMonitor] journalctl not found, switching to fallback log files...", flush=True)
-            await _tail_fallback_files(ws, callback, stop_event)
+            if fallback:
+                await _tail_fallback_files(ws, callback, stop_event)
             break
         except Exception as e:
             print(f"[{AGENT_ID}] [WebLogMonitor] Error in log tailer: {e}. Retrying in {retry_delay}s...", flush=True)
@@ -370,7 +358,7 @@ async def _tail_fallback_files(
     stop_event: Optional[asyncio.Event] = None
 ):
     """
-    Fallback file-based tailing for environments without systemd journalctl.
+    Tail access files even when the journal stream is available.
     """
     positions: Dict[str, int] = {}
 
@@ -384,6 +372,7 @@ async def _tail_fallback_files(
                 if curr_size < last_pos:
                     last_pos = 0  # Truncated or rotated
 
+                positions[path] = last_pos
                 if curr_size > last_pos:
                     with open(path, "r", encoding="utf-8", errors="ignore") as f:
                         f.seek(last_pos)
@@ -410,10 +399,18 @@ async def web_log_monitor_task(ws):
     """
     Task entrypoint for inclusion in agent.py's asyncio.gather loop.
     """
+    tasks = (
+        asyncio.create_task(tail_cloudflared_logs(ws=ws, fallback=False)),
+        asyncio.create_task(_tail_fallback_files(ws=ws)),
+    )
     try:
-        await tail_cloudflared_logs(ws=ws)
+        await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logger.info("web_log_monitor_task cancelled.")
     except Exception as e:
         logger.error(f"web_log_monitor_task exited with error: {e}")
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 

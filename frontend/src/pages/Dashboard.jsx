@@ -329,7 +329,7 @@ export default function Dashboard() {
                                 gap: '0.6rem',
                                 flexWrap: 'wrap',
                             }}>
-                                <span>Phân loại: <strong style={{ color: 'var(--text-primary)' }}>{incident.detection_evidence?.classification || 'Host / Endpoint Execution'}</strong></span>
+                                <span>Phân loại: <strong style={{ color: 'var(--text-primary)' }}>{incident.detection_evidence?.behavior?.classification || incident.detection_evidence?.classification || 'Host / Endpoint Execution'}</strong></span>
                                 {incident.confidence != null && (
                                     <span style={{
                                         background: 'rgba(56, 189, 248, 0.15)',

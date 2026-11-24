@@ -1,14 +1,36 @@
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.auth_event import AuthEvent
+from app.models.event import Event
 from app.repositories.base import SqlAlchemyRepository
 
 
 class AuthEventRepository(SqlAlchemyRepository[AuthEvent]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, AuthEvent)
+
+    async def get_attempt_window(self, agent_id, start, end, services, sources, exclude, accounts=()):
+        stmt = (
+            select(AuthEvent, Event.details)
+            .outerjoin(Event, (Event.id == AuthEvent.id) & (Event.agent_id == AuthEvent.agent_id)
+                       & (Event.event_type == "AUTH_OBSERVATION"))
+            .where(AuthEvent.agent_id == agent_id, AuthEvent.service.in_(services),
+                   or_(AuthEvent.source_ip.in_(sources), AuthEvent.username.in_(accounts)),
+                   AuthEvent.timestamp >= start, AuthEvent.timestamp <= end)
+            .order_by(AuthEvent.timestamp.desc(), AuthEvent.id).limit(2048)
+        )
+        if exclude:
+            stmt = stmt.where(AuthEvent.id.not_in(exclude))
+        else:
+            stmt = stmt.where(AuthEvent.timestamp < end)
+        return [
+            {**(details or {}), "evidence_id": row.id, "service": row.service, "source_ip": row.source_ip,
+             "username": row.username, "status": row.status, "count": row.count, "timestamp": row.timestamp,
+             "timestamp_source": (details or {}).get("timestamp_source", "legacy_receipt")}
+            for row, details in await self.session.execute(stmt)
+        ]
 
     async def get_failed_attempt_groups(
         self, agent_id: str, before: datetime, window_seconds: int, services: set[str]

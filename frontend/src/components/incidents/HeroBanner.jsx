@@ -28,6 +28,7 @@ export default function HeroBanner({
   if (!incident) return null;
 
   const culprit = incident.culpritProcess || incident.culprit_process || null;
+  const behavior = incident.detection_evidence?.behavior;
 
   const generateNarrative = () => incident.story || incident.description || 'Chưa có bằng chứng chi tiết.';
   const isFalsePositive = incident.status === 'false_positive' || incident.label === 'false_positive';
@@ -108,6 +109,23 @@ export default function HeroBanner({
           <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
             {incident.title}
           </h2>
+          {behavior?.classification && (
+            <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              <strong>{behavior.classification}</strong>
+              {behavior.source_ip && <span> · {behavior.source_ip}</span>}
+              {behavior.service && <span> · {behavior.service}</span>}
+              {Number.isInteger(behavior.failed_attempts) && (
+                <span> · {behavior.failed_attempts} bản ghi thất bại</span>
+              )}
+              {Number.isInteger(behavior.successful_attempts) && (
+                <span> · {behavior.successful_attempts} bản ghi thành công</span>
+              )}
+              {behavior.legacy_duplicate_status === 'unresolved_mirrors' && (
+                <div>Có thể có bản ghi trùng giữa các file log.</div>
+              )}
+              {behavior.exploitation_outcome === 'undetermined' && <div>Kết quả khai thác chưa xác định.</div>}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
             {mitreTags.map(tag => (
               <span key={tag.id} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.78rem' }}>

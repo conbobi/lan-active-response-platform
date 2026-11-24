@@ -3,7 +3,7 @@ import ipaddress
 import json
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -22,6 +22,7 @@ from app.services.agent.activity import process_identity, record_sample
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.services.detection.risk_rules.brute_force_rule import normalize_auth_event
+from app.services.detection.behavior_evidence import REQUEST_ID, address, http_fields, observed_time, stable_id
 from app.models.process_info import ProcessInfo
 from app.repositories.process_info_repository import ProcessInfoRepository
 from app.models.flow import Flow
@@ -37,7 +38,6 @@ from app.services.common.notification_service import NotificationService
 from app.schemas.incident import IncidentCreate
 from app.services.incident.incident_service import IncidentService
 from app.models.auth_event import AuthEvent
-from app.repositories.auth_event_repository import AuthEventRepository
 from app.models.web_access_log import WebAccessLog
 from app.repositories.web_access_log_repository import WebAccessLogRepository
 from app.core.database import AsyncSessionLocal
@@ -288,6 +288,8 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
 async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
+    if target_agent_id != agent_id:
+        return {"status": "error", "message": "Invalid telemetry Agent"}
     platform_name = payload.get("platform", "linux")
     logger.info(f"Processing TELEMETRY_RISK for agent '{target_agent_id}' (platform: {platform_name})")
 
@@ -295,8 +297,8 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
     accepted = await record_sample(session, target_agent_id, "socket", payload, conns)
     if accepted is False:
         return {"status": "ack", "message": "Observation already superseded"} if data.get("wait_ack", True) else None
+    flows = []
     if isinstance(conns, list):
-        flows = []
         now_dt = datetime.now(timezone.utc)
         for conn in conns[:200]:
             if not isinstance(conn, dict):
@@ -309,7 +311,7 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
                 if not 0 <= src_port <= 65535 or not 0 < dst_port <= 65535:
                     continue
                 socket_evidence = None
-                if conn.get("attribution"):
+                if conn.get("attribution") or conn.get("direction") in ("inbound", "outbound"):
                     socket_evidence = {key: conn[key] for key in (
                         "status", "direction", "observed_at", "first_seen", "inode", "socket_id", "holders", "originator_pid",
                         "attribution", "attribution_reason", "interfaces", "overlay", "bytes_sent", "bytes_received",
@@ -338,9 +340,11 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
         logger.error(f"rule_engine hook failed for agent '{target_agent_id}': {e}", exc_info=True)
 
     risk_service = RiskAssessmentService(session)
+    inbound = [row for row in flows if (row.socket_evidence or {}).get("direction") == "inbound"]
     record = await risk_service.process_risk(
         agent_id=target_agent_id,
-        data=payload
+        data=payload,
+        **({"flow_observations": inbound} if inbound else {}),
     )
     logger.info(f"Calculated risk score {record.score} for agent '{target_agent_id}'")
     if data.get("wait_ack", True):
@@ -583,44 +587,70 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
 
 
 async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
-    payload = data.get("payload", {})
-    target_agent_id = payload.get("agent_id", agent_id)
-    now_dt = datetime.now(timezone.utc)
-    auth_repo = AuthEventRepository(session)
-
-    raw_events = payload.get("events") if isinstance(payload.get("events"), list) else [payload]
-    events_list = []
-    for raw_event in raw_events:
-        evt = normalize_auth_event(raw_event) if isinstance(raw_event, dict) else None
-        if evt is None:
+    payload = data.get("payload")
+    if not isinstance(payload, dict) or payload.get("agent_id", agent_id) != agent_id:
+        return {"status": "error", "message": "Invalid authentication Agent"}
+    now = datetime.now(timezone.utc)
+    await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
+    raw = payload.get("events")
+    raw_events = raw if isinstance(raw, list) else [payload]
+    events = []
+    seen = set()
+    for item in raw_events:
+        event = normalize_auth_event(item) if isinstance(item, dict) else None
+        if event is None:
             continue
-        events_list.append(evt)
-        auth_record = AuthEvent(
-            id=f"auth_{uuid.uuid4().hex[:12]}",
-            agent_id=target_agent_id,
-            service=evt["service"],
-            source_ip=evt["source_ip"],
-            username=evt["username"],
-            status=evt["status"],
-            count=evt["count"],
-            timestamp=now_dt,
-            created_at=now_dt
+        source_id = item.get("event_id") or event.get("request_id")
+        identifier = (
+            stable_id("auth_", agent_id, event["service"], source_id)
+            if isinstance(source_id, str) and REQUEST_ID.fullmatch(source_id)
+            else f"auth_{uuid.uuid4().hex}"
         )
-        await auth_repo.add(auth_record)
-
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        stamp = event["timestamp"]
+        if stamp is None or stamp > now + timedelta(seconds=30):
+            stamp = now
+            event["timestamp_source"] = "manager_receipt"
+        events.append({**event, "evidence_id": identifier, "timestamp": stamp})
+    existing = set()
+    identities = sorted(seen)
+    for start in range(0, len(identities), 1024):
+        existing.update(await session.scalars(
+            select(AuthEvent.id).where(AuthEvent.id.in_(identities[start:start + 1024]))
+        ))
+    fresh = []
+    for event in events:
+        identifier = event["evidence_id"]
+        if identifier in existing:
+            continue
+        stamp = event["timestamp"]
+        session.add(AuthEvent(
+            id=identifier, agent_id=agent_id, service=event["service"], source_ip=event["source_ip"],
+            username=event["username"], status=event["status"], count=event["count"], timestamp=stamp, created_at=now,
+        ))
+        properties = {
+            key: value for key, value in event.items()
+            if key in {"request_id", "request_method", "request_path", "http_status", "user_agent",
+                       "payload_indicators", "timestamp_source", "auth_method"} and value is not None
+        }
+        session.add(Event(
+            id=identifier, agent_id=agent_id, event_type="AUTH_OBSERVATION",
+            source="AGENT_AUTH", severity=IncidentSeverity.LOW, details=properties, created_at=now,
+        ))
+        if stamp >= now - timedelta(minutes=5):
+            fresh.append(event)
     score = 0.0
-    if events_list:
+    if fresh:
+        await session.flush()
         record = await RiskAssessmentService(session).process_risk(
-            agent_id=target_agent_id,
-            data={"auth_events": events_list, "agent_id": target_agent_id},
-            auth_history_before=now_dt,
+            agent_id=agent_id, data={"auth_events": fresh, "agent_id": agent_id},
+            auth_history_before=now,
         )
         score = record.score
-    logger.info(f"Recorded AUTH_EVENT for agent '{target_agent_id}' (risk: {score})")
-    if data.get("wait_ack", True):
-        return {"status": "ack", "message": "Auth event processed", "score": score}
-    return None
-
+    logger.info("Recorded AUTH_EVENT for Agent %s (risk=%s)", agent_id, score)
+    return {"status": "ack", "message": "Auth event processed", "score": score} if data.get("wait_ack", True) else None
 
 async def _handle_yara_scan_alert(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
@@ -667,106 +697,51 @@ async def _handle_yara_scan_alert(agent_id: str, data: dict, session: AsyncSessi
 
 async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("agent_id", agent_id) != agent_id:
         return None
-
-    target_agent_id = payload.get("agent_id", agent_id)
-    src_ip = str(payload.get("src_ip") or payload.get("client_ip") or "unknown")[:64]
+    observation = http_fields(payload)
+    if not observation.get("request_method") or not observation.get("request_path"):
+        return None
+    src_ip = address(payload.get("src_ip") or payload.get("client_ip")) or "unknown"
     host = str(payload.get("host") or "")[:128]
-    method = str(payload.get("method") or payload.get("http_method") or "GET").upper()[:16]
-    path = str(payload.get("path") or payload.get("url") or "/")[:1024]
-    user_agent = str(payload.get("user_agent") or "")[:512]
-
-    try:
-        status_code = int(payload.get("status_code") or payload.get("status") or 200)
-    except (ValueError, TypeError):
-        status_code = 200
-
-    raw_message = str(payload.get("raw_message") or payload.get("raw_log") or "")
-
-    # Parse timestamp
-    now_dt = datetime.now(timezone.utc)
-    ts_val = payload.get("timestamp")
-    if ts_val:
-        try:
-            if isinstance(ts_val, (int, float)):
-                ts_dt = datetime.fromtimestamp(ts_val, tz=timezone.utc)
-            elif isinstance(ts_val, str):
-                ts_dt = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
-            else:
-                ts_dt = now_dt
-        except Exception:
-            ts_dt = now_dt
-    else:
-        ts_dt = now_dt
-
-    # 1. Persist to database
+    service = payload.get("service")
+    service = service if service == "flask_web" else host or "web"
+    now = datetime.now(timezone.utc)
+    stamp = observed_time(payload.get("timestamp"))
+    time_source = payload.get("timestamp_source")
+    time_source = time_source if time_source in ("log", "application", "agent_receipt") else "log"
+    if stamp is None or stamp > now + timedelta(seconds=30):
+        stamp = now
+        time_source = "manager_receipt"
+    request_id = observation.get("request_id")
+    identifier = stable_id("wlog_", agent_id, request_id) if request_id else f"wlog_{uuid.uuid4().hex}"
+    await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
+    if request_id and await session.get(WebAccessLog, identifier) is not None:
+        return {"status": "ack", "message": "Web access log already recorded"} if data.get("wait_ack") else None
     web_repo = WebAccessLogRepository(session)
-    log_record = WebAccessLog(
-        id=f"wlog_{uuid.uuid4().hex[:12]}",
-        agent_id=target_agent_id,
-        src_ip=src_ip,
-        host=host,
-        method=method,
-        path=path,
-        user_agent=user_agent,
-        status_code=status_code,
-        raw_message=raw_message,
-        timestamp=ts_dt,
-        created_at=now_dt
+    await web_repo.add(WebAccessLog(
+        id=identifier, agent_id=agent_id, src_ip=src_ip, host=host,
+        method=observation["request_method"], path=observation["request_path"],
+        user_agent=observation.get("user_agent"), status_code=observation.get("http_status", 0),
+        raw_message=json.dumps({"source": "normalized_http", "service": service, **observation}),
+        timestamp=stamp, created_at=now,
+    ))
+    normalized = {
+        **observation, "evidence_id": identifier, "agent_id": agent_id, "src_ip": src_ip,
+        "host": host, "service": service, "timestamp": stamp.isoformat(), "timestamp_source": time_source,
+        "method": observation["request_method"], "path": observation["request_path"],
+    }
+    for match in rule_engine.evaluate_web_log(normalized):
+        session.add(Event(
+            id=f"evt_{uuid.uuid4().hex[:12]}", agent_id=agent_id, event_type="WEB_ATTACK_DETECTED",
+            severity=IncidentSeverity(match.severity), source="NDR_WEB_LOG",
+            details={**normalized, "rule_id": match.rule_id}, created_at=now,
+        ))
+    record = await RiskAssessmentService(session).process_risk(
+        agent_id=agent_id, data={"agent_id": agent_id, "web_logs": [normalized]}, trusted_web=True,
     )
-    await web_repo.add(log_record)
-
-    # 2. Evaluate single log with rule engine
-    normalized_log = {
-        "agent_id": target_agent_id,
-        "src_ip": src_ip,
-        "host": host,
-        "method": method,
-        "path": path,
-        "user_agent": user_agent,
-        "status_code": status_code,
-        "raw_message": raw_message,
-        "timestamp": ts_dt.isoformat()
-    }
-    matches = rule_engine.evaluate_web_log(normalized_log)
-    if matches:
-        event_repo = EventRepository(session)
-        sev_map = {
-            "low": IncidentSeverity.LOW,
-            "medium": IncidentSeverity.MEDIUM,
-            "high": IncidentSeverity.HIGH,
-            "critical": IncidentSeverity.CRITICAL,
-        }
-        for m in matches:
-            evt_record = Event(
-                id=f"evt_{uuid.uuid4().hex[:12]}",
-                agent_id=target_agent_id,
-                event_type="WEB_ATTACK_DETECTED",
-                severity=sev_map.get(m.severity.lower(), IncidentSeverity.HIGH),
-                source="NDR_WEB_LOG",
-                details={**normalized_log, "rule_id": m.rule_id, "detail": m.detail},
-                processed=False,
-                created_at=now_dt
-            )
-            await event_repo.add(evt_record)
-
-    # 3. Trigger Risk Assessment & AI Triage
-    risk_service = RiskAssessmentService(session)
-    telemetry = {
-        "agent_id": target_agent_id,
-        "web_log": normalized_log,
-        "web_logs": [normalized_log]
-    }
-    rec = await risk_service.process_risk(agent_id=target_agent_id, data=telemetry)
-    if hasattr(rec, "incident") and rec.incident:
-        logger.info(f"Hook: Triggering AI Triage for web attack incident {rec.incident.id}")
-        asyncio.create_task(_run_ai_triage(rec.incident.id))
-
-    logger.info(f"Recorded WEB_ACCESS_LOG for agent '{target_agent_id}' from {src_ip} {method} {path} (risk: {rec.score if rec else 0.0})")
-    if data.get("wait_ack", False):
-        return {"status": "ack", "message": "Web access log processed", "score": rec.score if rec else 0.0}
-    return None
+    logger.info("Recorded WEB_ACCESS_LOG for Agent %s (risk=%s)", agent_id, record.score)
+    return {"status": "ack", "message": "Web access log processed", "score": record.score} if data.get("wait_ack", False) else None
 
 
 MESSAGE_HANDLERS = {

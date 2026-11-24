@@ -7,10 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.services.ai.alert_context_projector import AlertContext
 from app.services.ai.knowledge.mitre_kb import mitre_kb
+from app.services.detection.behavior_evidence import BEHAVIORS, BRUTE_FORCE, REPEATED, SCAN, SQLI, UNKNOWN
 
 Classification = Literal[
     "benign_expected", "suspicious_unconfirmed", "likely_malicious",
     "confirmed_malicious", "insufficient_telemetry",
+    "repeated_auth_failures", "authentication_brute_force", "sqli_probing",
+    "network_service_scanning", "unknown_automated_activity",
 ]
 EvidenceID = Annotated[str, Field(pattern=r"^[PNF][1-9][0-9]{0,2}$")]
 EvidenceIDs = Annotated[list[EvidenceID], Field(max_length=8)]
@@ -47,6 +50,7 @@ class ValidatedVerdict:
     confidence: float
     evidence_ids: list[str]
     techniques: list[dict]
+    evidence_completeness: str | None = None
 
 
 def _unique_keys(pairs):
@@ -79,12 +83,33 @@ def permitted_techniques(context: AlertContext, used_ids: set[str]) -> set[str]:
     # A static mapping or a network tuple alone cannot establish the C2 protocol
     # or command execution. Other mappings still need relevant structured facts.
     facts = [context.by_id[key] for key in used_ids if key in context.by_id]
-    if any(item.get("kind") == "authentication" and item.get("service") not in (None, "N/A")
-           for item in facts):
-        return {tech for tech in context.mapped_techniques if tech.startswith("T1110")}
+    behavior_techniques = {item["verified_technique"] for item in facts
+                           if item.get("kind") == "behavior" and item.get("verified_technique")}
+    if behavior_techniques:
+        return behavior_techniques
     if any(item.get("kind") == "fim" and item.get("path") not in (None, "N/A") for item in facts):
         return {tech for tech in context.mapped_techniques if not tech.startswith(("T1071", "T1059"))}
     return set()
+
+
+def behavior_verdict(context: AlertContext) -> ValidatedVerdict | None:
+    for item in context.facts:
+        if item.get("kind") == "behavior":
+            key = item["id"]
+            tech = item.get("verified_technique")
+            techniques = [format_technique(tech, [key])] if tech and mitre_kb.validate_technique(tech) else []
+            completeness = item.get("evidence_completeness", "partial")
+            classification = item["classification"]
+            confidence = {
+                REPEATED: 0.9, BRUTE_FORCE: 0.85, SCAN: 0.85,
+                SQLI: 0.85 if tech else 0.7, UNKNOWN: 0.45,
+            }[classification]
+            return ValidatedVerdict(
+                classification, confidence, [key], techniques, completeness,
+            )
+        if item.get("kind") == "authentication" and type(item.get("reported_failed_attempts")) is int:
+            return ValidatedVerdict(REPEATED, 0.5, [item["id"]], [], "partial")
+    return None
 
 
 def validate_verdict(output: TriageVerdict, context: AlertContext) -> ValidatedVerdict:
@@ -104,6 +129,10 @@ def validate_verdict(output: TriageVerdict, context: AlertContext) -> ValidatedV
         seen.add(claim.id)
 
     classification, confidence = output.classification, output.confidence
+    if (behavior := behavior_verdict(context)) is not None:
+        return behavior
+    if classification in BEHAVIORS:
+        classification, confidence = "suspicious_unconfirmed", min(confidence, 0.5)
     if context.verified_shell:
         if context.verified_shell not in used:
             return ValidatedVerdict(
@@ -138,6 +167,8 @@ def has_structured_evidence(context: AlertContext, used_ids: set[str]) -> bool:
         if item.get("kind") == "fim" and item.get("path") not in (None, "N/A"):
             return True
         if item.get("kind") == "authentication" and item.get("service") not in (None, "N/A"):
+            return True
+        if item.get("kind") == "behavior" and item.get("source_event_ids"):
             return True
     return False
 

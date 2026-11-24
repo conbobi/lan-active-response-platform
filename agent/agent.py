@@ -607,10 +607,10 @@ async def send_risk_telemetry(websocket):
             await send_ws_json_no_wait(websocket, message)
 
             # AUTH_EVENT is the canonical ingestion path for authentication logs.
-            if auth_events:
+            for offset in range(0, len(auth_events), 1024):
                 auth_msg = {
                     "type": "AUTH_EVENT",
-                    "payload": {"agent_id": AGENT_ID, "events": auth_events},
+                    "payload": {"agent_id": AGENT_ID, "events": auth_events[offset:offset + 1024]},
                     "wait_ack": False
                 }
                 await send_ws_json_no_wait(websocket, auth_msg)

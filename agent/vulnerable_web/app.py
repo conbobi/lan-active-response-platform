@@ -2,6 +2,7 @@
 # ~/vulnerable_web/app.py
 
 from flask import (
+    g,
     Flask,
     request,
     session,
@@ -20,8 +21,14 @@ import subprocess
 import hashlib
 import time
 import threading
+import uuid
 
 from datetime import datetime, timezone
+
+if __package__:
+    from .http_evidence import ACCOUNT, safe_http_target, sql_indicators
+else:
+    from http_evidence import ACCOUNT, safe_http_target, sql_indicators
 
 
 # ============================================================
@@ -104,89 +111,69 @@ if not access_logger.handlers:
 
 
 def get_client_ip():
-    """
-    Lấy IP Client từ Cloudflare Tunnel, Reverse Proxy (X-Forwarded-For) hoặc Direct Request.
-    """
-    cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if cf_ip:
+    remote = request.remote_addr or "unknown"
+    # Forwarded headers are accepted only from a configured proxy peer.
+    try:
+        peer = ipaddress.ip_address(remote)
+    except ValueError:
+        return remote, "remote_addr"
+    for configured in os.getenv("LARP_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128").split(","):
         try:
-            return (str(ipaddress.ip_address(cf_ip)), "cloudflare")
+            if peer not in ipaddress.ip_network(configured.strip(), strict=False):
+                continue
         except ValueError:
-            pass
+            app.logger.warning("Invalid LARP trusted proxy CIDR")
+            continue
+        cf = request.headers.get("CF-Connecting-IP", "").strip()
+        forwarded = request.headers.get("X-Forwarded-For", "").rsplit(",", 1)[-1].strip()
+        for candidate, source in ((cf, "cf_connecting_ip"), (forwarded, "x_forwarded_for")):
+            try:
+                return str(ipaddress.ip_address(candidate)), source
+            except ValueError:
+                continue
+        break
+    return remote, "remote_addr"
 
-    xff = request.headers.get("X-Forwarded-For", "").strip()
-    if xff:
-        client = xff.split(",")[0].strip()
-        try:
-            return (str(ipaddress.ip_address(client)), "x_forwarded_for")
-        except ValueError:
-            pass
 
-    remote_ip = request.remote_addr or "unknown"
-    return remote_ip, "remote_addr"
+@app.before_request
+def assign_observation_id():
+    g.observation_id = uuid.uuid4().hex
 
 
 @app.after_request
 def log_http_access_telemetry(response):
-    """
-    Ghi lại toàn bộ HTTP request telemetry vào access.log để WebLogMonitor
-    trên LARP Agent phát hiện công cụ quét mạng (Hydra, nmap, sqlmap, nikto, v.v.).
-    """
-    try:
-        client_ip, ip_source = get_client_ip()
-        full_path = request.full_path if request.query_string else request.path
-        entry = {
-            "client_ip": client_ip,
-            "ip_source": ip_source,
-            "method": request.method,
-            "path": full_path,
-            "status_code": response.status_code,
-            "user_agent": request.headers.get("User-Agent", ""),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "host": request.host,
-        }
-        json_line = json.dumps(entry, ensure_ascii=False)
-        access_logger.info(json_line)
-    except Exception:
-        pass
+    client_ip, ip_source = get_client_ip()
+    route, indicators = safe_http_target(request.full_path)
+    auth = g.get("authentication_observation")
+    if auth:
+        indicators.update(auth["payload_indicators"])
+    if request.url_rule is not None:
+        route = request.url_rule.rule
+    ua = request.headers.get("User-Agent", "")[:256]
+    entry = {
+        "client_ip": client_ip, "ip_source": ip_source, "method": request.method,
+        "path": route, "status_code": response.status_code,
+        "user_agent": ua if ua.isprintable() else "", "request_id": g.observation_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(), "host": request.host,
+        "service": "flask_web", "payload_indicators": sorted(indicators),
+    }
+    access_logger.info(json.dumps(entry, ensure_ascii=False))
+    if auth is not None:
+        auth_logger.info(json.dumps({
+            **entry, **auth, "source_ip": client_ip, "http_status": response.status_code,
+            "payload_indicators": entry["payload_indicators"],
+        }, ensure_ascii=False))
     return response
 
 
 def write_auth_event(status, username, error_type=None):
-
-    client_ip, ip_source = get_client_ip()
-
-    event = {
-        "status": status,
-
-        "event_type": "WEB_AUTH_" + status.upper(),
-
-        "timestamp": datetime.now(
-            timezone.utc
-        ).isoformat(),
-
-        "username": str(username or "")[:128],
-
-        "source_ip": client_ip,
-
-        "ip_source": ip_source,
-
-        "service": "flask_web",
-
-        "path": request.path,
-
-        "method": request.method
+    indicators = sql_indicators(username)
+    g.authentication_observation = {
+        "status": status, "event_type": "WEB_AUTH_" + status.upper(),
+        "username": username if isinstance(username, str) and ACCOUNT.fullmatch(username) and not indicators else None,
+        "auth_method": "password", "timestamp_source": "application",
+        "payload_indicators": sorted(indicators), "error_type": error_type,
     }
-
-    if error_type:
-        event["error_type"] = error_type
-
-    auth_logger.info(
-        json.dumps(
-            event,
-            ensure_ascii=False
-        )
-    )
 
 
 def write_lab_event(event_type, details=None):

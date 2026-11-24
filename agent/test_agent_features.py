@@ -201,3 +201,24 @@ def test_socket_telemetry_uses_the_observed_file_descriptor(monkeypatch):
     descriptors["1"] = "socket:[43]"
     sample, = telemetry.collect_connections(tracker)
     assert sample["holders"][0]["socket_stdio"] is False
+
+
+def test_auth_monitor_deduplicates_mirrors_and_ignores_non_auth_records(tmp_path):
+    from auth_monitor import AuthMonitor
+
+    monitor = AuthMonitor(agent_id="test-agent")
+    paths = [tmp_path / "primary.log", tmp_path / "mirror.log"]
+    monitor.LOG_PATHS = [str(path) for path in paths]
+    event = {
+        "event_type": "WEB_AUTH_ERROR", "status": "error", "username": "operator",
+        "source_ip": "192.0.2.5", "timestamp": "2026-11-24T04:43:45+00:00",
+        "service": "flask_web", "path": "/login", "method": "POST", "request_id": "a" * 32,
+    }
+    unrelated = {**event, "status": None, "event_type": "LAB_EVENT", "request_id": "b" * 32}
+    for path in paths:
+        path.write_text(json.dumps(event) + "\n" + json.dumps(unrelated) + "\n")
+    observed, = monitor.get_new_events()
+    assert observed["status"] == "error"
+    assert observed["timestamp"] == event["timestamp"]
+    assert observed["event_id"] == event["request_id"]
+    assert monitor.get_new_events() == []

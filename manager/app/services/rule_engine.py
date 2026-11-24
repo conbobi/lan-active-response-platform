@@ -309,104 +309,31 @@ class RuleEngine:
         return incidents
 
     def evaluate_web_log(self, log_data: Dict[str, Any]) -> List[RuleMatch]:
-        """
-        Evaluate web access log telemetry (e.g. from Cloudflare Tunnel or Web server)
-        for web attacks:
-        1. Suspicious User-Agents (Hydra, sqlmap, nikto, gobuster, etc.) -> T1595.002, T1190
-        2. Web Application Exploits (Path Traversal, SQL Injection) -> T1190
-        3. Web Authentication Brute Force (High frequency POST /login) -> T1110
-        """
-        matches: List[RuleMatch] = []
-        if not log_data or not isinstance(log_data, dict):
-            return matches
+        """Use the same request evidence classifier as the risk pipeline."""
+        from app.services.detection.behavior_evidence import SQLI, technique_for
+        from app.services.detection.risk_rules.web_attack_rule import RE_PATH_TRAVERSAL, inspect_web_log
 
-        src_ip = str(log_data.get("src_ip") or log_data.get("client_ip") or "unknown").strip()
-        user_agent = str(log_data.get("user_agent") or "").strip()
-        raw_path = str(log_data.get("path") or log_data.get("url") or "/")
-        raw_msg = str(log_data.get("raw_message") or log_data.get("raw_log") or "")
-        method = str(log_data.get("method") or log_data.get("http_method") or "GET").upper().strip()
-
-        from urllib.parse import unquote
-        path = unquote(raw_path)
-        check_str = f"{path} {unquote(raw_msg)}"
-
-        # 1. Malicious User-Agent check
-        ua_lower = user_agent.lower()
-        tool_keywords = [
-            "hydra", "sqlmap", "nikto", "nmap", "gobuster", "dirbuster",
-            "ffuf", "wfuzz", "metasploit", "havoc", "acunetix", "masscan", "commix"
-        ]
-        matched_tools = [tool for tool in tool_keywords if tool in ua_lower]
-        if matched_tools:
-            matches.append(
-                RuleMatch(
-                    rule_id="web_malicious_user_agent",
-                    rule_name="Suspicious Web Attack Tool User-Agent",
-                    severity="high",
-                    mitre_techniques=["T1595.002", "T1190"],
-                    matched_event=log_data,
-                    detail=f"Detected offensive attack tool '{matched_tools[0]}' in User-Agent: '{user_agent}' from IP {src_ip}"
-                )
-            )
-
-        # 2. Path Traversal & SQLi check (T1190)
-        traversal_pattern = re.compile(
-            r'(?:(?:\.\.(?:/|\\|%2f|%252f|%5c)){2,}|/etc/(?:passwd|shadow|hosts)|/proc/self/|windows/win\.ini|\bcmd\.exe\b)',
-            re.IGNORECASE
-        )
-        sqli_pattern = re.compile(
-            r"(?:(?:\'|\"|%27)\s*(?:or|and)\s*(?:[\'\"0-9a-z]+\s*=\s*[\'\"0-9a-z]+|1\s*=\s*1|true\b)"
-            r"|\bunion\s+(?:all\s+)?select\b"
-            r"|--\s*$"
-            r"|/\*.*\*/"
-            r"|\bsleep\s*\(\s*\d+\s*\)"
-            r"|\bbenchmark\s*\(\s*\d+"
-            r"|\bwaitfor\s+delay\b)",
-            re.IGNORECASE
-        )
-
-        tr_m = traversal_pattern.search(check_str)
-        if tr_m:
-            matches.append(
-                RuleMatch(
-                    rule_id="web_path_traversal",
-                    rule_name="Web Application Path Traversal Exploit",
-                    severity="critical",
-                    mitre_techniques=["T1190", "T1083"],
-                    matched_event=log_data,
-                    detail=f"Path traversal sequence '{tr_m.group(0)}' in {method} {path} from IP {src_ip}"
-                )
-            )
-
-        sqli_m = sqli_pattern.search(check_str)
-        if sqli_m:
-            matches.append(
-                RuleMatch(
-                    rule_id="web_sql_injection",
-                    rule_name="Web Application SQL Injection Exploit",
-                    severity="critical",
-                    mitre_techniques=["T1190"],
-                    matched_event=log_data,
-                    detail=f"SQL injection syntax '{sqli_m.group(0)}' in {method} {path} from IP {src_ip}"
-                )
-            )
-
-        # 3. Brute Force (T1110)
-        login_count = int(log_data.get("login_count") or 0)
-        is_login = any(k in path.lower() for k in ("/login", "/auth", "/signin", "/wp-login"))
-        if (login_count >= 5 or log_data.get("is_bruteforce")) and method == "POST" and is_login:
-            matches.append(
-                RuleMatch(
-                    rule_id="web_brute_force",
-                    rule_name="Web Authentication Brute Force",
-                    severity="high" if login_count < 15 else "critical",
-                    mitre_techniques=["T1110", "T1110.001"],
-                    matched_event=log_data,
-                    detail=f"High frequency login attempts ({login_count} requests in 10s) to {path} from IP {src_ip}"
-                )
-            )
-
-        return matches
+        if not isinstance(log_data, dict):
+            return []
+        finding = inspect_web_log(log_data, log_data.get("agent_id"))
+        if finding:
+            _, evidence = finding
+            classification = evidence["classification"]
+            technique = technique_for(evidence)
+            return [RuleMatch(
+                rule_id=classification, rule_name=classification.replace("_", " ").capitalize(),
+                severity="high" if classification == SQLI else "medium",
+                mitre_techniques=[technique] if technique else [], matched_event=log_data,
+                detail="Recorded HTTP request indicators", evidence=evidence,
+            )]
+        path = log_data.get("path")
+        if isinstance(path, str) and RE_PATH_TRAVERSAL.search(path):
+            return [RuleMatch(
+                rule_id="web_path_traversal", rule_name="Web Path Traversal Pattern",
+                severity="high", mitre_techniques=["T1190"], matched_event=log_data,
+                detail="HTTP path traversal pattern observed",
+            )]
+        return []
 
     async def _get_active_rules(self, session: AsyncSession) -> List[Dict[str, Any]]:
         """Load active rules từ DB, cache 60s."""

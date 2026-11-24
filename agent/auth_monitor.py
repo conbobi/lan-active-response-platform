@@ -1,11 +1,39 @@
 import os
+import hashlib
 import re
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+if __package__:
+    from .vulnerable_web.http_evidence import ACCOUNT, SQL_PATTERNS, sql_indicators
+else:
+    from vulnerable_web.http_evidence import ACCOUNT, SQL_PATTERNS, sql_indicators
+
+
+def syslog_timestamp(line):
+    iso = re.match(r"^(\d{4}-\d{2}-\d{2}T\S+)", line)
+    if iso:
+        try:
+            stamp = datetime.fromisoformat(iso[1])
+            return stamp.astimezone(timezone.utc).isoformat() if stamp.tzinfo is not None else None
+        except ValueError:
+            return None
+    legacy = re.match(r"^([A-Z][a-z]{2}\s+\d{1,2} \d{2}:\d{2}:\d{2})\s", line)
+    if legacy:
+        now = datetime.now().astimezone()
+        try:
+            date = datetime.strptime(f"{now.year} {legacy[1]}", "%Y %b %d %H:%M:%S")
+            if date.astimezone() > now + timedelta(days=1):
+                date = date.replace(year=date.year - 1)
+            if abs(now - date.astimezone()) <= timedelta(days=2):
+                return date.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            return None
+    return None
 
 
 class AuthMonitor:
@@ -81,54 +109,77 @@ class AuthMonitor:
                     lines = f.readlines()
                     self.file_positions[log_path] = f.tell()
 
-                for line in lines:
+                for line_index, line in enumerate(lines):
+                    local_id = hashlib.sha256(f"{log_path}:{last_pos}:{line_index}:{line}".encode()).hexdigest()
                     line_str = line.strip()
                     if not line_str:
                         continue
 
-                    # 1. Check Web Auth JSON format: {"service": "flask_web", "username": "admin", ...}
-                    if line_str.startswith("{") and ("username" in line_str or "user" in line_str):
+                    if line_str.startswith("{"):
                         try:
                             payload = json.loads(line_str)
-                            svc = payload.get("service") or payload.get("app") or "flask_web"
-                            u = payload.get("username") or payload.get("user") or "unknown"
-                            s_ip = payload.get("source_ip") or payload.get("ip") or payload.get("client_ip") or "unknown"
-                            st = str(payload.get("status") or "").lower()
-                            if not st:
-                                ev_type = str(payload.get("event_type") or "").lower()
-                                if "fail" in ev_type or "error" in ev_type:
-                                    st = "failed"
-                                elif "success" in ev_type or "ok" in ev_type:
-                                    st = "success"
-                                else:
-                                    st = "failed"
-                            events.append({
-                                "agent_id": self.agent_id,
-                                "service": svc,
-                                "source_ip": s_ip,
-                                "username": u,
-                                "status": "success" if st in ("success", "ok", "authenticated") else "failed",
-                                "count": int(payload.get("count", 1)),
-                                "timestamp": payload.get("timestamp") or now_iso
-                            })
+                        except json.JSONDecodeError:
+                            logger.debug("Invalid JSON authentication record")
                             continue
-                        except Exception:
-                            pass
+                        if not isinstance(payload, dict):
+                            continue
+                        st = str(payload.get("status") or "").lower()
+                        if not st:
+                            st = {
+                                "WEB_AUTH_FAILED": "failed", "WEB_AUTH_SUCCESS": "success",
+                                "WEB_AUTH_ERROR": "error",
+                            }.get(payload.get("event_type"))
+                        st = "success" if st in ("success", "ok", "authenticated") else st
+                        if st not in ("success", "failed", "error"):
+                            continue
+                        stamp = payload.get("timestamp")
+                        request_id = payload.get("request_id")
+                        # Mirrors contain the same app ID or identical timestamped JSON.
+                        event_id = request_id or (hashlib.sha256(line_str.encode()).hexdigest() if stamp else None)
+                        username = payload.get("username") or payload.get("user")
+                        indicators = sql_indicators(username)
+                        supplied = payload.get("payload_indicators")
+                        if isinstance(supplied, list):
+                            indicators.update(item for item in supplied if isinstance(item, str) and item in SQL_PATTERNS)
+                        events.append({
+                            "agent_id": self.agent_id,
+                            "service": payload.get("service") or payload.get("app") or "flask_web",
+                            "source_ip": payload.get("source_ip") or payload.get("ip") or payload.get("client_ip"),
+                            "username": username if isinstance(username, str) and ACCOUNT.fullmatch(username) and not indicators else None,
+                            "status": st, "count": payload.get("count", 1), "timestamp": stamp or now_iso,
+                            "timestamp_source": payload.get("timestamp_source") or ("log" if stamp else "agent_receipt"),
+                            "event_id": event_id,
+                            "payload_indicators": sorted(indicators),
+                            **{key: payload[key] for key in (
+                                "request_id", "method", "path", "http_status", "user_agent",
+                                "auth_method",
+                            ) if key in payload},
+                        })
+                        continue
 
                     # 2. Check Web Auth tag: [WEB_AUTH] status=failed username=admin ip=1.2.3.4
                     m_web = self.WEB_AUTH_RE.search(line_str)
                     if m_web:
                         st = m_web.group("status").lower()
+                        st = "success" if st in ("success", "ok", "authenticated") else st
+                        if st not in ("success", "failed", "error"):
+                            continue
                         events.append({
                             "agent_id": self.agent_id,
                             "service": m_web.group("svc") or "flask_web",
                             "source_ip": m_web.group("ip"),
                             "username": m_web.group("user"),
-                            "status": "success" if st in ("success", "ok", "authenticated") else "failed",
+                            "status": st,
                             "count": 1,
-                            "timestamp": now_iso
+                            "timestamp": now_iso, "timestamp_source": "agent_receipt", "event_id": local_id
                         })
                         continue
+
+                    log_time = syslog_timestamp(line_str)
+                    timestamp_fields = {
+                        "timestamp": log_time or now_iso, "timestamp_source": "log" if log_time else "agent_receipt",
+                        "event_id": local_id,
+                    }
 
                     # 3. Check Failed SSH
                     m_fail = self.FAILED_SSH_RE.search(line_str)
@@ -139,8 +190,8 @@ class AuthMonitor:
                             "source_ip": m_fail.group("ip"),
                             "username": m_fail.group("user"),
                             "status": "failed",
-                            "count": 1,
-                            "timestamp": now_iso
+                            "auth_method": "password", "count": 1,
+                            **timestamp_fields
                         })
                         continue
 
@@ -155,7 +206,7 @@ class AuthMonitor:
                             "status": "success",
                             "auth_method": m_succ.group("method").lower(),
                             "count": 1,
-                            "timestamp": now_iso
+                            **timestamp_fields
                         })
                         continue
 
@@ -172,13 +223,17 @@ class AuthMonitor:
                             "username": user,
                             "status": "failed",
                             "count": 1,
-                            "timestamp": now_iso
+                            **timestamp_fields
                         })
 
             except Exception as e:
                 logger.error(f"Error reading auth log '{log_path}': {e}")
 
-        return events
+        unique = {}
+        for event in events:
+            key = event.get("event_id") or object()
+            unique.setdefault(key, event)
+        return list(unique.values())
 
 
 global_auth_monitor = AuthMonitor()

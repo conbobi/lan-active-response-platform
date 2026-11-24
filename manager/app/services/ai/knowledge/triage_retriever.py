@@ -28,7 +28,7 @@ SOPS = {
         "Xem xét tác vụ lặp lại với thông tin đăng nhập đã hết hạn.",
     ),
 }
-RISK_TECHNIQUES = {"http_beaconing": "T1071", AUTH_RULE: "T1110"}
+RISK_TECHNIQUES = {"http_beaconing": "T1071"}
 
 
 def _validated_ids(tags) -> tuple[str, ...]:
@@ -53,6 +53,9 @@ async def enrich_rule_mapping(session, context: AlertContext) -> None:
     rule = context.metadata["rule_id"], context.metadata["rule_version"]
     sop = SOPS.get(rule)
     tags = [sop[1]] if sop else []
+    if rule == (AUTH_RULE, "risk:1"):
+        tags = []
+    tags.extend(item["verified_technique"] for item in context.facts if item.get("verified_technique"))
     tags.extend(_risk_mapping(context))
     try:
         rule_id = UUID(rule[0])
@@ -84,7 +87,7 @@ def retrieve_references(context: AlertContext, tokenizer) -> list[dict]:
     documents = []
     rule = context.metadata["rule_id"], context.metadata["rule_version"]
     sop = SOPS.get(rule)
-    if sop is None and "T1110" in _risk_mapping(context):
+    if sop is None and "T1110" in context.mapped_techniques:
         sop = SOPS[(AUTH_RULE, "risk:1")]
     candidates = []
     if sop:
