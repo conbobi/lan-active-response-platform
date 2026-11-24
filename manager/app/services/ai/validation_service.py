@@ -1,6 +1,5 @@
 import logging
 import re
-import os
 from typing import Dict, Any, Optional, List, Tuple
 import yaml
 import pandas as pd
@@ -8,10 +7,11 @@ import numpy as np
 import httpx
 from sklearn.metrics import precision_score, recall_score, f1_score
 
+from app.services.ai.ai_client import DEFAULT_MODEL, OLLAMA_URL
+
 logger = logging.getLogger("larp.ai.validation")
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-VALIDATION_EXPLANATION_MODEL = os.getenv("AI_MODEL", "sec-q6")
+VALIDATION_EXPLANATION_MODEL = DEFAULT_MODEL
 
 # Common column alias mappings: Sigma field name -> DataFrame column
 FIELD_ALIASES = {

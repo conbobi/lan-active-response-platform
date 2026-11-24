@@ -39,7 +39,13 @@ build/
 dist/
 *.egg-info/
 models/foundation-sec-8b-reasoning-q4_k_m.gguf
+models/Foundation-Sec-8B-Reasoning.Q5_K_M.gguf
 models/Modelfile
+models/Modelfile.harvest-q5
 models/Foundation-Sec-8B-Reasoning.Q6_K.gguf
 models/Modelfile.q6
+models/Modelfile.q5
 antigravity_history.txt
+models/Modelfile.soc-q5
+Modelfile.harvest-q5
+Modelfile.soc-q5

@@ -30,7 +30,16 @@ services:
       - DATABASE_URL=postgresql+asyncpg://larp:larp_password@db:5432/larpdb
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1540670659749875733/yeMQIpiSsydQW3jzAf8wQplCFheUWm8UVmN3YWgoiOgqALgkpSnLx2mJiR6ai934UlHU
       - OLLAMA_URL=http://ollama:11434
-      - AI_MODEL=sec-q6
+      - AI_MODEL
+      - AI_TRIAGE_NUM_CTX
+      - AI_TRIAGE_NUM_PREDICT
+      - AI_TRIAGE_TEMPERATURE
+      - AI_TRIAGE_KEEP_ALIVE
+      - AI_TRIAGE_STREAM
+      - AI_TRIAGE_THINK
+      - AI_TRIAGE_GGUF
+      - AI_TRIAGE_MAX_WAITING
+      - AI_TRIAGE_ENABLE_SKIP
       - NETWORK_AGENT_TOKENS
       - NETWORK_OPERATORS
       - NETWORK_LEGACY_ADMIN_TOKEN
@@ -50,11 +59,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./manager:/app
       - ./agent:/app/agent:ro
+      - ./models:/models:ro
     networks:
       - larp-net
 
   ollama:
     image: ollama/ollama:latest
+    environment:
+      - OLLAMA_NUM_PARALLEL=1
     volumes:
       - ollama_data:/root/.ollama
       - ./models:/models:ro

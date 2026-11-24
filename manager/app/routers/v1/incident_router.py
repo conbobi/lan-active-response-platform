@@ -192,7 +192,7 @@ async def get_ai_analysis(incident_id: str, db: AsyncSession = Depends(get_db)):
 async def regenerate_ai_analysis(
     incident_id: str,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Trigger AI re-analysis asynchronously — returns immediately with status='analyzing'."""
     # Validate incident exists (quick DB check)
@@ -204,7 +204,7 @@ async def regenerate_ai_analysis(
     async def _run_ai():
         try:
             from app.services.ai.ai_triage_service import AITriageService
-            await AITriageService().analyze_incident(incident_id)
+            await AITriageService().analyze_incident(incident_id, manual=True)
             logger.info(f"Background AI triage completed for {incident_id}")
         except Exception as e:
             logger.error(f"Background AI triage failed for {incident_id}: {e}", exc_info=True)

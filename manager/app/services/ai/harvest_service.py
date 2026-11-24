@@ -10,12 +10,12 @@ import yaml
 from app.core.database import AsyncSessionLocal
 from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
+from app.services.ai.ai_client import DEFAULT_MODEL, OLLAMA_URL
 
 logger = logging.getLogger("larp.ai.harvest")
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-DEFAULT_HARVEST_MODEL = os.getenv("HARVEST_MODEL", "harvest-q6")
-FALLBACK_MODEL = os.getenv("AI_MODEL", "sec-q6")
+DEFAULT_HARVEST_MODEL = os.getenv("HARVEST_MODEL") or DEFAULT_MODEL
+FALLBACK_MODEL = DEFAULT_MODEL
 
 
 class HarvestService:
@@ -37,7 +37,7 @@ class HarvestService:
     ) -> RuleCandidate:
         """
         Harvest Sigma rule from CTI report.
-        Calls Ollama harvest-q6, validates syntax, retries once on failure,
+        Calls Ollama, validates syntax, retries once on failure,
         and saves candidate in DB with status='pending'.
         """
         raw_output = await self._call_llm_for_sigma(cti_text)
@@ -96,7 +96,7 @@ class HarvestService:
         return candidate
 
     async def _call_llm_for_sigma(self, text: str) -> str:
-        """Call Ollama /api/chat with harvest-q6 (or fallback model) with tight timeout."""
+        """Call Ollama /api/chat with the configured model and a short timeout."""
         system_prompt = (
             "You are a Senior Cyber Threat Detection Engineer. "
             "Generate a valid Sigma detection rule in YAML format based on the threat intelligence report.\n"
@@ -128,7 +128,7 @@ class HarvestService:
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)
-                if resp.status_code == 404:
+                if resp.status_code == 404 and self.model != FALLBACK_MODEL:
                     logger.warning(f"Model {self.model} returned 404. Falling back to {FALLBACK_MODEL}")
                     payload["model"] = FALLBACK_MODEL
                     resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)

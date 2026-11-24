@@ -12,7 +12,8 @@ from app.services.detection.risk_rules.http_beaconing_rule import (
 )
 from app.services.detection.network_reputation_service import NetworkReputationService
 from app.services.incident.incident_service import IncidentService, is_eligible_culprit
-from app.services.ai.ai_triage_service import AITriageService
+from app.services.ai.ai_triage_service import SYSTEM_PROMPT
+from app.services.ai.alert_context_projector import build_alert_context
 from agent.connection_tracker import ConnectionTracker
 
 
@@ -398,50 +399,14 @@ def test_10_ai_evidence_integrity_and_anti_hallucination():
     Prompt separates facts, inference, alternative benign explanation, and missing evidence.
     T1071 is suppressed for benign traffic.
     """
-    service = AITriageService()
-
     incident = Incident(
-        id="inc_triage_test",
-        title="Periodic Traffic to Microsoft Update",
-        description="Routine background HTTPS traffic",
-        risk_score=35.0,
-        agent_id="my-desktop"
+        id="inc_triage_test", title="Periodic Traffic to Microsoft Update",
+        description="Routine background HTTPS traffic", risk_score=35.0, agent_id="my-desktop",
     )
-    procs = [
-        ProcessInfo(
-            pid=1200,
-            name="code",
-            exe_path="/usr/share/code/code",
-            cmdline="/usr/share/code/code",
-            is_suspicious=False
-        )
-    ]
-    flows = [
-        Flow(
-            agent_id="my-desktop",
-            dst_ip="150.171.110.108",
-            dst_port=443,
-            protocol="TCP",
-            process_name="code"
-        )
-    ]
-    factors = {"network": "regular outbound requests"}
-
-    prompt = service._build_prompt(
-        incident=incident,
-        process_tree=procs,
-        flows=flows,
-        factors=factors,
-        mitre_kb_ids=["T1071", "T1059", "T1105"]
-    )
-
-    # Verify structured separation in prompt
-    assert "observed_facts" in prompt
-    assert "technical_inference" in prompt
-    assert "alternative_benign_explanation" in prompt
-    assert "missing_evidence" in prompt
-    assert "classification" in prompt
-    assert "TUYỆT ĐỐI KHÔNG GÁN T1071" in prompt
+    context = build_alert_context(incident)
+    assert context.facts[0]["kind"] == "unstructured"
+    assert "observed evidence IDs" in SYSTEM_PROMPT
+    assert "C2 requires more than an address, port or HTTPS" in SYSTEM_PROMPT
 
 
 # ============================================================================

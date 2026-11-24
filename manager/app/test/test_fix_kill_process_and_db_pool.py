@@ -262,19 +262,14 @@ async def test_ai_triage_decoupled_db_session(tmp_path, monkeypatch):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    # Seed incident
-    inc_id = "inc-test-101"
+    from app.test.test_alert_context_projector import verified_incident
+
+    incident = verified_incident()
+    inc_id = incident.id
     async with factory() as session:
-        session.add(Agent(id="agent-01", hostname="agent-01", ip_address="10.0.0.1", mac_address="00:00:00:00:00:01"))
-        session.add(Incident(
-            id=inc_id,
-            agent_id="agent-01",
-            title="Suspicious Netcat Outbound",
-            description="Process nc opened outbound connection to external IP",
-            risk_score=75,
-            status="open",
-            created_at=datetime.now(timezone.utc),
-        ))
+        session.add(Agent(id="agent-a", hostname="agent-a", ip_address="10.0.0.1", mac_address="00:00:00:00:00:01"))
+        await session.flush()
+        session.add(incident)
         await session.commit()
 
     # Monkeypatch AsyncSessionLocal for AITriageService
@@ -287,7 +282,7 @@ async def test_ai_triage_decoupled_db_session(tmp_path, monkeypatch):
         checked_out = engine.pool.checkedout()
         assert checked_out == 0, f"Expected 0 checked-out connections during LLM call, got {checked_out}!"
         return {
-            "answer": '{"classification": "likely_malicious", "summary": "Phát hiện netcat đáng ngờ", "mitre_techniques": [], "root_cause": "Reverse shell", "confidence": 0.85}'
+            "answer": '{"classification": "likely_malicious", "evidence_ids": ["N1"], "mitre_techniques": [], "confidence": 0.85}'
         }
 
     monkeypatch.setattr(ai_triage_service.ai_client, "generate", mock_generate)
@@ -298,7 +293,8 @@ async def test_ai_triage_decoupled_db_session(tmp_path, monkeypatch):
 
     assert analysis is not None
     assert analysis.incident_id == inc_id
-    assert "Phát hiện netcat đáng ngờ" in analysis.summary
+    assert "reverse shell" in analysis.summary
+    assert analysis.mitre_techniques[0]["evidence"] == "N1"
     assert analysis.confidence == 0.85
 
     # Verify all pool connections returned to pool

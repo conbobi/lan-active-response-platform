@@ -54,7 +54,7 @@ class RuleCandidate(Base):
 
     created_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     approved_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    model_generated: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # e.g. "harvest-q6"
+    model_generated: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # Ollama model alias
     harvest_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     false_positive_samples: Mapped[Optional[List[Dict[str, Any]]]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), default=list, nullable=True
