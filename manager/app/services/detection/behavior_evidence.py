@@ -10,16 +10,30 @@ from app.core.agent_health import as_utc
 REPEATED = "repeated_auth_failures"
 BRUTE_FORCE = "authentication_brute_force"
 SQLI = "sqli_probing"
+SQLI_TOOL = "sqli_tool_indicator"
+SQLI_PROBE = "sqli_probe_observed"
+SQLI_SUSPECTED = "sqli_exploitation_suspected"
+SQLI_CONFIRMED = "sqli_exploitation_confirmed"
 SCAN = "network_service_scanning"
+AUTOMATED_HTTP = "automated_http_activity"
 UNKNOWN = "unknown_automated_activity"
-BEHAVIORS = {REPEATED, BRUTE_FORCE, SQLI, SCAN, UNKNOWN}
+BEHAVIORS = {
+    REPEATED, BRUTE_FORCE, SQLI, SCAN, UNKNOWN,
+    SQLI_TOOL, SQLI_PROBE, SQLI_SUSPECTED, SQLI_CONFIRMED, AUTOMATED_HTTP,
+}
 INDICATORS = {
     "sql_boolean_expression": re.compile(r"""['"]\s*\)?\s*(?:and|or)\s+[\s('"\d]+[^\s]{0,40}\s*=""", re.I),
     "sql_query_operator": re.compile(r"\bunion\s+(?:all\s+)?select\b|\bselect\s+(?:case|concat|char)\b|\border\s+by\s+\d+\s*--", re.I),
     "sql_delay_function": re.compile(r"\b(?:pg_sleep|sleep|benchmark|dbms_pipe\.receive_message)\s*\(|\bwaitfor\s+delay\b", re.I),
     "sql_error_expression": re.compile(r"\b(?:extractvalue|updatexml)\s*\(", re.I),
 }
-TOOL_UA = re.compile(r"(?:^|[^\w])(hydra|sqlmap|nikto|nmap|gobuster|dirbuster|ffuf|wfuzz|metasploit|havoc|acunetix|masscan|commix|burpcollaborator|zgrab)(?:[^\w]|$)", re.I)
+SQLI_TOOL_UA = re.compile(
+    r"(?:^|[^\w])(sqlmap|commix|sqlninja|havij|bbqsql|jsql)(?:[^\w]|$)", re.I
+)
+TOOL_UA = re.compile(
+    r"(?:^|[^\w])(hydra|sqlmap|nikto|nmap|gobuster|dirbuster|ffuf|wfuzz|metasploit|havoc|acunetix|masscan|commix|burpcollaborator|zgrab|curl|python-requests|wget|sqlninja|havij|bbqsql|jsql)(?:[^\w]|$)",
+    re.I
+)
 TOKEN = re.compile(r"[A-Za-z0-9_.:@+\\-]{1,64}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
 HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
@@ -83,6 +97,13 @@ def http_fields(data: dict) -> dict:
     if path:
         indicators |= signature_indicators(unquote(parsed.path))
         indicators |= signature_indicators(unquote(parsed.query))
+    body_val = data.get("body") or data.get("payload") or data.get("post_data") or data.get("form_data")
+    if isinstance(body_val, str):
+        indicators |= signature_indicators(unquote(body_val))
+    elif isinstance(body_val, dict):
+        for val in body_val.values():
+            if isinstance(val, str):
+                indicators |= signature_indicators(unquote(val))
     return {k: v for k, v in {
         "request_method": method if method in HTTP_METHODS else None, "request_path": path,
         "http_status": status if status and 100 <= status < 600 else None, "user_agent": ua,
@@ -105,9 +126,10 @@ def technique_for(evidence: dict) -> str | None:
         return "T1046"
     path = evidence.get("request_path")
     method = evidence.get("request_method")
-    if (kind == SQLI and isinstance(method, str) and method in HTTP_METHODS
+    payload_ind = valid_indicators(evidence.get("payload_indicators"))
+    if (kind in (SQLI, SQLI_PROBE, SQLI_SUSPECTED, SQLI_CONFIRMED) and isinstance(method, str) and method in HTTP_METHODS
             and isinstance(path, str) and path.startswith("/")
-            and valid_indicators(evidence.get("payload_indicators"))):
+            and payload_ind):
         return "T1190"
     return None
 

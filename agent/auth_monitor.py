@@ -149,6 +149,8 @@ class AuthMonitor:
                             "status": st, "count": payload.get("count", 1), "timestamp": stamp or now_iso,
                             "timestamp_source": payload.get("timestamp_source") or ("log" if stamp else "agent_receipt"),
                             "event_id": event_id,
+                            **({"session_ref": payload["session_ref"]} if isinstance(payload.get("session_ref"), str)
+                               and re.fullmatch(r"[0-9a-f]{64}", payload["session_ref"]) else {}),
                             "payload_indicators": sorted(indicators),
                             **{key: payload[key] for key in (
                                 "request_id", "method", "path", "http_status", "user_agent",

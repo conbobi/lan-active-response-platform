@@ -166,6 +166,8 @@ class WebLogMonitor:
                             "host": str(payload.get("host") or payload.get("hostname") or "")[:128],
                             "path": path, "http_method": method, "user_agent": user_agent[:256],
                             "status_code": payload.get("status_code") or payload.get("status"),
+                            **({"session_ref": payload["session_ref"]} if isinstance(payload.get("session_ref"), str)
+                               and re.fullmatch(r"[0-9a-f]{64}", payload["session_ref"]) else {}),
                             "timestamp": stamp or journal_timestamp or now_iso, "request_id": request_id,
                             "timestamp_source": "log" if stamp or journal_timestamp else "agent_receipt",
                             "service": payload.get("service"), "payload_indicators": sorted(indicators),

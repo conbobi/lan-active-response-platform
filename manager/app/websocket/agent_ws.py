@@ -1,3 +1,4 @@
+import re
 import asyncio
 import ipaddress
 import json
@@ -600,6 +601,9 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
         event = normalize_auth_event(item) if isinstance(item, dict) else None
         if event is None:
             continue
+        session_ref = item.get("session_ref")
+        if is_enrolled(agent_id) and isinstance(session_ref, str) and re.fullmatch(r"[0-9a-f]{64}", session_ref):
+            event["session_ref"] = session_ref
         source_id = item.get("event_id") or event.get("request_id")
         identifier = (
             stable_id("auth_", agent_id, event["service"], source_id)
@@ -633,7 +637,7 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
         properties = {
             key: value for key, value in event.items()
             if key in {"request_id", "request_method", "request_path", "http_status", "user_agent",
-                       "payload_indicators", "timestamp_source", "auth_method"} and value is not None
+                       "payload_indicators", "timestamp_source", "auth_method", "session_ref"} and value is not None
         }
         session.add(Event(
             id=identifier, agent_id=agent_id, event_type="AUTH_OBSERVATION",
@@ -713,6 +717,9 @@ async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSessio
     if stamp is None or stamp > now + timedelta(seconds=30):
         stamp = now
         time_source = "manager_receipt"
+    session_ref = payload.get("session_ref")
+    if is_enrolled(agent_id) and isinstance(session_ref, str) and re.fullmatch(r"[0-9a-f]{64}", session_ref):
+        observation["session_ref"] = session_ref
     request_id = observation.get("request_id")
     identifier = stable_id("wlog_", agent_id, request_id) if request_id else f"wlog_{uuid.uuid4().hex}"
     await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())

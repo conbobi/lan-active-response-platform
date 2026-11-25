@@ -144,4 +144,6 @@ async def start_background_tasks(scheduler: Optional[Scheduler] = None) -> Sched
 
     scheduler.schedule_task(5, periodic_auto_rollback)
 
+    from app.services.response.assist_worker import reconcile_pending
+    scheduler.schedule_task(10, reconcile_pending)
     return scheduler

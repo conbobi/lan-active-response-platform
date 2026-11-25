@@ -310,7 +310,9 @@ class RuleEngine:
 
     def evaluate_web_log(self, log_data: Dict[str, Any]) -> List[RuleMatch]:
         """Use the same request evidence classifier as the risk pipeline."""
-        from app.services.detection.behavior_evidence import SQLI, technique_for
+        from app.services.detection.behavior_evidence import (
+            SQLI, SQLI_PROBE, SQLI_SUSPECTED, SQLI_CONFIRMED, technique_for,
+        )
         from app.services.detection.risk_rules.web_attack_rule import RE_PATH_TRAVERSAL, inspect_web_log
 
         if not isinstance(log_data, dict):
@@ -322,7 +324,7 @@ class RuleEngine:
             technique = technique_for(evidence)
             return [RuleMatch(
                 rule_id=classification, rule_name=classification.replace("_", " ").capitalize(),
-                severity="high" if classification == SQLI else "medium",
+                severity="high" if classification in (SQLI, SQLI_PROBE, SQLI_SUSPECTED, SQLI_CONFIRMED) else "medium",
                 mitre_techniques=[technique] if technique else [], matched_event=log_data,
                 detail="Recorded HTTP request indicators", evidence=evidence,
             )]

@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.response.http_investigation import ASSIST_TYPES
 from app.models.response_action import ResponseAction
 from app.repositories.base import SqlAlchemyRepository
 
@@ -28,9 +29,9 @@ class ResponseActionRepository(SqlAlchemyRepository[ResponseAction]):
         skip: int = 0,
         limit: int = 50
     ) -> List[ResponseAction]:
-        stmt = select(ResponseAction)
+        stmt = select(ResponseAction).where(ResponseAction.action_type.not_in(ASSIST_TYPES))
         if agent_id:
-            stmt = stmt.where(ResponseAction.agent_id == agent_id)
+            stmt = stmt.where(ResponseAction.agent_id == agent_id, ResponseAction.action_type.not_in(ASSIST_TYPES))
         if action_type:
             stmt = stmt.where(ResponseAction.action_type == action_type)
         if status:
@@ -42,7 +43,7 @@ class ResponseActionRepository(SqlAlchemyRepository[ResponseAction]):
     async def get_by_agent(self, agent_id: str, limit: int = 50, offset: int = 0) -> List[ResponseAction]:
         stmt = (
             select(ResponseAction)
-            .where(ResponseAction.agent_id == agent_id)
+            .where(ResponseAction.agent_id == agent_id, ResponseAction.action_type.not_in(ASSIST_TYPES))
             .order_by(ResponseAction.created_at.desc())
             .offset(offset)
             .limit(limit)
@@ -53,7 +54,7 @@ class ResponseActionRepository(SqlAlchemyRepository[ResponseAction]):
     async def get_by_incident(self, incident_id: str) -> List[ResponseAction]:
         stmt = (
             select(ResponseAction)
-            .where(ResponseAction.incident_id == incident_id)
+            .where(ResponseAction.incident_id == incident_id, ResponseAction.action_type.not_in(ASSIST_TYPES))
             .order_by(ResponseAction.created_at.desc())
         )
         result = await self.session.execute(stmt)

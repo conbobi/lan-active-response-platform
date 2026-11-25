@@ -1,7 +1,8 @@
 import re
 
 from app.services.detection.behavior_evidence import (
-    SQLI, UNKNOWN, TOOL_UA, address, http_fields, observed_time, stable_id,
+    SQLI, SQLI_TOOL, SQLI_PROBE, SQLI_SUSPECTED, SQLI_CONFIRMED, AUTOMATED_HTTP, UNKNOWN,
+    SQLI_TOOL_UA, TOOL_UA, address, http_fields, observed_time, stable_id,
 )
 from app.services.detection.risk_rules.base import RiskRule
 
@@ -14,11 +15,17 @@ def inspect_web_log(log, agent_id):
     http = http_fields(log)
     if not http.get("request_method") or not http.get("request_path"):
         return None
-    tool = TOOL_UA.search(http.get("user_agent") or "")
-    if http.get("payload_indicators"):
-        kind, score = SQLI, 75.0
+    ua = http.get("user_agent") or ""
+    sqli_tool = SQLI_TOOL_UA.search(ua)
+    tool = TOOL_UA.search(ua)
+    payload = http.get("payload_indicators")
+    # An access record alone cannot establish an application-side outcome.
+    if payload:
+        kind, score = SQLI_PROBE, 75.0
+    elif sqli_tool:
+        kind, score = SQLI_TOOL, 60.0
     elif tool:
-        kind, score = UNKNOWN, 55.0
+        kind, score = AUTOMATED_HTTP, 55.0
     else:
         return None
     event_id = log.get("evidence_id")
@@ -33,10 +40,17 @@ def inspect_web_log(log, agent_id):
         "last_attempt_at": observed.isoformat() if observed else None,
         "time_basis": [log.get("timestamp_source") or ("log" if observed else "manager_receipt")],
     }
-    if tool:
-        evidence["automation_hint"] = tool[1].lower()
-    if kind == SQLI:
+    tool_match = sqli_tool or tool
+    if tool_match:
+        evidence["automation_hint"] = tool_match[1].lower()
+    if kind in (SQLI, SQLI_PROBE):
         evidence["exploitation_outcome"] = "undetermined"
+    elif kind == SQLI_SUSPECTED:
+        evidence["exploitation_outcome"] = "suspected"
+    elif kind == SQLI_CONFIRMED:
+        evidence["exploitation_outcome"] = "confirmed"
+    elif kind == SQLI_TOOL:
+        evidence["exploitation_outcome"] = "no_payload_in_request"
     return score, evidence
 
 

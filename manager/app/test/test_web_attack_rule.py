@@ -4,22 +4,28 @@ from datetime import datetime, timezone
 import pytest
 
 from agent.web_log_monitor import WebLogMonitor
-from app.services.detection.behavior_evidence import SQLI, UNKNOWN
+from app.services.detection.behavior_evidence import (
+    SQLI, SQLI_TOOL, SQLI_PROBE, AUTOMATED_HTTP, UNKNOWN,
+)
 from app.services.detection.risk_rules.web_attack_rule import WebAttackRule
 from app.services.rule_engine import rule_engine
 
 
-@pytest.mark.parametrize("agent_string", ["sqlmap fixture", "Nmap fixture", "Hydra fixture"])
+@pytest.mark.parametrize("agent_string,expected_kind,expected_score", [
+    ("sqlmap fixture", SQLI_TOOL, 60.0),
+    ("Nmap fixture", AUTOMATED_HTTP, 55.0),
+    ("Hydra fixture", AUTOMATED_HTTP, 55.0),
+])
 @pytest.mark.asyncio
-async def test_user_agent_hint_has_no_exploit_or_brute_force_mapping(agent_string):
+async def test_user_agent_hint_has_no_exploit_or_brute_force_mapping(agent_string, expected_kind, expected_score):
     telemetry = {
         "src_ip": "192.0.2.20", "method": "POST", "path": "/login", "user_agent": agent_string,
         "evidence_id": "web_observation", "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     score, reason = await WebAttackRule().evaluate(telemetry, {})
-    assert score == 55.0 and UNKNOWN in reason
+    assert score == expected_score and expected_kind in reason
     matches = rule_engine.evaluate_web_log(telemetry)
-    assert len(matches) == 1 and matches[0].rule_id == UNKNOWN
+    assert len(matches) == 1 and matches[0].rule_id == expected_kind
     assert not matches[0].mitre_techniques
 
 
@@ -32,7 +38,7 @@ async def test_observed_sql_indicator_classifies_probing_without_success(status)
     }
     assert (await WebAttackRule().evaluate(log, {}))[0] == 75.0
     match, = rule_engine.evaluate_web_log(log)
-    assert match.rule_id == SQLI
+    assert match.rule_id in (SQLI, SQLI_PROBE)
     assert match.mitre_techniques == ["T1190"]
     assert match.evidence["exploitation_outcome"] == "undetermined"
 

@@ -4,7 +4,7 @@ import Button from "../ui/Button";
 import Badge from "../ui/Badge";
 import toast from "react-hot-toast";
 import AISuggestionPanel from './AISuggestionPanel';
-export default function AIAnalysisTab({ incidentId }) {
+export default function AIAnalysisTab({ incidentId, httpIncident }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [regenerating, setRegenerating] = useState(false);
@@ -463,10 +463,10 @@ export default function AIAnalysisTab({ incidentId }) {
       </div>
 
       {/* 3.5. Đề xuất phản ứng (Response AI Assist) */}
-      <AISuggestionPanel
+      {!httpIncident && <AISuggestionPanel
         incidentId={incidentId}
         onRefresh={() => fetchAnalysis(true)}
-      />
+      />}
 
       {/* 4. Analyst Feedback & Rating */}
       <div

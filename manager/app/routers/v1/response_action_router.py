@@ -100,6 +100,8 @@ async def get_action_audit_logs(
     db: AsyncSession = Depends(get_db)
 ):
     """Lấy lịch sử audit log của một response action."""
+    if not await ResponseActionService(db).get_action(action_id):
+        raise NotFoundError("Action unavailable")
     service = ActionAuditLogService(db)
     return await service.get_logs_for_action(action_id)
 

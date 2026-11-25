@@ -1,6 +1,7 @@
 """Read incident evidence and project it without inferring process identities."""
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -18,7 +19,11 @@ from app.services.agent.activity import process_identity, socket_key
 from app.services.detection.network_shell import RULE_ID, detect_network_shell
 from app.services.rule_engine import RuleEngine, match_endpoint_telemetry
 
-from app.services.detection.behavior_evidence import BEHAVIORS, SCAN, SQLI, technique_for
+from app.services.detection.behavior_evidence import (
+    BEHAVIORS, SCAN, SQLI, SQLI_PROBE, SQLI_TOOL, SQLI_SUSPECTED, SQLI_CONFIRMED, AUTOMATED_HTTP, UNKNOWN, technique_for,
+)
+
+logger = logging.getLogger(__name__)
 
 NA = "N/A"
 WINDOW = timedelta(minutes=2)
@@ -356,6 +361,13 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
         })
 
     behavior = _mapping(evidence.get("behavior"))
+    # Legacy access-log flags did not establish a correlated application outcome.
+    if behavior.get("evidence_type") == "http" and behavior.get("classification") in (SQLI_CONFIRMED, SQLI_SUSPECTED):
+        from app.services.detection.behavior_evidence import valid_indicators, SQLI_TOOL_UA
+        kind = SQLI_PROBE if valid_indicators(behavior.get("payload_indicators")) else (
+            SQLI_TOOL if SQLI_TOOL_UA.search(str(behavior.get("user_agent") or "")) else UNKNOWN
+        )
+        behavior = {**behavior, "classification": kind, "exploitation_outcome": "undetermined"}
     has_behavior = (isinstance(behavior.get("classification"), str) and behavior["classification"] in BEHAVIORS
                     and isinstance(behavior.get("source_event_ids"), list)
                     and bool(behavior["source_event_ids"]))
@@ -393,10 +405,10 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
         has_request = bool(fact.get("request_method") and fact.get("request_path"))
         if not has_original_time:
             result.missing.append("source_attempt_timestamps")
-        if behavior.get("classification") == SQLI and not has_request:
+        if behavior.get("classification") in (SQLI, SQLI_PROBE) and not has_request:
             result.missing.append("http_request_metadata")
         fact["evidence_completeness"] = "complete" if has_original_time and not (
-            behavior.get("classification") == SQLI and not has_request
+            behavior.get("classification") in (SQLI, SQLI_PROBE) and not has_request
         ) else "partial"
         technique = technique_for(behavior)
         if technique:

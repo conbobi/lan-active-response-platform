@@ -18,6 +18,12 @@ class NetworkSSHProbe(BaseModel):
     port: int = Field(ge=1, le=65535)
 
 
+class LabWaf(BaseModel):
+    directory: str
+    disposable_peers: set[str]
+    protected_peers: set[str]
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "LAN Active Response Platform Manager"
     VERSION: str = "1.0.0"
@@ -31,6 +37,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     NETWORK_AGENT_TOKENS: dict[str, TokenDigest] = Field(default_factory=dict, repr=False)
     NETWORK_OPERATORS: dict[Annotated[str, Field(min_length=1, max_length=64)], NetworkOperator] = Field(default_factory=dict, repr=False)
+    HTTP_RESPONSE_LAB_WAFS: dict[str, LabWaf] = Field(default_factory=dict)
     NETWORK_SSH_PROBES: dict[str, NetworkSSHProbe] = Field(default_factory=dict, repr=False)
     NETWORK_LEGACY_ADMIN_TOKEN: TokenDigest | None = Field(default=None, repr=False)
 
@@ -40,6 +47,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def distinct_network_tokens(self):
+        from pathlib import Path
+        waf_dirs = [Path(item.directory).resolve() for item in self.HTTP_RESPONSE_LAB_WAFS.values()]
+        if len(set(waf_dirs)) != len(waf_dirs):
+            raise ValueError("Each lab Agent requires its own application enforcement directory")
         digests = [*self.NETWORK_AGENT_TOKENS.values(),
                    *(operator.token_sha256 for operator in self.NETWORK_OPERATORS.values())]
         if self.NETWORK_LEGACY_ADMIN_TOKEN:

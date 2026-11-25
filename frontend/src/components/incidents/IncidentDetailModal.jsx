@@ -12,12 +12,14 @@ import IncidentNotes from './IncidentNotes';
 import { executeIncidentAction, updateIncidentStatus, getIncident, closeIncident } from '../../api/incidents';
 import { useAgents } from '../../hooks/useAgents';
 
+import ResponseAssist from './ResponseAssist';
 import AIAnalysisTab from './AIAnalysisTab';
 
 const STORYBOARD_TABS = [
   { value: 'story', label: '📖 Story' },
   { value: 'process', label: '🌳 Process' },
   { value: 'network', label: '🌐 Network' },
+  { value: 'assist', label: 'AI Response Assist' },
   { value: 'actions', label: '⚡ Actions' },
   { value: 'notes', label: '📝 Notes' },
   { value: 'ai', label: '🤖 AI Analysis' },
@@ -235,6 +237,7 @@ export default function IncidentDetailModal({
             />
           )}
 
+          {tab === 'assist' && <ResponseAssist key={incident.id} incidentId={incident.id} />}
           {tab === 'actions' && (
             <ActionSuggestions
               incident={detailedIncident}
@@ -253,6 +256,7 @@ export default function IncidentDetailModal({
           {tab === 'ai' && (
             <AIAnalysisTab
               incidentId={detailedIncident.id}
+              httpIncident={detailedIncident.detection_evidence?.behavior?.evidence_type === 'http'}
             />
           )}
         </div>

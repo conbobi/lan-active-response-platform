@@ -16,6 +16,7 @@ from app.models.ai_analysis import AIAnalysis
 from app.models.response_action import ResponseAction
 from app.services.ai.ai_client import ai_client
 from app.services.ai.triage_tokens import serialize_data
+from app.services.response.http_investigation import http_behavior
 from app.services.response.response_action_service import ResponseActionService
 from app.core.exceptions import NotFoundError, BadRequestError
 
@@ -85,6 +86,9 @@ class AIResponseService:
             if not incident:
                 logger.warning(f"Incident {incident_id} not found")
                 return None
+
+            if http_behavior(incident):
+                return None  # HTTP proposals are generated through Response Assist.
 
             # Phase 2: Call AI LLM without holding any active database connections
             prompt = self._build_prompt(
@@ -208,6 +212,9 @@ class AIResponseService:
         incident = await session.get(Incident, incident_id)
         if not incident or not incident.agent_id:
             raise NotFoundError(f"Incident '{incident_id}' or associated agent ID was not found")
+
+        if http_behavior(incident):
+            raise ValueError("Review this HTTP incident in AI Response Assist")
 
         # === VALIDATION BLOCK (thêm trước khi dispatch) ===
         suggested = suggestion.suggested_action

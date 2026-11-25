@@ -59,6 +59,12 @@ class ResponseActionService:
         """
         Tạo và áp dụng response action với snapshot bảo toàn trạng thái.
         """
+        if incident_id and action_type not in {"unisolate", "restore_file", "restore_registry"}:
+            from app.models.incident import Incident
+            from app.services.response.http_investigation import http_behavior
+            incident = await self.session.get(Incident, incident_id)
+            if incident and http_behavior(incident):
+                raise BadRequestError("Use evidence-scoped response proposals for HTTP incidents")
         if is_reserved_action(action_type):
             raise BadRequestError("Use the authenticated network action endpoint")
         action_params = dict(action_params or {})
@@ -204,7 +210,9 @@ class ResponseActionService:
         return action
 
     async def get_action(self, action_id: str) -> Optional[ResponseAction]:
-        return await self.action_repo.get(action_id)
+        from app.services.response.http_investigation import ASSIST_TYPES
+        row = await self.action_repo.get(action_id)
+        return row if row and row.action_type not in ASSIST_TYPES else None
 
     async def list_actions_by_agent(self, agent_id: str, limit: int = 50, offset: int = 0) -> List[ResponseAction]:
         return await self.action_repo.get_by_agent(agent_id, limit=limit, offset=offset)

@@ -26,8 +26,10 @@ import uuid
 from datetime import datetime, timezone
 
 if __package__:
+    from .response_guard import install_guard
     from .http_evidence import ACCOUNT, safe_http_target, sql_indicators
 else:
+    from response_guard import install_guard
     from http_evidence import ACCOUNT, safe_http_target, sql_indicators
 
 
@@ -140,6 +142,9 @@ def assign_observation_id():
     g.observation_id = uuid.uuid4().hex
 
 
+install_guard(app)
+
+
 @app.after_request
 def log_http_access_telemetry(response):
     client_ip, ip_source = get_client_ip()
@@ -157,6 +162,8 @@ def log_http_access_telemetry(response):
         "timestamp": datetime.now(timezone.utc).isoformat(), "host": request.host,
         "service": "flask_web", "payload_indicators": sorted(indicators),
     }
+    if g.get("session_ref"):
+        entry["session_ref"] = g.session_ref
     access_logger.info(json.dumps(entry, ensure_ascii=False))
     if auth is not None:
         auth_logger.info(json.dumps({
@@ -428,6 +435,13 @@ def login():
             c.execute(query)
 
             user = c.fetchone()
+            if user:
+                # Independently evaluate the intended authentication policy without retaining inputs.
+                c.execute("SELECT 1 FROM users WHERE id=? AND username=? AND password=?",
+                          (user[0], username, hashlib.md5(password.encode()).hexdigest()))
+                g.credential_match = c.fetchone() is not None
+                session["audit_nonce"] = uuid.uuid4().hex
+                g.session_ref = hashlib.sha256(session["audit_nonce"].encode()).hexdigest()
 
             conn.close()
 

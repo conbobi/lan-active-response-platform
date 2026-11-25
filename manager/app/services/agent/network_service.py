@@ -85,6 +85,27 @@ async def _update_action(session, command, status, transaction=None, error=None)
     )
 
 
+async def _collection_state(session, cmd, state, snapshot=None):
+    assist_id = (cmd.payload or {}).get("assist_id")
+    if cmd.action != REFRESH or not assist_id:
+        return
+    action = await session.get(ResponseAction, assist_id, with_for_update=True)
+    if (not action or action.action_type != "collect_additional_evidence" or action.agent_id != cmd.agent_id
+            or (action.snapshot or {}).get("command_id") != cmd.id or action.status not in {"executing", "dispatched"}):
+        return
+    stamp = now()
+    result = dict(action.snapshot)
+    if state != "executing":
+        verification = {"timestamp": stamp.isoformat(), "status": state, "method": "authenticated_network_snapshot",
+                        "evidence_refs": [snapshot["snapshot_id"]] if snapshot else [],
+                        "command_id": cmd.id, "verification_ms": int((stamp - utc(cmd.issued_at)).total_seconds() * 1000)}
+        result["verification"] = verification
+        await ActionAuditLogService(session).record_event(action.id, "verifying", "manager", metadata=verification)
+    action.snapshot = result
+    action.status = state
+    await ActionAuditLogService(session).record_event(action.id, state, "manager", metadata={"command_id": cmd.id})
+
+
 async def expire_commands(session, agent_id):
     current = now()
     rows = (await session.scalars(select(Command).where(
@@ -98,6 +119,7 @@ async def expire_commands(session, agent_id):
             continue
         cmd.status = CommandStatus.TIMEOUT
         cmd.error_message = "Agent acknowledgement timed out"
+        await _collection_state(session, cmd, "failed")
         await _update_action(session, cmd, "timeout", error=cmd.error_message)
     await session.flush()
 
@@ -183,6 +205,7 @@ async def pull_network_command(session, agent_id, *, reported_safety=None):
             await _update_action(session, cmd, "failed", error=cmd.error_message)
             return None
     cmd.send_to_agent()
+    await _collection_state(session, cmd, "executing")
     return {"agent_id": agent_id, "schema_version": 1, "command_id": cmd.id, "action": cmd.action,
             "expires_at": cmd.payload["expires_at"], "params": cmd.payload["params"], "firewall_safety_version": version}
 
@@ -196,10 +219,27 @@ async def acknowledge(session, agent_id, payload):
         raise ValueError("Unknown network command")
     if cmd.status not in {CommandStatus.SENT, CommandStatus.TIMEOUT}:
         return
+    if (cmd.payload or {}).get("assist_id"):
+        if cmd.status != CommandStatus.SENT:
+            return
+        if now() - utc(cmd.issued_at) > timedelta(seconds=RESULT_TTL):
+            await expire_commands(session, agent_id)
+            return
     snapshot = await session.get(NetworkSnapshot, agent_id)
     result = dto.transaction or {}
     verified = bool(snapshot and dto.snapshot_id and snapshot.payload.get("snapshot_id") == dto.snapshot_id
                     and snapshot.payload.get("command_id") == cmd.id and snapshot.payload.get("status") in {"ok", "partial"})
+    if (cmd.payload or {}).get("assist_id"):
+        collected = snapshot.payload.get("collected_at") if snapshot else None
+        captured = datetime.fromisoformat(collected) if isinstance(collected, str) else None
+        verified = (verified and captured is not None and captured.tzinfo is not None
+                    and utc(cmd.issued_at) - timedelta(seconds=5) <= captured <= now() + timedelta(seconds=5)
+                    and bool(snapshot.payload.get("sections")))
+        success = dto.status == "success" and verified
+        cmd.acknowledge(CommandStatus.SUCCESS if success else CommandStatus.FAILED)
+        state = ("partial" if snapshot.payload["status"] == "partial" else "succeeded") if success else "failed"
+        await _collection_state(session, cmd, state, snapshot.payload if success else None)
+        return
     if cmd.action == FIREWALL and verified:
         firewall = snapshot.payload["sections"].get("firewall", {})
         params = cmd.payload["params"]

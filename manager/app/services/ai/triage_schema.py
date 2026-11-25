@@ -7,12 +7,17 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.services.ai.alert_context_projector import AlertContext
 from app.services.ai.knowledge.mitre_kb import mitre_kb
-from app.services.detection.behavior_evidence import BEHAVIORS, BRUTE_FORCE, REPEATED, SCAN, SQLI, UNKNOWN
+from app.services.detection.behavior_evidence import (
+    BEHAVIORS, BRUTE_FORCE, REPEATED, SCAN, SQLI, UNKNOWN,
+    SQLI_TOOL, SQLI_PROBE, SQLI_SUSPECTED, SQLI_CONFIRMED, AUTOMATED_HTTP,
+)
 
 Classification = Literal[
     "benign_expected", "suspicious_unconfirmed", "likely_malicious",
     "confirmed_malicious", "insufficient_telemetry",
     "repeated_auth_failures", "authentication_brute_force", "sqli_probing",
+    "sqli_tool_indicator", "sqli_probe_observed", "sqli_exploitation_suspected",
+    "sqli_exploitation_confirmed", "automated_http_activity",
     "network_service_scanning", "unknown_automated_activity",
 ]
 EvidenceID = Annotated[str, Field(pattern=r"^[PNF][1-9][0-9]{0,2}$")]
@@ -100,10 +105,17 @@ def behavior_verdict(context: AlertContext) -> ValidatedVerdict | None:
             techniques = [format_technique(tech, [key])] if tech and mitre_kb.validate_technique(tech) else []
             completeness = item.get("evidence_completeness", "partial")
             classification = item["classification"]
-            confidence = {
+            confidence_map = {
                 REPEATED: 0.9, BRUTE_FORCE: 0.85, SCAN: 0.85,
-                SQLI: 0.85 if tech else 0.7, UNKNOWN: 0.45,
-            }[classification]
+                SQLI: 0.85 if tech else 0.7,
+                SQLI_PROBE: 0.85 if tech else 0.7,
+                SQLI_TOOL: 0.60,
+                SQLI_SUSPECTED: 0.85,
+                SQLI_CONFIRMED: 0.95,
+                AUTOMATED_HTTP: 0.50,
+                UNKNOWN: 0.45,
+            }
+            confidence = confidence_map.get(classification, 0.5)
             return ValidatedVerdict(
                 classification, confidence, [key], techniques, completeness,
             )

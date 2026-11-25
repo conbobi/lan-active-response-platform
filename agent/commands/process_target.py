@@ -77,10 +77,10 @@ def terminate(params, tree):
                 if _identity(live) != identities[proc.pid] or _protected(live, agent_lineage):
                     return {**result, "message": "Process identity changed before termination"}
                 fd = descriptors[proc.pid]
-                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                signal.pidfd_send_signal(fd, signal.SIGTERM)
                 poller = select.poll()
                 poller.register(fd, select.POLLIN)
-                if not any(events & select.POLLIN for _, events in poller.poll(500)):
+                if not any(events & select.POLLIN for _, events in poller.poll(1500)):
                     return {**result, "message": f"Exit of PID {proc.pid} could not be verified"}
                 result["killed_pids"].append(proc.pid)
     except (psutil.Error, OSError, ValueError) as error:
