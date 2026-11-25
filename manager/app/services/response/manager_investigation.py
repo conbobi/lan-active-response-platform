@@ -1,5 +1,6 @@
 """Manager-local, bounded read-only monitoring and remediation notes."""
 from datetime import datetime, timezone
+import uuid
 
 from sqlalchemy import select, update
 from app.models.incident_note import IncidentNote
@@ -20,8 +21,21 @@ async def record_guidance(db, action, actor):
         IncidentNote.incident_id == action.incident_id, IncidentNote.content == note.content))
     stamp = datetime.now(timezone.utc)
     action.status = "succeeded" if persisted else "failed"
-    action.snapshot = {"verification": {"timestamp": stamp.isoformat(), "status": action.status,
-                       "method": "persisted_incident_note", "evidence_refs": [persisted] if persisted else []}}
+    verification = {
+        "verification_id": (action.snapshot or {}).get("verification", {}).get("verification_id") or uuid.uuid4().hex,
+        "action_id": action.id,
+        "verification_method": "persisted_incident_note",
+        "method": "persisted_incident_note",
+        "observed_at": stamp.isoformat(),
+        "timestamp": stamp.isoformat(),
+        "expected_result": "Remediation note attached to incident in database",
+        "actual_result": f"Note persisted with ID {persisted}" if persisted else "Failed to persist note",
+        "evidence_refs": [persisted] if persisted else [],
+        "verification_status": action.status,
+        "status": action.status,
+        "failure_reason": None if persisted else "Database persistence failure"
+    }
+    action.snapshot = {"verification": verification}
     await ActionAuditLogService(db).record_event(action.id, action.status, "manager", metadata=action.snapshot)
 
 
@@ -41,7 +55,20 @@ async def reconcile_watch(db, action, stop_actor=None):
         WebAccessLog.src_ip == action.action_params["target_resource"]["source_ip"],
         WebAccessLog.timestamp.between(start, min(stamp, end))).order_by(WebAccessLog.timestamp.desc()).limit(25)))
     state = "rolled_back" if stop_actor else ("expired" if stamp >= end else "monitoring")
-    result = {"timestamp": stamp.isoformat(), "status": state, "method": "time_bounded_http_query", "evidence_refs": refs}
+    result = {
+        "verification_id": (snap.get("verification") or {}).get("verification_id") or uuid.uuid4().hex,
+        "action_id": action.id,
+        "verification_method": "time_bounded_http_query",
+        "method": "time_bounded_http_query",
+        "observed_at": stamp.isoformat(),
+        "timestamp": stamp.isoformat(),
+        "expected_result": "Bounded database query for matching HTTP access logs",
+        "actual_result": f"Found {len(refs)} matching log entries within window",
+        "evidence_refs": refs,
+        "verification_status": state,
+        "status": state,
+        "failure_reason": None
+    }
     if state != action.status or refs != snap.get("verification", {}).get("evidence_refs", []):
         await ActionAuditLogService(db).record_event(action.id, state, stop_actor or "manager", metadata=result)
     action.snapshot = {**snap, "verification": result}

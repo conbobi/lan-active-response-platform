@@ -37,6 +37,12 @@ class CollectionProposal(BaseModel):
     target_agent_id: str
     target_resource: dict[str, str]
     evidence_ids: list[str]
+    evidence_snapshot_hash: str = ""
+    evidence_observed_at: str = ""
+    proposal_created_at: str = ""
+    evidence_completeness: str = "partial"
+    ai_confidence: float = 0.5
+    approval_requirement: str = "operator_approval"
     rationale: str
     expected_effect: str = "Collect related records and a fresh Agent network snapshot."
     potential_impact: str = "One bounded collection on the endpoint."
@@ -78,6 +84,7 @@ class GuideProposal(CollectionProposal):
     expected_effect: str = "Attach an evidence-linked remediation note to the incident."
     potential_impact: str = "Adds one analyst-visible note."
     requires_approval: Literal[False] = False
+    approval_requirement: str = "automatic"
     prerequisites: tuple[str, ...] = ("Incident HTTP evidence",)
     required_capabilities: tuple[str, ...] = ("incident_notes",)
 
@@ -191,14 +198,25 @@ async def investigate(db, incident):
         "sqli_tool_indicator": "The HTTP client identified itself as a SQL testing tool.",
         "automated_http_activity": "The HTTP client identified itself as an automated client.",
     }[cls]
+    snap_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
+    obs_at = facts[-1]["observed_at"] if facts else ""
+    created_at = as_utc(rows[-1].timestamp).isoformat() if rows else ""
+    comp = "complete_for_session_grant" if cls == "sqli_exploitation_confirmed" else "partial"
+    common_meta = {
+        "evidence_snapshot_hash": snap_hash,
+        "evidence_observed_at": obs_at,
+        "proposal_created_at": created_at,
+        "evidence_completeness": comp,
+        "ai_confidence": confidence,
+    }
     proposal = CollectionProposal(action_id=action_id, incident_id=incident.id, target_agent_id=incident.agent_id,
-                                  target_resource={"evidence_group": group}, evidence_ids=refs, rationale=rationale)
+                                  target_resource={"evidence_group": group}, evidence_ids=refs, rationale=rationale, **common_meta)
     proposals = [proposal]
     for schema, kind in [(GuideProposal, GUIDE), (WatchProposal, WATCH)]:
         proposals.append(schema(action_id=hashlib.sha256((action_id + kind).encode()).hexdigest(),
                                 incident_id=incident.id, target_agent_id=incident.agent_id,
                                 target_resource={"evidence_group": group, "source_ip": rows[-1].src_ip},
-                                evidence_ids=refs, rationale=rationale))
+                                evidence_ids=refs, rationale=rationale, **common_meta))
     if candidates:
         row, request_id = candidates[-1]
         if await asyncio.to_thread(lab_waf.direct_observation, incident.agent_id, row.src_ip,
@@ -207,11 +225,11 @@ async def investigate(db, incident):
             proposals.append(RateProposal(
                 action_id=hashlib.sha256((action_id + RATE).encode()).hexdigest(), incident_id=incident.id,
                 target_agent_id=incident.agent_id, target_resource=target,
-                evidence_ids=list(dict.fromkeys([*refs, request_id])), rationale=rationale,
+                evidence_ids=list(dict.fromkeys([*refs, request_id])), rationale=rationale, **common_meta
             ))
             proposals.append(BlockProposal(
                 action_id=hashlib.sha256((action_id + BLOCK).encode()).hexdigest(), incident_id=incident.id,
-                target_agent_id=incident.agent_id, target_resource=target, evidence_ids=list(dict.fromkeys([*refs, request_id])), rationale=rationale,
+                target_agent_id=incident.agent_id, target_resource=target, evidence_ids=list(dict.fromkeys([*refs, request_id])), rationale=rationale, **common_meta
             ))
     if compromised:
         rid, ref, peer, stamp = compromised
@@ -219,7 +237,7 @@ async def investigate(db, incident):
             proposals.append(RevokeProposal(
                 action_id=hashlib.sha256((action_id + REVOKE + ref).encode()).hexdigest(), incident_id=incident.id,
                 target_agent_id=incident.agent_id, target_resource={"session_ref": ref, "request_id": rid},
-                evidence_ids=refs, rationale=rationale))
+                evidence_ids=refs, rationale=rationale, **common_meta))
     from app.models.response_action import ResponseAction
     history = (await db.execute(select(ResponseAction.action_type, ResponseAction.outcome).where(
         ResponseAction.agent_id == incident.agent_id, ResponseAction.action_type.in_(ASSIST_TYPES),

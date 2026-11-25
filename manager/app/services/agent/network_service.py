@@ -55,6 +55,28 @@ async def store_snapshot(session, agent_id, payload):
     snapshot.received_at = stamp
     snapshot.payload = dto.model_dump(mode="json")
 
+    # If an assist command was already ACKed before snapshot arrived, finalize correlation
+    pending_cmds = (await session.scalars(select(Command).where(
+        Command.agent_id == agent_id,
+        Command.action == REFRESH,
+    ).with_for_update())).all()
+    for p_cmd in pending_cmds:
+        if (p_cmd.payload or {}).get("assist_id"):
+            last_ack = (p_cmd.payload or {}).get("last_ack")
+            if last_ack and last_ack.get("snapshot_id") == dto.snapshot_id and p_cmd.error_message == "Missing correlated snapshot":
+                captured = dto.collected_at
+                verified = (
+                    dto.command_id == p_cmd.id
+                    and dto.status in {"ok", "partial"}
+                    and captured is not None and captured.tzinfo is not None
+                    and utc(p_cmd.issued_at) - timedelta(seconds=5) <= captured <= now() + timedelta(seconds=5)
+                    and bool(dto.sections)
+                )
+                if verified and last_ack.get("status") == "success":
+                    p_cmd.acknowledge(CommandStatus.SUCCESS)
+                    state = "partial" if dto.status == "partial" else "succeeded"
+                    await _collection_state(session, p_cmd, state, snapshot.payload)
+
 
 async def mark_unsupported(session, agent_id, platform):
     snapshot = await session.get(NetworkSnapshot, agent_id)
@@ -91,14 +113,28 @@ async def _collection_state(session, cmd, state, snapshot=None):
         return
     action = await session.get(ResponseAction, assist_id, with_for_update=True)
     if (not action or action.action_type != "collect_additional_evidence" or action.agent_id != cmd.agent_id
-            or (action.snapshot or {}).get("command_id") != cmd.id or action.status not in {"executing", "dispatched"}):
+            or (action.snapshot or {}).get("command_id") != cmd.id or action.status not in {"executing", "dispatched", "verifying", "failed"}):
         return
     stamp = now()
     result = dict(action.snapshot)
     if state != "executing":
-        verification = {"timestamp": stamp.isoformat(), "status": state, "method": "authenticated_network_snapshot",
-                        "evidence_refs": [snapshot["snapshot_id"]] if snapshot else [],
-                        "command_id": cmd.id, "verification_ms": int((stamp - utc(cmd.issued_at)).total_seconds() * 1000)}
+        failure_reason = None if state in {"succeeded", "partial"} else "Correlated snapshot missing or invalid"
+        verification = {
+            "verification_id": (result.get("verification") or {}).get("verification_id") or uuid.uuid4().hex,
+            "action_id": action.id,
+            "verification_method": "authenticated_network_snapshot",
+            "method": "authenticated_network_snapshot",
+            "observed_at": stamp.isoformat(),
+            "timestamp": stamp.isoformat(),
+            "expected_result": f"Network snapshot correlated to command {cmd.id}",
+            "actual_result": f"Correlated network snapshot {snapshot['snapshot_id']} received with status {snapshot.get('status')}" if snapshot else "No snapshot correlated within time window",
+            "evidence_refs": [snapshot["snapshot_id"]] if snapshot else [],
+            "verification_status": state,
+            "status": state,
+            "failure_reason": failure_reason,
+            "command_id": cmd.id,
+            "verification_ms": int((stamp - utc(cmd.issued_at)).total_seconds() * 1000)
+        }
         result["verification"] = verification
         await ActionAuditLogService(session).record_event(action.id, "verifying", "manager", metadata=verification)
     action.snapshot = result
@@ -227,19 +263,26 @@ async def acknowledge(session, agent_id, payload):
             return
     snapshot = await session.get(NetworkSnapshot, agent_id)
     result = dto.transaction or {}
-    verified = bool(snapshot and dto.snapshot_id and snapshot.payload.get("snapshot_id") == dto.snapshot_id
-                    and snapshot.payload.get("command_id") == cmd.id and snapshot.payload.get("status") in {"ok", "partial"})
+    has_matching_snapshot = bool(snapshot and dto.snapshot_id and snapshot.payload.get("snapshot_id") == dto.snapshot_id)
     if (cmd.payload or {}).get("assist_id"):
-        collected = snapshot.payload.get("collected_at") if snapshot else None
+        cmd.payload = {**(cmd.payload or {}), "last_ack": dto.model_dump(mode="json")}
+        collected = snapshot.payload.get("collected_at") if (snapshot and has_matching_snapshot) else None
         captured = datetime.fromisoformat(collected) if isinstance(collected, str) else None
-        verified = (verified and captured is not None and captured.tzinfo is not None
-                    and utc(cmd.issued_at) - timedelta(seconds=5) <= captured <= now() + timedelta(seconds=5)
-                    and bool(snapshot.payload.get("sections")))
+        verified = (
+            has_matching_snapshot
+            and snapshot.payload.get("command_id") == cmd.id
+            and snapshot.payload.get("status") in {"ok", "partial"}
+            and captured is not None and captured.tzinfo is not None
+            and utc(cmd.issued_at) - timedelta(seconds=5) <= captured <= now() + timedelta(seconds=5)
+            and bool(snapshot.payload.get("sections"))
+        )
         success = dto.status == "success" and verified
-        cmd.acknowledge(CommandStatus.SUCCESS if success else CommandStatus.FAILED)
-        state = ("partial" if snapshot.payload["status"] == "partial" else "succeeded") if success else "failed"
+        cmd.acknowledge(CommandStatus.SUCCESS if success else CommandStatus.FAILED,
+                        None if success else ("Missing correlated snapshot" if not has_matching_snapshot else "Snapshot verification failed"))
+        state = ("partial" if (has_matching_snapshot and snapshot.payload.get("status") == "partial") else "succeeded") if success else "failed"
         await _collection_state(session, cmd, state, snapshot.payload if success else None)
         return
+    verified = has_matching_snapshot and snapshot.payload.get("command_id") == cmd.id and snapshot.payload.get("status") in {"ok", "partial"}
     if cmd.action == FIREWALL and verified:
         firewall = snapshot.payload["sections"].get("firewall", {})
         params = cmd.payload["params"]

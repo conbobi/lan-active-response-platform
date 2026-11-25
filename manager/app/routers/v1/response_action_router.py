@@ -1,8 +1,9 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
+from app.core.network_security import verify_operator_or_admin
 from app.schemas.response_action import (
     ResponseActionCreate,
     ResponseActionResponse,
@@ -24,6 +25,17 @@ from app.core.exceptions import NotFoundError
 router = APIRouter(tags=["Response Actions & Rollback"])
 
 
+def _enforce_operator(authorization: Optional[str], agent_id: Optional[str] = None, write: bool = True) -> str:
+    identity, role = verify_operator_or_admin(authorization, agent_id=agent_id, write=write)
+    if role is None and identity != "legacy_admin":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Configured operator credentials required for response actions",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    return identity
+
+
 # ==============================================================================
 # RESPONSE ACTIONS CRUD & EXECUTION
 # ==============================================================================
@@ -31,16 +43,18 @@ router = APIRouter(tags=["Response Actions & Rollback"])
 @router.post("/actions", response_model=ResponseActionResponse, status_code=status.HTTP_201_CREATED)
 async def create_and_apply_action(
     dto: ResponseActionCreate,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Thực thi một response action mới (isolate, kill, block_ip, quarantine) có lưu snapshot."""
+    actor = _enforce_operator(authorization, agent_id=dto.agent_id, write=True)
     service = ResponseActionService(db)
     return await service.create_and_apply_action(
         agent_id=dto.agent_id,
         action_type=dto.action_type.value if hasattr(dto.action_type, "value") else str(dto.action_type),
         action_params=dto.action_params,
         incident_id=dto.incident_id,
-        actor="analyst",
+        actor=actor,
         auto_rollback_seconds=dto.auto_rollback_seconds
     )
 
@@ -83,15 +97,21 @@ async def get_response_action(
 async def undo_single_action(
     action_id: str,
     req: Optional[UndoActionRequest] = None,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Undo thủ công 1 response action.
     Khôi phục trạng thái agent dựa trên snapshot và gửi lệnh đảo ngược tương ứng.
     """
-    service = RollbackService(db)
+    service = ResponseActionService(db)
+    action = await service.get_action(action_id)
+    if not action:
+        raise NotFoundError(f"ResponseAction '{action_id}' was not found.")
+    actor = _enforce_operator(authorization, agent_id=action.agent_id, write=True)
+    rollback_svc = RollbackService(db)
     reason = req.reason if req and req.reason else "Manual undo via UI/API"
-    return await service.rollback_action(action_id=action_id, reason=reason, actor="analyst")
+    return await rollback_svc.rollback_action(action_id=action_id, reason=reason, actor=actor)
 
 
 @router.get("/actions/{action_id}/audit", response_model=List[ActionAuditLogResponse])
@@ -126,12 +146,14 @@ async def list_agent_actions(
 async def undo_all_agent_actions(
     agent_id: str,
     req: Optional[UndoBatchRequest] = None,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Undo toàn bộ các response action đang có hiệu lực trên một agent."""
+    actor = _enforce_operator(authorization, agent_id=agent_id, write=True)
     service = RollbackService(db)
     reason = req.reason if req and req.reason else "Batch agent undo via UI/API"
-    return await service.rollback_agent_actions(agent_id=agent_id, reason=reason, actor="analyst")
+    return await service.rollback_agent_actions(agent_id=agent_id, reason=reason, actor=actor)
 
 
 @router.get("/incidents/{incident_id}/actions", response_model=List[ResponseActionResponse])
@@ -148,12 +170,17 @@ async def list_incident_actions(
 async def undo_all_incident_actions(
     incident_id: str,
     req: Optional[UndoBatchRequest] = None,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Undo toàn bộ các response action đang áp dụng thuộc về một incident."""
+    from app.models.incident import Incident
+    incident = await db.get(Incident, incident_id)
+    agent_id = incident.agent_id if incident else None
+    actor = _enforce_operator(authorization, agent_id=agent_id, write=True)
     service = RollbackService(db)
     reason = req.reason if req and req.reason else "Batch incident undo via UI/API"
-    return await service.rollback_incident_actions(incident_id=incident_id, reason=reason, actor="analyst")
+    return await service.rollback_incident_actions(incident_id=incident_id, reason=reason, actor=actor)
 
 
 # ==============================================================================
@@ -173,9 +200,11 @@ async def get_auto_rollback_settings(
 @router.patch("/settings/auto-rollback", response_model=AutoRollbackSettingResponse)
 async def update_auto_rollback_settings(
     req: AutoRollbackSettingRequest,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Cập nhật cấu hình auto-rollback (timeout, enabled, cooldown)."""
+    _enforce_operator(authorization, write=True)
     service = SettingService(db)
     res = await service.update_auto_rollback_settings(
         timeout_seconds=req.timeout_seconds,

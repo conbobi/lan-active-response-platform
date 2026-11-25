@@ -1,16 +1,28 @@
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Depends, status, Body, HTTPException
+from fastapi import APIRouter, Depends, Header, status, Body, HTTPException
 from pydantic import BaseModel, StrictBool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
+from app.core.network_security import verify_operator_or_admin
 from app.services.process.process_tree_service import ProcessTreeService
 from app.services.response.response_action_service import ResponseActionService
 from app.models.process_info import ProcessInfo
 from app.schemas.command import CommandOut
 
 router = APIRouter(tags=["Process & Root Cause Analysis"])
+
+
+def _enforce_operator(authorization: Optional[str], agent_id: Optional[str] = None) -> str:
+    identity, role = verify_operator_or_admin(authorization, agent_id=agent_id, write=True)
+    if role is None and identity != "legacy_admin":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Configured operator credentials required for process termination",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    return identity
 
 
 class KillProcessRequest(BaseModel):
@@ -43,9 +55,11 @@ async def get_suspicious_processes(agent_id: str, db: AsyncSession = Depends(get
 async def kill_agent_process(
     agent_id: str,
     payload: Dict[str, Any] = Body(..., example={"pid": 1234}),
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Issue kill_process command to terminate a specified PID on an agent."""
+    _enforce_operator(authorization, agent_id=agent_id)
     pid = payload.get("pid")
     if not pid:
         from app.core.exceptions import BadRequestError
@@ -60,9 +74,11 @@ async def kill_agent_process(
 async def kill_agent_process_tree(
     agent_id: str,
     payload: Dict[str, Any] = Body(..., example={"pid": 1234, "process_name": "nc"}),
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Issue kill_process_tree command to terminate a process and its child processes on an agent."""
+    _enforce_operator(authorization, agent_id=agent_id)
     pid = payload.get("pid")
     if not pid:
         from app.core.exceptions import BadRequestError
@@ -78,9 +94,11 @@ async def kill_process_on_agent(
     agent_id: str,
     pid: int,
     body: KillProcessRequest,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger kill_process or kill_process_tree command on agent via ResponseActionService."""
+    actor = _enforce_operator(authorization, agent_id=agent_id)
     if pid <= 2:
         raise HTTPException(status_code=400, detail="PID must be greater than 2")
 
@@ -137,7 +155,7 @@ async def kill_process_on_agent(
             "parent_pid": parent_pid,
             "exe_path": exe_path,
         },
-        actor="analyst",
+        actor=actor,
     )
 
     return {

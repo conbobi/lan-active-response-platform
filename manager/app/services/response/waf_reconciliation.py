@@ -1,6 +1,7 @@
 """Reconcile an approved lab lease with its application-side receipt."""
 import asyncio
 import sqlite3
+import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import update
@@ -55,8 +56,36 @@ async def reconcile(db, row, *, undo_actor=None):
     if before == "rollback_failed" and not undo_actor and status != "expired":
         return
     if before != status or undo_actor:
-        verification = {"timestamp": stamp.isoformat(), "status": status, "method": method,
-                        "evidence_refs": refs, "elapsed_ms": round((stamp.timestamp() - snap["start"]) * 1000)}
+        failure_reason = None if status in {"succeeded", "rolled_back", "verifying"} else ("Application lease expired before receipt" if status == "expired" else "Verification failed")
+        expected_map = {
+            "temporary_ip_block": "HTTP 403 response on POST /login from direct peer",
+            "apply_rate_limit": "HTTP 429 rate limit response on POST /login exceeding 3 requests in 10s",
+            "revoke_session": "HTTP 401 response on targeted session cookie via response_guard",
+        }
+        actual_map = {
+            "succeeded": f"Observed HTTP rejection receipt: {', '.join(refs)}",
+            "verifying": "Active lease registered; awaiting direct peer verification receipt",
+            "expired": "Lease expired without HTTP rejection receipt",
+            "rolled_back": "Owned application lease removed and verified absent",
+            "rollback_failed": "Could not remove lease from durable store",
+            "failed": "Verification failed due to store error",
+            "partial": "Partial receipt observed before deadline",
+        }
+        verification = {
+            "verification_id": (snap.get("verification") or {}).get("verification_id") or uuid.uuid4().hex,
+            "action_id": row.id,
+            "verification_method": method,
+            "method": method,
+            "observed_at": stamp.isoformat(),
+            "timestamp": stamp.isoformat(),
+            "expected_result": "Removal of application lease" if undo_actor else expected_map.get(row.action_type, "HTTP response enforcement"),
+            "actual_result": actual_map.get(status, status),
+            "evidence_refs": refs,
+            "verification_status": status,
+            "status": status,
+            "failure_reason": failure_reason,
+            "elapsed_ms": round((stamp.timestamp() - snap["start"]) * 1000)
+        }
         row.status = status
         row.snapshot = {**snap, "verification": verification}
         await audit.record_event(row.id, status, undo_actor or "lab_waf", metadata=verification)
