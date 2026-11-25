@@ -1,5 +1,4 @@
-
-# ~/vulnerable_web/app.py
+# /opt/larp-agent/vulnerable_web/app.py
 
 from flask import (
     Flask,
@@ -23,19 +22,12 @@ import threading
 
 from datetime import datetime, timezone
 
-
 # ============================================================
 # FLASK CONFIGURATION
 # ============================================================
 
 app = Flask(__name__)
-
-# Chỉ dùng cho lab demo.
-# Khi triển khai thật, cần dùng secret key ngẫu nhiên từ environment.
-app.secret_key = os.getenv(
-    "FLASK_SECRET_KEY",
-    "insecure_key_123"
-)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "insecure_key_123")
 
 BASE_DIR = os.getenv("VULNERABLE_WEB_DIR", os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = "/tmp/uploads"
@@ -72,7 +64,6 @@ access_logger.propagate = False
 
 formatter = logging.Formatter("%(message)s")
 
-# Attach file handlers for auth logging
 if not auth_logger.handlers:
     for log_p in AUTH_LOG_PATHS:
         try:
@@ -80,14 +71,10 @@ if not auth_logger.handlers:
             h = logging.FileHandler(log_p, encoding="utf-8")
             h.setFormatter(formatter)
             auth_logger.addHandler(h)
-            try:
-                os.chmod(log_p, 0o666)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            try: os.chmod(log_p, 0o666)
+            except: pass
+        except: pass
 
-# Attach file handlers for access logging
 if not access_logger.handlers:
     for log_p in ACCESS_LOG_PATHS:
         try:
@@ -95,43 +82,27 @@ if not access_logger.handlers:
             h = logging.FileHandler(log_p, encoding="utf-8")
             h.setFormatter(formatter)
             access_logger.addHandler(h)
-            try:
-                os.chmod(log_p, 0o666)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
+            try: os.chmod(log_p, 0o666)
+            except: pass
+        except: pass
 
 def get_client_ip():
-    """
-    Lấy IP Client từ Cloudflare Tunnel, Reverse Proxy (X-Forwarded-For) hoặc Direct Request.
-    """
     cf_ip = request.headers.get("CF-Connecting-IP", "").strip()
     if cf_ip:
-        try:
-            return (str(ipaddress.ip_address(cf_ip)), "cloudflare")
-        except ValueError:
-            pass
+        try: return (str(ipaddress.ip_address(cf_ip)), "cloudflare")
+        except ValueError: pass
 
     xff = request.headers.get("X-Forwarded-For", "").strip()
     if xff:
         client = xff.split(",")[0].strip()
-        try:
-            return (str(ipaddress.ip_address(client)), "x_forwarded_for")
-        except ValueError:
-            pass
+        try: return (str(ipaddress.ip_address(client)), "x_forwarded_for")
+        except ValueError: pass
 
     remote_ip = request.remote_addr or "unknown"
     return remote_ip, "remote_addr"
 
-
 @app.after_request
 def log_http_access_telemetry(response):
-    """
-    Ghi lại toàn bộ HTTP request telemetry vào access.log để WebLogMonitor
-    trên LARP Agent phát hiện công cụ quét mạng (Hydra, nmap, sqlmap, nikto, v.v.).
-    """
     try:
         client_ip, ip_source = get_client_ip()
         full_path = request.full_path if request.query_string else request.path
@@ -145,668 +116,154 @@ def log_http_access_telemetry(response):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "host": request.host,
         }
-        json_line = json.dumps(entry, ensure_ascii=False)
-        access_logger.info(json_line)
-    except Exception:
-        pass
+        access_logger.info(json.dumps(entry, ensure_ascii=False))
+    except: pass
     return response
 
-
 def write_auth_event(status, username, error_type=None):
-
     client_ip, ip_source = get_client_ip()
-
     event = {
         "status": status,
-
         "event_type": "WEB_AUTH_" + status.upper(),
-
-        "timestamp": datetime.now(
-            timezone.utc
-        ).isoformat(),
-
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "username": str(username or "")[:128],
-
         "source_ip": client_ip,
-
         "ip_source": ip_source,
-
         "service": "flask_web",
-
         "path": request.path,
-
         "method": request.method
     }
-
-    if error_type:
-        event["error_type"] = error_type
-
-    auth_logger.info(
-        json.dumps(
-            event,
-            ensure_ascii=False
-        )
-    )
-
+    if error_type: event["error_type"] = error_type
+    auth_logger.info(json.dumps(event, ensure_ascii=False))
 
 def write_lab_event(event_type, details=None):
-
     client_ip, ip_source = get_client_ip()
-
     event = {
         "event_type": event_type,
-
-        "timestamp": datetime.now(
-            timezone.utc
-        ).isoformat(),
-
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "source_ip": client_ip,
-
         "ip_source": ip_source,
-
         "username": session.get("user"),
-
         "service": "flask_web",
-
         "details": details or {}
     }
-
-    auth_logger.info(
-        json.dumps(
-            event,
-            ensure_ascii=False
-        )
-    )
-
-
-# ============================================================
-# LARP EDR LAB CONFIGURATION
-# ============================================================
-
-# Tắt mặc định.
-# Chỉ bật khi muốn thực hiện bài kiểm thử EDR.
-
-EDR_LAB_ENABLED = (
-    os.getenv("EDR_LAB_ENABLED", "0") == "1"
-)
-
-# Danh sách IP được phép gọi endpoint.
-# Hỗ trợ IP đơn hoặc CIDR.
-#
-# Ví dụ:
-# EDR_LAB_ALLOWED_IPS="203.0.113.10,192.168.1.0/24"
-
-EDR_LAB_ALLOWED_IPS = os.getenv(
-    "EDR_LAB_ALLOWED_IPS",
-    ""
-)
-
-# Một IP chỉ được tạo process test mỗi 60 giây.
-
-LAB_COOLDOWN_SECONDS = 60
-
-_lab_last_trigger = {}
-
-_lab_lock = threading.Lock()
-
-
-def is_lab_ip_allowed(client_ip):
-
-    if not EDR_LAB_ALLOWED_IPS.strip():
-        return False
-
-    try:
-        remote = ipaddress.ip_address(client_ip)
-
-    except ValueError:
-        return False
-
-    allowed_entries = (
-        EDR_LAB_ALLOWED_IPS.split(",")
-    )
-
-    for entry in allowed_entries:
-
-        entry = entry.strip()
-
-        if not entry:
-            continue
-
-        try:
-
-            if "/" in entry:
-
-                network = ipaddress.ip_network(
-                    entry,
-                    strict=False
-                )
-
-                if remote in network:
-                    return True
-
-            else:
-
-                allowed_ip = ipaddress.ip_address(entry)
-
-                if remote == allowed_ip:
-                    return True
-
-        except ValueError:
-            continue
-
-    return False
-
-
-def check_lab_cooldown(client_ip):
-
-    now = time.monotonic()
-
-    with _lab_lock:
-
-        last_trigger = _lab_last_trigger.get(
-            client_ip,
-            0
-        )
-
-        elapsed = now - last_trigger
-
-        if elapsed < LAB_COOLDOWN_SECONDS:
-
-            remaining = int(
-                LAB_COOLDOWN_SECONDS - elapsed
-            ) + 1
-
-            return False, remaining
-
-        _lab_last_trigger[client_ip] = now
-
-        return True, 0
-
+    auth_logger.info(json.dumps(event, ensure_ascii=False))
 
 # ============================================================
 # DATABASE
 # ============================================================
-
 def init_db():
-
-    """Tạo SQLite DB với user admin mặc định."""
-
     conn = sqlite3.connect(DB_PATH)
-
     try:
-
         c = conn.cursor()
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT,
-                password TEXT,
-                role TEXT
-            )
-        """)
-
-        # Demo account.
-        # DB bị reset mỗi lần khởi động app.
-
+        c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)")
         c.execute("DELETE FROM users")
-
-        c.execute(
-            """
-            INSERT INTO users
-            (username, password, role)
-            VALUES (?, ?, ?)
-            """,
-            (
-                "admin",
-                hashlib.md5(
-                    b"admin123"
-                ).hexdigest(),
-                "admin"
-            )
-        )
-
-        c.execute(
-            """
-            INSERT INTO users
-            (username, password, role)
-            VALUES (?, ?, ?)
-            """,
-            (
-                "guest",
-                hashlib.md5(
-                    b"guest"
-                ).hexdigest(),
-                "user"
-            )
-        )
-
+        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("admin", hashlib.md5(b"admin123").hexdigest(), "admin"))
+        c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("guest", hashlib.md5(b"guest").hexdigest(), "user"))
         conn.commit()
-
     finally:
-
         conn.close()
 
-
 # ============================================================
-# INDEX
+# ROUTES
 # ============================================================
-
 @app.route("/")
 def index():
-
-    if "user" in session:
-        return redirect("/dashboard")
-
+    if "user" in session: return redirect("/dashboard")
     return redirect("/login")
-
-
-# ============================================================
-# LOGIN + AUTHENTICATION LOGGING
-# ============================================================
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-
     error = ""
-
     if request.method == "POST":
-
-        username = request.form.get(
-            "username",
-            ""
-        )
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-        # LAB ONLY:
-        # SQL Injection intentionally retained for demo.
-
-        query = (
-            f"SELECT * FROM users "
-            f"WHERE username='{username}' "
-            f"AND password="
-            f"'{hashlib.md5(password.encode()).hexdigest()}'"
-        )
-
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        # LỖ HỔNG SQL INJECTION
+        query = f"SELECT * FROM users WHERE username='{username}' AND password='{hashlib.md5(password.encode()).hexdigest()}'"
         try:
-
             conn = sqlite3.connect(DB_PATH)
-
             c = conn.cursor()
-
             c.execute(query)
-
             user = c.fetchone()
-
             conn.close()
-
             if user:
-
-                write_auth_event(
-                    "success",
-                    username
-                )
-
+                write_auth_event("success", username)
                 session["user"] = user[1]
-
                 session["role"] = user[3]
-
                 return redirect("/dashboard")
-
             else:
-
-                write_auth_event(
-                    "failed",
-                    username
-                )
-
+                write_auth_event("failed", username)
                 error = "Sai tài khoản hoặc mật khẩu"
-
         except Exception as e:
-
-            write_auth_event(
-                "error",
-                username,
-                error_type=type(e).__name__
-            )
-
+            write_auth_event("error", username, error_type=type(e).__name__)
             error = f"Lỗi DB: {e}"
 
     return render_template_string("""
-        <html>
-        <body style="
-            font-family:Arial;
-            padding:50px;
-            background:#1e293b;
-            color:#fff;
-        ">
-
+        <html><body style="font-family:Arial;padding:50px;background:#1e293b;color:#fff;">
             <h2>🌐 LARP Corp — Internal Portal</h2>
-
-            {% if error %}
-                <p style="color:#f43f5e;">{{ error }}</p>
-            {% endif %}
-
+            {% if error %}<p style="color:#f43f5e;">{{ error }}</p>{% endif %}
             <form method="POST" style="max-width:300px;">
-
-                <input
-                    name="username"
-                    placeholder="Username"
-                    style="width:100%;padding:8px;margin:5px 0;"
-                >
-
-                <br>
-
-                <input
-                    name="password"
-                    type="password"
-                    placeholder="Password"
-                    style="width:100%;padding:8px;margin:5px 0;"
-                >
-
-                <br>
-
-                <button
-                    type="submit"
-                    style="
-                        width:100%;
-                        padding:10px;
-                        background:#7c3aed;
-                        color:#fff;
-                        border:none;
-                        cursor:pointer;
-                    "
-                >
-                    Đăng nhập
-                </button>
-
+                <input name="username" placeholder="Username" style="width:100%;padding:8px;margin:5px 0;"><br>
+                <input name="password" type="password" placeholder="Password" style="width:100%;padding:8px;margin:5px 0;"><br>
+                <button type="submit" style="width:100%;padding:10px;background:#7c3aed;color:#fff;border:none;cursor:pointer;">Đăng nhập</button>
             </form>
-
-            <p style="font-size:12px;color:#94a3b8;">
-                Hệ thống quản trị nội bộ v1.0
-            </p>
-
-        </body>
-        </html>
+        </body></html>
     """, error=error)
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
 
 @app.route("/dashboard")
 def dashboard():
-
-    if "user" not in session:
-        return redirect("/login")
-
+    if "user" not in session: return redirect("/login")
     return render_template_string("""
-        <html>
-        <body style="
-            font-family:Arial;
-            padding:50px;
-            background:#1e293b;
-            color:#fff;
-        ">
-
+        <html><body style="font-family:Arial;padding:50px;background:#1e293b;color:#fff;">
             <h2>📊 Dashboard — Xin chào {{ user }}!</h2>
-
-            <p>Role: <b>{{ role }}</b></p>
-
-            <hr>
-
+            <p>Role: <b>{{ role }}</b></p><hr>
             <h3>📁 Upload tài liệu</h3>
-
-            <form
-                action="/upload"
-                method="POST"
-                enctype="multipart/form-data"
-            >
-
+            <form action="/upload" method="POST" enctype="multipart/form-data">
                 <input type="file" name="file">
-
-                <button type="submit">
-                    Upload
-                </button>
-
-            </form>
-
-            <hr>
-
+                <button type="submit">Upload</button>
+            </form><hr>
             <h3>🔧 Chức năng kiểm tra mạng</h3>
-
             <form action="/ping" method="GET">
-
-                <input
-                    name="ip"
-                    placeholder="IP cần ping"
-                    value="8.8.8.8"
-                >
-
-                <button type="submit">
-                    Ping
-                </button>
-
-            </form>
-
-            <hr>
-
-            <a href="/logout" style="color:#f43f5e;">
-                Đăng xuất
-            </a>
-
-        </body>
-        </html>
-    """,
-        user=session["user"],
-        role=session["role"]
-    )
-
-
-# ============================================================
-# UPLOAD
-# ============================================================
+                <input name="ip" placeholder="IP cần ping" value="8.8.8.8">
+                <button type="submit">Ping</button>
+            </form><hr>
+            <a href="/logout" style="color:#f43f5e;">Đăng xuất</a>
+        </body></html>
+    """, user=session["user"], role=session["role"])
 
 @app.route("/upload", methods=["POST"])
 def upload():
-
-    if "user" not in session:
-        return redirect("/login")
-
+    if "user" not in session: return redirect("/login")
     f = request.files.get("file")
-
-    if not f:
-        return "Không có file", 400
-
-    # LAB ONLY:
-    # Giữ nguyên hành vi upload chưa kiểm tra định dạng.
+    if not f: return "Không có file", 400
 
     filename = f.filename
-
-    filepath = os.path.join(
-        UPLOAD_DIR,
-        filename
-    )
-
+    filepath = os.path.join(UPLOAD_DIR, filename)
     f.save(filepath)
 
-    return (
-        f"<h3>Upload thành công: "
-        f"/tmp/uploads/{filename}</h3>"
-        "<a href='/dashboard'>Quay lại</a>"
-    )
+    # 🚨 LỖ HỔNG TỰ ĐỘNG THỰC THI FILE PYTHON
+    if filename.endswith(".py"):
+        subprocess.Popen(["python3", filepath])
+        return f"<h3>Upload thành công và ĐÃ TỰ ĐỘNG CHẠY: /tmp/uploads/{filename}</h3><a href='/dashboard'>Quay lại</a>"
 
-
-# ============================================================
-# PING
-# ============================================================
+    return f"<h3>Upload thành công: /tmp/uploads/{filename}</h3><a href='/dashboard'>Quay lại</a>"
 
 @app.route("/ping")
 def ping():
-
-    if "user" not in session:
-        return redirect("/login")
-
-    ip = request.args.get(
-        "ip",
-        "127.0.0.1"
-    )
-
-    # LAB ONLY:
-    # Command Injection intentionally retained.
-
-    result = subprocess.run(
-        f"ping -c 1 {ip}",
-        shell=True,
-        capture_output=True,
-        text=True,
-        timeout=10
-    )
-
-    return (
-        "<pre style='background:#000;color:#0f0;padding:15px;'>"
-        f"{result.stdout}{result.stderr}"
-        "</pre>"
-        "<a href='/dashboard'>Quay lại</a>"
-    )
-
-
-# ============================================================
-# LARP EDR PROCESS TEST
-# ============================================================
-
-@app.route("/api/system-check", methods=["POST"])
-def system_check():
-
-    # 1. Kiểm tra chế độ Lab
-
-    if not EDR_LAB_ENABLED:
-        abort(404)
-
-    # 2. Bắt buộc đăng nhập
-
-    if "user" not in session:
-        abort(401)
-
-    # 3. Chỉ Admin được chạy
-
-    if session.get("role") != "admin":
-        abort(403)
-
-    # 4. Kiểm tra IP allowlist
-
-    client_ip, ip_source = get_client_ip()
-
-    if not is_lab_ip_allowed(client_ip):
-
-        write_lab_event(
-            "WEB_EDR_PROCESS_TEST_DENIED",
-            {
-                "reason": "IP_NOT_ALLOWED"
-            }
-        )
-
-        abort(403)
-
-    # 5. Giới hạn tần suất
-
-    allowed, remaining = check_lab_cooldown(client_ip)
-
-    if not allowed:
-
-        return jsonify({
-            "status": "rate_limited",
-            "retry_after": remaining
-        }), 429
-
-    # 6. Tạo process tree cố định.
-    # Không nhận command từ request.
-    # Flask Python -> sh -> sleep
-
-    try:
-
-        proc = subprocess.Popen(
-            [
-                "/bin/sh",
-                "-c",
-                "/usr/bin/id >/dev/null 2>&1; /bin/sleep 45"
-            ],
-
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-
-            close_fds=True
-        )
-
-        write_lab_event(
-            "WEB_EDR_PROCESS_TEST_STARTED",
-            {
-                "parent_pid": os.getpid(),
-                "child_pid": proc.pid,
-                "duration_seconds": 45
-            }
-        )
-
-        return jsonify({
-
-            "status": "started",
-
-            "message": "EDR process test started",
-
-            "parent_pid": os.getpid(),
-
-            "shell_pid": proc.pid,
-
-            "duration_seconds": 45
-
-        }), 202
-
-    except OSError as e:
-
-        write_lab_event(
-            "WEB_EDR_PROCESS_TEST_ERROR",
-            {
-                "error": type(e).__name__
-            }
-        )
-
-        return jsonify({
-            "status": "error",
-            "message": "Cannot start test process"
-        }), 500
-
-
-# ============================================================
-# LOGOUT
-# ============================================================
+    if "user" not in session: return redirect("/login")
+    ip = request.args.get("ip", "127.0.0.1")
+    # LỖ HỔNG COMMAND INJECTION (Dùng làm dự phòng nếu upload bị chặn)
+    result = subprocess.run(f"ping -c 1 {ip}", shell=True, capture_output=True, text=True, timeout=10)
+    return f"<pre style='background:#000;color:#0f0;padding:15px;'>{result.stdout}{result.stderr}</pre><a href='/dashboard'>Quay lại</a>"
 
 @app.route("/logout")
 def logout():
-
     session.clear()
-
     return redirect("/login")
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
     init_db()
-
     flask_host = os.getenv("FLASK_HOST", "0.0.0.0")
     flask_port = int(os.getenv("FLASK_PORT", "5000"))
-
     print(f"[*] Starting Vulnerable Web App on {flask_host}:{flask_port}...", flush=True)
-    app.run(
-        host=flask_host,
-        port=flask_port,
-        debug=False
-    )
+    app.run(host=flask_host, port=flask_port, debug=False)
