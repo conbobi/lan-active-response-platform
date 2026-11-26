@@ -1,0 +1,141 @@
+# SQL injection ladder for the Flask lab POST /login endpoint.
+# Data only: predicates are evaluated by app/services/ai/knowledge/pattern_engine.py.
+# Knowledge queries resolve reference chunks at runtime; they are never evidence.
+pattern_id: sqli
+title: SQL injection against a web application
+category: sql_injection
+applies_to:
+  classifications:
+    - sqli_tool_indicator
+    - sqli_probing
+    - sqli_probe_observed
+    - sqli_exploitation_suspected
+    - sqli_exploitation_confirmed
+# SQL injection never justifies credential-guessing or proxy-execution techniques.
+forbidden_techniques: [T1110, T1218]
+levels:
+  - level: 1
+    name: tool_indicator
+    classifications: [sqli_tool_indicator, sqli_probing, sqli_probe_observed, sqli_exploitation_suspected, sqli_exploitation_confirmed]
+    requires:
+      all: [trusted_http_facts, sqli_tool_user_agent]
+    conclusion: "Client HTTP tự khai báo là công cụ kiểm thử SQL khi gửi POST /login, đây chỉ là chỉ báo công cụ và việc khai thác chưa được xác nhận."
+    confirmed:
+      - predicate: sqli_tool_user_agent
+        text: "Request POST mang User-Agent tự khai báo của công cụ kiểm thử SQL"
+    suspected:
+      - "Có thể đang có hoạt động dò quét SQL injection tự động, nhưng User-Agent do client tự đặt và có thể bị giả mạo."
+    missing_evidence:
+      - "Chỉ báo payload SQL trong request đã chuẩn hóa từ ứng dụng (sẽ nâng lên mức probing)."
+      - "Kết quả phía ứng dụng (cấp phiên) tương quan với request (sẽ nâng lên mức nghi ngờ khai thác)."
+    alternative_explanations:
+      - "Kiểm thử bảo mật được ủy quyền."
+      - "User-Agent giả mạo hoặc client tự động không gửi payload."
+      - "HTTP 200 hoặc 302 không chứng minh truy vấn SQL bị thay đổi."
+    investigation_steps:
+      - "Đối chiếu các request khác từ cùng nguồn trong khung thời gian quan sát."
+      - "Xác nhận nguồn có nằm trong phạm vi kiểm thử được phê duyệt hay không."
+    attack: []
+    playbook: sqli_tool_indicator
+    knowledge:
+      - terms: "sqlmap automated SQL injection testing user agent"
+        categories: [sql_injection, false_positive_investigation]
+        attack_ids: []
+
+  - level: 2
+    name: probing
+    classifications: [sqli_tool_indicator, sqli_probing, sqli_probe_observed, sqli_exploitation_suspected, sqli_exploitation_confirmed]
+    requires:
+      all: [trusted_http_facts]
+      any: [sql_payload_indicators, correlated_tool_requests]
+    conclusion: "Bằng chứng HTTP tin cậy cho thấy hoạt động dò SQL injection vào ứng dụng, nhưng chưa có kết quả phía ứng dụng chứng minh khai thác."
+    confirmed:
+      - predicate: sql_payload_indicators
+        text: "Request HTTP đã chuẩn hóa chứa chỉ báo payload SQL"
+      - predicate: correlated_tool_requests
+        text: "Nhiều request tương quan từ cùng một nguồn với User-Agent công cụ kiểm thử SQL"
+    suspected:
+      - "Kẻ tấn công đang thăm dò điểm tiêm SQL trên form đăng nhập."
+    missing_evidence:
+      - "Sự kiện xác thực thành công tương quan theo request_id và thời gian (sẽ nâng lên mức nghi ngờ khai thác)."
+      - "Xác minh phía máy chủ rằng thông tin đăng nhập không khớp nhưng vẫn cấp phiên (sẽ nâng lên mức xác nhận khai thác)."
+    alternative_explanations:
+      - "Quét lỗ hổng được ủy quyền."
+      - "Dữ liệu nhập hợp lệ trùng mẫu chỉ báo SQL."
+    investigation_steps:
+      - "Kiểm tra log xác thực Flask theo request_id của các request mang chỉ báo."
+      - "Xác minh nguồn là kết nối trực tiếp tới điểm thực thi trước khi chặn."
+    attack:
+      - technique_id: T1190
+        evidence_from: [sql_payload_indicators]
+    playbook: sqli_probing
+    knowledge:
+      - terms: "SQL injection detection payload probing"
+        categories: [sql_injection]
+        attack_ids: [T1190]
+      - terms: "parameterized queries prepared statements"
+        categories: [sql_injection, remediation]
+        attack_ids: []
+
+  - level: 3
+    name: exploitation_suspected
+    classifications: [sqli_exploitation_suspected, sqli_exploitation_confirmed]
+    requires:
+      all: [trusted_http_facts, sql_payload_indicators, session_grant_correlated]
+    conclusion: "Request mang payload SQL tương quan với việc ứng dụng cấp phiên đăng nhập, nên nghi ngờ khai thác SQL injection nhưng chưa được xác minh phía máy chủ."
+    confirmed:
+      - predicate: sql_payload_indicators
+        text: "Request HTTP đã chuẩn hóa chứa chỉ báo payload SQL"
+      - predicate: session_grant_correlated
+        text: "Ứng dụng ghi nhận cấp phiên cho chính request mang payload (khớp request_id, nguồn và thời gian)"
+    suspected:
+      - "Payload SQL có thể đã vượt qua kiểm tra đăng nhập."
+    missing_evidence:
+      - "Xác minh độc lập phía máy chủ rằng thông tin đăng nhập không khớp (sẽ nâng lên mức xác nhận)."
+    alternative_explanations:
+      - "Người dùng hợp lệ đăng nhập đúng mật khẩu trong khi chuỗi nhập trùng mẫu chỉ báo."
+    investigation_steps:
+      - "Xác minh tài khoản và mật khẩu đã gửi với cơ sở dữ liệu người dùng mà không lưu thông tin đăng nhập."
+      - "Kiểm tra hoạt động của phiên được cấp sau thời điểm đăng nhập."
+    attack:
+      - technique_id: T1190
+        evidence_from: [sql_payload_indicators, session_grant_correlated]
+    playbook: sqli_exploitation_suspected
+    knowledge:
+      - terms: "SQL injection authentication bypass login"
+        categories: [sql_injection, session_revocation]
+        attack_ids: [T1190]
+
+  - level: 4
+    name: exploitation_confirmed
+    classifications: [sqli_exploitation_confirmed]
+    requires:
+      all: [trusted_http_facts, sql_payload_indicators, session_grant_correlated, credential_mismatch_validated]
+    conclusion: "Ứng dụng đã cấp phiên cho request mang payload SQL dù máy chủ xác minh thông tin đăng nhập không khớp, nên khai thác SQL injection đã được xác nhận."
+    confirmed:
+      - predicate: sql_payload_indicators
+        text: "Request HTTP đã chuẩn hóa chứa chỉ báo payload SQL"
+      - predicate: session_grant_correlated
+        text: "Ứng dụng cấp phiên cho chính request mang payload (khớp request_id, nguồn và thời gian)"
+      - predicate: credential_mismatch_validated
+        text: "Máy chủ xác minh độc lập rằng thông tin đăng nhập không khớp nhưng phiên vẫn được cấp"
+    suspected:
+      - "Phiên được cấp có thể đã được dùng để truy cập dữ liệu hoặc chức năng khác."
+    missing_evidence:
+      - "Hoạt động của phiên sau khi đăng nhập để xác định phạm vi ảnh hưởng."
+      - "Bằng chứng tiến trình trên máy chủ để loại trừ hậu khai thác."
+    alternative_explanations: []
+    investigation_steps:
+      - "Liệt kê các request dùng phiên đã cấp và dữ liệu bị truy cập."
+      - "Tìm tiến trình con hoặc kết nối mạng bất thường của tiến trình ứng dụng web trong cùng khung thời gian."
+    attack:
+      - technique_id: T1190
+        evidence_from: [sql_payload_indicators, session_grant_correlated, credential_mismatch_validated]
+    playbook: sqli_exploitation_confirmed
+    knowledge:
+      - terms: "SQL injection exploitation response session revocation"
+        categories: [sql_injection, session_revocation, incident_response_process]
+        attack_ids: [T1190]
+      - terms: "least privilege database account input validation"
+        categories: [remediation, sql_injection]
+        attack_ids: []
