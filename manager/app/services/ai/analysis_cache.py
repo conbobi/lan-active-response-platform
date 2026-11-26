@@ -23,11 +23,16 @@ import time
 from collections import OrderedDict, deque
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from enum import Enum
+from pathlib import PurePath
 from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import urlsplit
+from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase
@@ -115,28 +120,55 @@ def reset_cache_stats() -> None:
 # Canonical form, scrubbing and refusal
 # ---------------------------------------------------------------------------------------------------
 
+def _json_default(value: Any) -> Any:
+    """Deterministic encoding of the few non-JSON types evidence may carry; anything else is rejected
+    rather than stringified, because ``str()`` of unordered or identity-based objects is not stable."""
+    if isinstance(value, (set, frozenset)):
+        return sorted(value, key=canonical_json)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (UUID, Decimal, PurePath)):
+        return str(value)
+    raise TypeError(f"Cannot canonicalize {type(value).__name__} for the AI analysis cache")
+
+
 def canonical_json(value: Any) -> str:
     """Deterministic, whitespace-free JSON used for hashing and size accounting."""
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=_json_default)
 
 
 def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# Keys dropped when their name equals one of these after normalisation ...
 SECRET_KEYS = frozenset({
-    "password", "passwd", "pwd", "token", "secret", "cookie", "cookies", "authorization", "set_cookie",
-    "session", "api_key", "apikey", "raw_payload", "raw_message", "body", "request_body", "response_body",
-    "private_key", "credentials",
+    "pwd", "body", "request_body", "response_body", "raw_payload", "raw_message", "set_cookie",
 })
-_SECRET_PART = re.compile(r"(^|_)(password|passwd|secret|token|cookie|api_?key|session)(_|$)")
-# Approval, authorization and execution state must never be served from a cache.
-STATE_KEYS = frozenset({
-    "status", "approved", "approved_by", "approved_at", "approval", "approval_status", "authorization",
-    "authorized", "authorized_by", "dispatch", "dispatched", "dispatched_at", "executed", "executed_by",
-    "executed_at", "execution_status",
+# ... or contains one of these once camelCase is split and separators are removed.
+SECRET_WORDS = (
+    "password", "passwd", "secret", "token", "cookie", "session", "sessid", "apikey", "authorization",
+    "credential", "privatekey", "csrf", "xsrf",
+)
+# Approval, authorization and execution state must never be served from a cache: a key is refused when
+# any of its underscore/camelCase parts is one of these words.
+STATE_WORDS = frozenset({
+    "status", "approved", "approval", "approve", "approver", "authorization", "authorized",
+    "authorize", "dispatch", "dispatched", "executed", "execution", "execute",
 })
+# Observed-fact fields that contain a state word but describe evidence, not workflow state.
+STATE_KEY_EXEMPT = frozenset({
+    "http_status", "status_code", "response_status", "authentication_status", "auth_status",
+    "legacy_duplicate_status",
+})
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+_BASIC = re.compile(r"(?i)\bbasic\s+[A-Za-z0-9+/]{4,}={0,2}")
+_AUTH_HEADER = re.compile(
+    r"(?i)\b((?:proxy-)?authorization)\s*[:=]\s*(?:(?:bearer|basic|digest|negotiate|ntlm)\s+)?[^\s,;]+")
+_COOKIE_HEADER = re.compile(r"(?i)\b((?:set-)?cookie)\s*:\s*[^\r\n]+")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*")
 
 
@@ -145,7 +177,13 @@ class UncacheableOutput(ValueError):
 
 
 def _key_name(key: Any) -> str:
-    return str(key).strip().lower().replace("-", "_")
+    """snake_case form of a key: 'approvedBy' / 'Approved-By' -> 'approved_by'."""
+    text = _CAMEL.sub("_", str(key).strip())
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def _is_state_key(name: str) -> bool:
+    return name not in STATE_KEY_EXEMPT and any(part in STATE_WORDS for part in name.split("_"))
 
 
 def find_state_keys(value: Any) -> set[str]:
@@ -153,7 +191,7 @@ def find_state_keys(value: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if _key_name(key) in STATE_KEYS:
+            if _is_state_key(_key_name(key)):
                 found.add(str(key))
             found |= find_state_keys(item)
     elif isinstance(value, (list, tuple)):
@@ -163,19 +201,25 @@ def find_state_keys(value: Any) -> set[str]:
 
 
 def _is_secret_key(name: str) -> bool:
-    return name in SECRET_KEYS or bool(_SECRET_PART.search(name))
+    compact = name.replace("_", "")
+    return name in SECRET_KEYS or any(word in compact for word in SECRET_WORDS)
 
 
 def redact_text(text: str) -> str:
-    return _JWT.sub("[REDACTED_JWT]", _BEARER.sub("Bearer [REDACTED]", text))
+    text = _AUTH_HEADER.sub(r"\1: [REDACTED]", text)
+    text = _COOKIE_HEADER.sub(r"\1: [REDACTED]", text)
+    text = _BASIC.sub("Basic [REDACTED]", _BEARER.sub("Bearer [REDACTED]", text))
+    return _JWT.sub("[REDACTED_JWT]", text)
 
 
 def scrub(value: Any) -> Any:
-    """Drop secret-bearing keys and redact Bearer/JWT-looking strings, recursively."""
+    """Drop secret-bearing keys and redact credential-looking strings, recursively."""
     if isinstance(value, Mapping):
         return {str(key): scrub(item) for key, item in value.items() if not _is_secret_key(_key_name(key))}
     if isinstance(value, (list, tuple)):
         return [scrub(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((scrub(item) for item in value), key=canonical_json)
     if isinstance(value, str):
         return redact_text(value)
     return value
@@ -197,7 +241,10 @@ def prepare_output(output: Any, max_bytes: int = MAX_PAYLOAD_BYTES) -> tuple[dic
     state = find_state_keys(plain)
     if state:
         raise UncacheableOutput(f"Output carries approval/authorization/execution state: {sorted(state)}")
-    cleaned = json.loads(canonical_json(scrub(plain)))
+    try:
+        cleaned = json.loads(canonical_json(scrub(plain)))
+    except TypeError as exc:
+        raise UncacheableOutput(str(exc)) from exc
     size = len(canonical_json(cleaned).encode("utf-8"))
     if size > max_bytes:
         raise UncacheableOutput(f"Output is {size} bytes; limit is {max_bytes}")
@@ -274,33 +321,35 @@ class AnalysisCache:
                   ) -> CachedAnalysis | None:
         """Return the cached output for an identical model input, or None.
 
-        Expired or version-mismatched rows, and rows superseded for the same ``subject`` (new evidence or
-        a new model/prompt/schema/knowledge version), count as stale misses.
+        Stale misses: an expired row; a row for the same tenant, detection type and evidence that was
+        produced under another model/prompt/schema/knowledge version; and, when ``subject`` is given, a row
+        of the same subject for older evidence.
         """
         with metrics.timed("l1"):
             now = self._now()
-            row = await session.get(AIAnalysisCache, key.digest())
+            digest = key.digest()
+            row = await session.get(AIAnalysisCache, digest)
             if row is not None and not self._valid(row, key, now):
-                await session.delete(row)
-                await session.flush()
-                metrics.incr("l1", "stale")
-                metrics.incr("l1", "misses")
-                return None
+                await session.execute(delete(AIAnalysisCache).where(AIAnalysisCache.cache_key == digest))
+                return self._miss(stale=True)
             if row is None:
-                if subject is not None and await self._superseded(session, key, subject):
-                    metrics.incr("l1", "stale")
-                metrics.incr("l1", "misses")
-                return None
-            row.hit_count += 1
-            row.last_hit_at = now
-            await session.flush()
+                return self._miss(stale=await self._superseded(session, key, subject))
+            # Atomic increment: concurrent hits on PostgreSQL must not overwrite each other's count.
+            hit_count = await session.scalar(
+                update(AIAnalysisCache).where(AIAnalysisCache.cache_key == digest)
+                .values(hit_count=AIAnalysisCache.hit_count + 1, last_hit_at=now)
+                .returning(AIAnalysisCache.hit_count))
+            if hit_count is None:  # removed by a concurrent writer after it was read
+                return self._miss(stale=False)
             metrics.incr("l1", "hits")
             return CachedAnalysis(dict(row.output), _utc(row.created_at), _utc(row.expires_at),
-                                  row.hit_count, key.versions())
+                                  hit_count, key.versions())
 
     async def put(self, session: AsyncSession, key: AnalysisKey, output: Any, *, subject: str | None = None,
                   ttl: timedelta | None = None) -> bool:
-        """Store an already validated output. Returns False (and stores nothing) when refused."""
+        """Store an already validated output. Returns False (and stores nothing) when refused or when a
+        concurrent writer won the race. The write runs in a SAVEPOINT, so a failure never aborts the
+        caller's transaction."""
         try:
             cleaned, size = prepare_output(output, self.max_payload_bytes)
         except UncacheableOutput as exc:
@@ -308,15 +357,26 @@ class AnalysisCache:
             metrics.incr("l1", "refused")
             return False
         now = self._now()
-        if subject is not None:
-            # Rows for older evidence or versions of the same subject can never hit again usefully.
-            await session.execute(delete(AIAnalysisCache).where(
-                AIAnalysisCache.tenant == key.tenant, AIAnalysisCache.subject == subject,
-                AIAnalysisCache.detection_type == key.detection_type,
-                AIAnalysisCache.cache_key != key.digest()))
-        row = await session.get(AIAnalysisCache, key.digest())
+        try:
+            async with session.begin_nested():
+                await self._write(session, key, cleaned, size, subject=subject, expires_at=now + (ttl or self.ttl),
+                                  now=now)
+                await self._enforce_limit(session, now)
+        except IntegrityError as exc:
+            logger.info("AI analysis cache write lost a concurrent race; not cached: %s", exc.orig)
+            return False
+        return True
+
+    async def _write(self, session: AsyncSession, key: AnalysisKey, cleaned: dict, size: int, *,
+                     subject: str | None, expires_at: datetime, now: datetime) -> None:
+        digest = key.digest()
+        # Rows for older evidence of the same subject, or for the same evidence under older versions, can
+        # never hit again usefully.
+        await session.execute(delete(AIAnalysisCache).where(
+            self._related(key, subject), AIAnalysisCache.cache_key != digest))
+        row = await session.get(AIAnalysisCache, digest)
         if row is None:
-            row = AIAnalysisCache(cache_key=key.digest(), hit_count=0)
+            row = AIAnalysisCache(cache_key=digest)
             session.add(row)
         row.tenant = key.tenant
         row.subject = subject
@@ -327,12 +387,17 @@ class AnalysisCache:
         row.output = cleaned
         row.payload_bytes = size
         row.created_at = now
-        row.expires_at = now + (ttl or self.ttl)
+        row.expires_at = expires_at
         row.last_hit_at = None
         row.hit_count = 0
         await session.flush()
-        await self._enforce_limit(session, now)
-        return True
+
+    @staticmethod
+    def _miss(*, stale: bool) -> None:
+        if stale:
+            metrics.incr("l1", "stale")
+        metrics.incr("l1", "misses")
+        return None
 
     async def invalidate(self, session: AsyncSession, *, tenant: str, subject: str) -> int:
         result = await session.execute(delete(AIAnalysisCache).where(
@@ -354,10 +419,18 @@ class AnalysisCache:
         return (stored == key.versions() and row.tenant == key.tenant
                 and row.detection_type == key.detection_type and row.evidence_hash == key.evidence_hash)
 
-    async def _superseded(self, session: AsyncSession, key: AnalysisKey, subject: str) -> bool:
+    @staticmethod
+    def _related(key: AnalysisKey, subject: str | None):
+        """Rows of the same tenant and detection type for the same evidence or the same subject."""
+        same_input = AIAnalysisCache.evidence_hash == key.evidence_hash
+        if subject is not None:
+            same_input = or_(same_input, AIAnalysisCache.subject == subject)
+        return and_(AIAnalysisCache.tenant == key.tenant, AIAnalysisCache.detection_type == key.detection_type,
+                    same_input)
+
+    async def _superseded(self, session: AsyncSession, key: AnalysisKey, subject: str | None) -> bool:
         found = await session.scalar(select(AIAnalysisCache.cache_key).where(
-            AIAnalysisCache.tenant == key.tenant, AIAnalysisCache.subject == subject,
-            AIAnalysisCache.detection_type == key.detection_type).limit(1))
+            self._related(key, subject), AIAnalysisCache.cache_key != key.digest()).limit(1))
         return found is not None
 
     async def _enforce_limit(self, session: AsyncSession, now: datetime) -> None:
@@ -406,22 +479,45 @@ _DIGITS = re.compile(r"\d+")
 _TOKEN = re.compile(r"[^a-z0-9_.{}\-]")
 
 
+MAX_ENDPOINT_SEGMENTS = 12
+MAX_SEGMENT_CHARS = 32
+MAX_ENDPOINT_CHARS = 256
+_OPAQUE_CHARS = re.compile(r"[%+=~]")
+
+
+def _is_opaque(segment: str) -> bool:
+    """Token-like path segment (reset tokens, base64, random ids) that must not become a feature value."""
+    if len(segment) > MAX_SEGMENT_CHARS or _OPAQUE_CHARS.search(segment):
+        return True
+    if len(segment) < 12 or not segment.isascii():
+        return False
+    has_digit = any(c.isdigit() for c in segment)
+    mixed_case = any(c.islower() for c in segment) and any(c.isupper() for c in segment)
+    separators = sum(segment.count(c) for c in "-_.")
+    return (has_digit and segment.isalnum()) or (mixed_case and separators == 0) or (
+        len(segment) >= 20 and separators == 0)
+
+
+def _endpoint_segment(segment: str) -> str:
+    lowered = segment.lower()
+    if _UUID.match(lowered):
+        return "{uuid}"
+    if _HEX.match(lowered):
+        return "{hex}"
+    if _is_opaque(segment):
+        return "{token}"
+    return _DIGITS.sub("{n}", lowered)
+
+
 def normalize_endpoint(value: Any) -> str | None:
-    """Lowercase path with the query string dropped and ids replaced by {uuid}, {hex} or {n}."""
+    """Lowercase path, query string dropped, ids replaced by {uuid}, {hex}, {n} or {token}; bounded size."""
     if not isinstance(value, str) or not value.strip():
         return None
-    path = urlsplit(value.strip().lower()).path or "/"
-    segments = []
-    for segment in path.split("/"):
-        if not segment:
-            continue
-        if _UUID.match(segment):
-            segments.append("{uuid}")
-        elif _HEX.match(segment):
-            segments.append("{hex}")
-        else:
-            segments.append(_DIGITS.sub("{n}", segment))
-    return "/" + "/".join(segments)
+    segments = [s for s in (urlsplit(value.strip()[:2048]).path or "/").split("/") if s]
+    normalized = [_endpoint_segment(s) for s in segments[:MAX_ENDPOINT_SEGMENTS]]
+    if len(segments) > MAX_ENDPOINT_SEGMENTS:
+        normalized.append("{more}")
+    return ("/" + "/".join(normalized))[:MAX_ENDPOINT_CHARS]
 
 
 def _token(value: Any) -> str | None:
@@ -486,7 +582,8 @@ def fingerprint(source: Any, *, classification: str | None = None, endpoint: str
     tool = next((f.get("automation_hint") or f.get("tool_indicator") for f in facts
                  if f.get("automation_hint") or f.get("tool_indicator")), None)
     indicators = {i for f in facts for i in (f.get("payload_indicators") or []) if isinstance(i, str)}
-    outcomes = {f.get("outcome") or f.get("auth_outcome") for f in facts if f.get("outcome") or f.get("auth_outcome")}
+    outcomes = {o for f in facts if (o := f.get("auth_outcome") or f.get("authentication_status") or f.get("outcome"))}
+    directions = {f.get("direction") for f in facts + flows if f.get("direction")}
     completeness = data.get("evidence_completeness") or next(
         (f.get("evidence_completeness") for f in facts if f.get("evidence_completeness")), None)
 
@@ -498,7 +595,7 @@ def fingerprint(source: Any, *, classification: str | None = None, endpoint: str
         "payload_indicators": sorted(filter(None, map(_token, indicators))),
         "auth_outcome": sorted(filter(None, map(_token, outcomes))),
         "process_behavior": sorted({t for p in processes if (t := _process_token(p.get("name")))}),
-        "network_direction": sorted({t for f in flows if (t := _token(f.get("direction")))}),
+        "network_direction": sorted(filter(None, map(_token, directions))),
         "evidence_completeness": _token(completeness),
     }
     digest = sha256_hex(canonical_json({"version": FINGERPRINT_VERSION, "features": features}))
@@ -559,9 +656,25 @@ class SimilarCase:
 async def record_case(session: AsyncSession, incident: Incident, fp: PatternFingerprint,
                       guidance: Mapping[str, Any] | None = None, *, tenant: str = DEFAULT_TENANT
                       ) -> IncidentPatternCase | None:
-    """Insert or update the pattern case of ``incident``. Unclassified fingerprints are not stored."""
+    """Insert or update the pattern case of ``incident``. Unclassified fingerprints are not stored.
+
+    The write runs in a SAVEPOINT; if a concurrent writer inserted the same (tenant, incident) first, the
+    savepoint is rolled back and the existing row is updated instead, so the caller's transaction survives.
+    """
     if not fp.classification:
         return None
+    for attempt in range(2):
+        try:
+            async with session.begin_nested():
+                return await _upsert_case(session, incident, fp, guidance, tenant)
+        except IntegrityError as exc:
+            if attempt:
+                logger.warning("Pattern case for incident %s not recorded: %s", incident.id, exc.orig)
+    return None
+
+
+async def _upsert_case(session: AsyncSession, incident: Incident, fp: PatternFingerprint,
+                       guidance: Mapping[str, Any] | None, tenant: str) -> IncidentPatternCase:
     row = await session.scalar(select(IncidentPatternCase).where(
         IncidentPatternCase.tenant == tenant, IncidentPatternCase.incident_id == incident.id))
     if row is None:
@@ -657,23 +770,42 @@ class KnowledgeCache:
             self._entries.clear()
 
     @staticmethod
-    def make_key(version: Any, query: str, *, categories=None, attack_ids=None, limit=None, **extra: Any) -> tuple:
+    def normalize_args(query: str, *, categories=None, attack_ids=None, **kw: Any) -> tuple[str, dict]:
+        """One normalisation for both the key and the ``kb.search`` call, so every caller that shares a
+        key also gets the result of the same search."""
+        if isinstance(categories, str):
+            categories = (categories,)
+        if isinstance(attack_ids, str):
+            attack_ids = (attack_ids,)
+        if categories is not None:
+            kw["categories"] = sorted({str(c).strip() for c in categories})
+        if attack_ids is not None:
+            kw["attack_ids"] = sorted({str(a).strip().upper() for a in attack_ids})
+        return normalize_query(query).casefold(), kw
+
+    @classmethod
+    def make_key(cls, version: Any, query: str, **kw: Any) -> tuple:
+        query, kw = cls.normalize_args(query, **kw)
+        return cls._key(version, query, kw)
+
+    @staticmethod
+    def _key(version: Any, query: str, kw: Mapping[str, Any]) -> tuple:
         return (
-            str(version), normalize_query(query).casefold(),
-            tuple(sorted({str(c) for c in categories})) if categories else (),
-            tuple(sorted({str(a).upper() for a in attack_ids})) if attack_ids else (),
-            limit,
+            str(version), query, tuple(kw.get("categories") or ()), tuple(kw.get("attack_ids") or ()),
+            kw.get("limit"),
             # Any other search option still changes the result set, so it is part of the key.
-            tuple(sorted((name, repr(value)) for name, value in extra.items())),
+            tuple(sorted((name, repr(value)) for name, value in kw.items()
+                         if name not in ("categories", "attack_ids", "limit"))),
         )
 
     def search(self, kb: Any, query: str, **kw: Any) -> list:
+        query, kw = self.normalize_args(query, **kw)
         version = getattr(kb, "version", None)
         if version is None:
             logger.debug("Knowledge base has no version; bypassing L3 cache")
-            return list(kb.search(normalize_query(query), **kw))
+            return list(kb.search(query, **kw))
         with metrics.timed("l3"):
-            key = self.make_key(version, query, **kw)
+            key = self._key(version, query, kw)
             now = self._clock()
             with self._lock:
                 if self._version != version:
@@ -691,7 +823,7 @@ class KnowledgeCache:
                     del self._entries[key]
                     metrics.incr("l3", "stale")
                 metrics.incr("l3", "misses")
-            result = tuple(kb.search(normalize_query(query), **kw))
+            result = tuple(kb.search(query, **kw))
             with self._lock:
                 if self._version == version:
                     self._entries[key] = (now + self.ttl_seconds, result)

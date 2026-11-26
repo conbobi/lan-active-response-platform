@@ -18,7 +18,7 @@ attack_ids: [T1053.003, T1543.002, T1098.004, T1505.003]
 
 ## ATT&CK mapping
 
-- T1053.003 cron; T1543.002 systemd service; T1098.004 SSH authorized keys; T1505.003 web shell.
+- T1053.003 for a new or changed crontab entry; T1543.002 for a new or changed systemd unit file; T1098.004 for an added authorized_keys entry; T1505.003 for a new script file under the web application directory.
 
 ## Alternative explanations
 

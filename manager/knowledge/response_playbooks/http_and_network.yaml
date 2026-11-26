@@ -1,0 +1,127 @@
+# Playbooks for automated HTTP activity, authentication abuse and network scanning.
+playbooks:
+  automated_http_review:
+    title: Hoạt động HTTP tự động
+    actions:
+      - &collect
+        action_type: collect_additional_evidence
+        category: investigation
+        priority: 1
+        execution: executable
+        description: "Thu thập bản ghi HTTP, xác thực và ảnh chụp mạng liên quan trong khung thời gian."
+        prerequisites: ["Agent Linux đã đăng ký", "Nhóm bằng chứng của sự cố"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không cần, thao tác chỉ đọc."
+        verification_method: "Kết quả thu thập được gắn vào sự cố với related_records."
+        knowledge: {terms: "incident evidence collection", categories: [incident_response_process], attack_ids: []}
+      - &watch
+        action_type: increase_monitoring
+        category: investigation
+        priority: 2
+        execution: executable
+        description: "Theo dõi bản ghi mới từ cùng nguồn trong năm phút."
+        prerequisites: ["Có quan sát nguồn đã lưu"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Dừng phiên theo dõi của Manager."
+        verification_method: "Phiên theo dõi ghi nhận hoặc không ghi nhận hoạt động mới."
+        knowledge: {terms: "monitoring suspicious source", categories: [incident_response_process], attack_ids: []}
+      - action_type: confirm_client_owner
+        category: investigation
+        priority: 3
+        execution: advisory
+        description: "Xác định chủ sở hữu client tự động và đối chiếu với danh sách được phép."
+        prerequisites: []
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không cần."
+        verification_method: "Chủ sở hữu xác nhận hoặc phủ nhận hoạt động."
+        knowledge: {terms: "false positive automated client", categories: [false_positive_investigation], attack_ids: []}
+
+  auth_repeated_failures:
+    title: Xác thực thất bại lặp lại
+    actions:
+      - *collect
+      - *watch
+      - action_type: review_account_lockout_policy
+        category: application_protection
+        priority: 3
+        execution: advisory
+        description: "Rà soát chính sách khóa tài khoản và độ trễ sau nhiều lần thất bại."
+        prerequisites: []
+        depends_on: []
+        conflicts_with: []
+        operational_risk: medium
+        rollback: "Khôi phục cấu hình chính sách trước đó."
+        verification_method: "Chính sách mới áp dụng cho lần thất bại kế tiếp."
+        knowledge: {terms: "account lockout throttling", categories: [authentication_abuse], attack_ids: []}
+
+  auth_brute_force:
+    title: Brute force xác thực
+    actions:
+      - *collect
+      - *watch
+      - action_type: apply_rate_limit
+        category: application_protection
+        priority: 3
+        execution: executable
+        description: "Giới hạn POST /login từ nguồn quan sát được (chỉ áp dụng cho dịch vụ Flask có bộ chặn lab)."
+        prerequisites: ["Dịch vụ là endpoint POST /login của Flask lab", "Biên nhận kết nối trực tiếp từ nguồn còn mới"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: medium
+        rollback: "Gỡ lease của ứng dụng hoặc để lease hết hạn."
+        verification_method: "Request vượt ngưỡng từ nguồn nhận HTTP 429."
+        knowledge: {terms: "rate limiting brute force", categories: [authentication_abuse, firewall_waf_blocking], attack_ids: [T1110]}
+      - action_type: recommend_credential_reset
+        category: recovery
+        priority: 4
+        execution: advisory
+        description: "Đặt lại mật khẩu tài khoản bị nhắm nếu có lần xác thực thành công đáng ngờ."
+        prerequisites: ["Xác thực thành công sau chuỗi thất bại"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: medium
+        rollback: "Không đảo ngược; chủ tài khoản đặt mật khẩu mới."
+        verification_method: "Mật khẩu cũ không còn đăng nhập được."
+        knowledge: {terms: "credential reset compromised account", categories: [authentication_abuse, remediation], attack_ids: []}
+      - action_type: recommend_mfa
+        category: remediation
+        priority: 5
+        execution: advisory
+        description: "Bật xác thực đa yếu tố cho dịch vụ bị nhắm."
+        prerequisites: []
+        depends_on: []
+        conflicts_with: []
+        operational_risk: medium
+        rollback: "Tắt yêu cầu MFA nếu chặn người dùng hợp lệ."
+        verification_method: "Đăng nhập chỉ bằng mật khẩu bị từ chối."
+        knowledge: {terms: "multi-factor authentication brute force mitigation", categories: [authentication_abuse, remediation], attack_ids: [T1110]}
+
+  network_scan_review:
+    title: Kết nối tới nhiều cổng
+    actions:
+      - *collect
+      - *watch
+
+  network_scan_response:
+    title: Quét dịch vụ mạng
+    actions:
+      - *collect
+      - *watch
+      - action_type: review_exposed_services
+        category: remediation
+        priority: 3
+        execution: advisory
+        description: "Rà soát dịch vụ đang lắng nghe và đóng các cổng không cần thiết."
+        prerequisites: []
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: medium
+        rollback: "Mở lại dịch vụ nếu cần cho nghiệp vụ."
+        verification_method: "Cổng không cần thiết không còn lắng nghe."
+        knowledge: {terms: "reduce exposed network services", categories: [network_scanning, remediation], attack_ids: [T1046]}

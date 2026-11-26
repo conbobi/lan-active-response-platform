@@ -19,7 +19,7 @@ attack_ids: [T1059.004, T1059.006, T1105]
 
 ## ATT&CK mapping
 
-- T1059.004 Unix shell; T1059.006 Python when the interpreter is the holder; T1105 when a tool was downloaded before execution.
+- T1059.004 when a shell holds the socket; T1059.006 when a python interpreter holds the socket; T1105 when a tool was downloaded before execution.
 
 ## Alternative explanations
 

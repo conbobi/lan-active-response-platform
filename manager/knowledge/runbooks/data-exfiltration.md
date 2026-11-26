@@ -18,7 +18,7 @@ attack_ids: [T1041, T1048]
 
 ## ATT&CK mapping
 
-- T1041 for exfiltration over the C2 channel; T1048 for exfiltration over an alternative protocol.
+- T1041 when the data leaves over the same connection or channel as the suspected C2; T1048 when it leaves over a different protocol than the C2.
 
 ## Alternative explanations
 

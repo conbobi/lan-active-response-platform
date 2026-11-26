@@ -1,0 +1,243 @@
+# Response playbooks for the SQL injection ladder (knowledge/detection_patterns/sqli.yaml).
+# execution: executable = an existing Response Assist / host response action_type;
+#            advisory   = guidance for the analyst or developer, never dispatched.
+# temporary_ip_block blocks one remote source address at the Flask lab guard for POST /login;
+# it does not contain or isolate the remote host.
+playbooks:
+  sqli_tool_indicator:
+    title: Chỉ báo công cụ SQL injection
+    actions:
+      - action_type: collect_additional_evidence
+        category: investigation
+        priority: 1
+        execution: executable
+        description: "Thu thập bản ghi HTTP, xác thực và ảnh chụp mạng liên quan trong khung thời gian."
+        prerequisites: ["Agent Linux đã đăng ký", "Nhóm bằng chứng HTTP của sự cố"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không cần, thao tác chỉ đọc."
+        verification_method: "Kết quả thu thập được gắn vào sự cố với related_records."
+        knowledge: {terms: "incident evidence collection web logs", categories: [incident_response_process], attack_ids: []}
+      - action_type: increase_monitoring
+        category: investigation
+        priority: 2
+        execution: executable
+        description: "Theo dõi các request HTTP mới từ cùng nguồn trong năm phút."
+        prerequisites: ["Có quan sát nguồn đã lưu"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Dừng phiên theo dõi của Manager."
+        verification_method: "Phiên theo dõi ghi nhận hoặc không ghi nhận request mới."
+        knowledge: {terms: "web attack monitoring", categories: [incident_response_process], attack_ids: []}
+      - action_type: generate_remediation_guidance
+        category: remediation
+        priority: 3
+        execution: executable
+        description: "Gắn ghi chú khắc phục có tham chiếu bằng chứng vào sự cố."
+        prerequisites: ["Bằng chứng HTTP của sự cố"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Xóa ghi chú nếu không còn phù hợp."
+        verification_method: "Ghi chú xuất hiện trong dòng thời gian sự cố."
+        knowledge: {terms: "SQL injection prevention", categories: [sql_injection, remediation], attack_ids: []}
+
+  sqli_probing:
+    title: Dò SQL injection
+    actions:
+      - &collect
+        action_type: collect_additional_evidence
+        category: investigation
+        priority: 1
+        execution: executable
+        description: "Thu thập bản ghi HTTP, xác thực và ảnh chụp mạng liên quan trong khung thời gian."
+        prerequisites: ["Agent Linux đã đăng ký", "Nhóm bằng chứng HTTP của sự cố"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không cần, thao tác chỉ đọc."
+        verification_method: "Kết quả thu thập được gắn vào sự cố với related_records."
+        knowledge: {terms: "incident evidence collection web logs", categories: [incident_response_process], attack_ids: []}
+      - &watch
+        action_type: increase_monitoring
+        category: investigation
+        priority: 2
+        execution: executable
+        description: "Theo dõi các request HTTP mới từ cùng nguồn trong năm phút."
+        prerequisites: ["Có quan sát nguồn đã lưu"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Dừng phiên theo dõi của Manager."
+        verification_method: "Phiên theo dõi ghi nhận hoặc không ghi nhận request mới."
+        knowledge: {terms: "web attack monitoring", categories: [incident_response_process], attack_ids: []}
+      - &rate
+        action_type: apply_rate_limit
+        category: application_protection
+        priority: 3
+        execution: executable
+        description: "Giới hạn nguồn quan sát được ở ba request POST /login mỗi mười giây trong năm phút."
+        prerequisites: ["Biên nhận kết nối trực tiếp từ nguồn còn mới", "Nguồn dùng một lần do quản trị viên cấu hình"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: [temporary_ip_block]
+        operational_risk: medium
+        rollback: "Gỡ lease của ứng dụng hoặc để lease hết hạn."
+        verification_method: "Request vượt ngưỡng từ nguồn nhận HTTP 429."
+        knowledge: {terms: "rate limiting login endpoint", categories: [firewall_waf_blocking], attack_ids: []}
+      - &block
+        action_type: temporary_ip_block
+        category: application_protection
+        priority: 4
+        execution: executable
+        description: "Từ chối POST /login từ địa chỉ nguồn đã xác minh kết nối trực tiếp trong năm phút; không cô lập máy từ xa."
+        prerequisites: ["Biên nhận kết nối trực tiếp từ nguồn còn mới (nguồn đã xác minh, không qua proxy)", "Nguồn dùng một lần do quản trị viên cấu hình"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: [apply_rate_limit]
+        operational_risk: medium
+        rollback: "Gỡ lease chặn của ứng dụng hoặc để lease hết hạn."
+        verification_method: "Request POST /login kế tiếp từ nguồn nhận HTTP 403."
+        knowledge: {terms: "temporary IP block web application firewall", categories: [firewall_waf_blocking], attack_ids: []}
+      - &verify_block
+        action_type: verify_block_enforcement
+        category: investigation
+        priority: 5
+        execution: advisory
+        description: "Xác nhận request kế tiếp từ nguồn bị chặn nhận HTTP 403 và người dùng khác không bị ảnh hưởng."
+        prerequisites: ["Lease chặn đang hiệu lực"]
+        depends_on: [temporary_ip_block]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không cần."
+        verification_method: "Bản ghi web_access_logs có HTTP 403 cho nguồn bị chặn trong thời gian lease."
+        knowledge: {terms: "verify blocking effectiveness", categories: [firewall_waf_blocking], attack_ids: []}
+      - &release_block
+        action_type: release_ip_block
+        category: recovery
+        priority: 6
+        execution: advisory
+        description: "Gỡ lease chặn khi hết thời hạn hoặc khi xác định chặn nhầm."
+        prerequisites: ["Đã kiểm tra hiệu lực chặn"]
+        depends_on: [verify_block_enforcement]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Áp dụng lại temporary_ip_block nếu nguồn tiếp tục tấn công."
+        verification_method: "Request từ nguồn không còn nhận HTTP 403."
+        knowledge: {terms: "rollback temporary block", categories: [firewall_waf_blocking], attack_ids: []}
+      - &guide
+        action_type: generate_remediation_guidance
+        category: remediation
+        priority: 7
+        execution: executable
+        description: "Gắn ghi chú khắc phục có tham chiếu bằng chứng vào sự cố."
+        prerequisites: ["Bằng chứng HTTP của sự cố"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Xóa ghi chú nếu không còn phù hợp."
+        verification_method: "Ghi chú xuất hiện trong dòng thời gian sự cố."
+        knowledge: {terms: "SQL injection prevention", categories: [sql_injection, remediation], attack_ids: []}
+      - &parameterized
+        action_type: recommend_parameterized_queries
+        category: remediation
+        priority: 8
+        execution: advisory
+        description: "Thay chuỗi SQL ghép nối trong luồng đăng nhập bằng truy vấn tham số hóa."
+        prerequisites: ["Quyền sửa mã ứng dụng"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Hoàn tác thay đổi mã qua quản lý phiên bản."
+        verification_method: "Kiểm thử lại POST /login với payload đã quan sát không còn thay đổi kết quả xác thực."
+        knowledge: {terms: "parameterized queries prepared statements", categories: [sql_injection, remediation], attack_ids: []}
+      - &input_validation
+        action_type: recommend_input_validation
+        category: remediation
+        priority: 9
+        execution: advisory
+        description: "Kiểm tra kiểu, độ dài và danh sách cho phép của tên đăng nhập như lớp phòng thủ bổ sung."
+        prerequisites: ["Quyền sửa mã ứng dụng"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Hoàn tác thay đổi mã qua quản lý phiên bản."
+        verification_method: "Dữ liệu sai kiểu hoặc quá dài bị từ chối trước khi tới truy vấn."
+        knowledge: {terms: "input validation allowlist", categories: [sql_injection, remediation], attack_ids: []}
+      - &least_privilege
+        action_type: recommend_least_privilege_db_account
+        category: remediation
+        priority: 10
+        execution: advisory
+        description: "Dùng tài khoản cơ sở dữ liệu chỉ có quyền tối thiểu cần cho ứng dụng."
+        prerequisites: ["Quyền quản trị cơ sở dữ liệu"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: medium
+        rollback: "Khôi phục quyền trước đó nếu chức năng hợp lệ bị lỗi."
+        verification_method: "Tài khoản ứng dụng không thực hiện được lệnh ngoài phạm vi cần thiết."
+        knowledge: {terms: "least privilege database account", categories: [sql_injection, remediation], attack_ids: []}
+      - &error_handling
+        action_type: recommend_safe_error_handling
+        category: remediation
+        priority: 11
+        execution: advisory
+        description: "Không trả lỗi cơ sở dữ liệu chi tiết cho client; ghi lỗi ở phía máy chủ."
+        prerequisites: ["Quyền sửa mã ứng dụng"]
+        depends_on: []
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Hoàn tác thay đổi mã qua quản lý phiên bản."
+        verification_method: "Payload gây lỗi chỉ nhận thông báo chung."
+        knowledge: {terms: "error handling information disclosure", categories: [sql_injection, remediation], attack_ids: []}
+
+  sqli_exploitation_suspected:
+    title: Nghi ngờ khai thác SQL injection
+    actions:
+      - *collect
+      - *watch
+      - *block
+      - *verify_block
+      - *release_block
+      - action_type: review_session_activity
+        category: investigation
+        priority: 3
+        execution: advisory
+        description: "Rà soát các request dùng phiên được cấp sau request mang payload."
+        prerequisites: ["Sự kiện cấp phiên tương quan"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không cần, thao tác chỉ đọc."
+        verification_method: "Danh sách request theo session_ref được đính kèm sự cố."
+        knowledge: {terms: "session activity review", categories: [session_revocation, incident_response_process], attack_ids: []}
+      - *guide
+      - *parameterized
+      - *input_validation
+      - *least_privilege
+      - *error_handling
+
+  sqli_exploitation_confirmed:
+    title: Khai thác SQL injection đã xác nhận
+    actions:
+      - *collect
+      - action_type: revoke_session
+        category: containment
+        priority: 2
+        execution: executable
+        description: "Từ chối phiên Flask bị cấp sai khi cookie được gửi lại."
+        prerequisites: ["Cấp phiên tương quan với xác minh thông tin đăng nhập không khớp", "Bộ chặn phiên Flask"]
+        depends_on: [collect_additional_evidence]
+        conflicts_with: []
+        operational_risk: low
+        rollback: "Không đảo ngược được cho cookie này; người dùng có thể xác thực lại."
+        verification_method: "Request mang cookie bị thu hồi không còn được chấp nhận."
+        knowledge: {terms: "session revocation invalidate session", categories: [session_revocation], attack_ids: []}
+      - *block
+      - *verify_block
+      - *release_block
+      - *guide
+      - *parameterized
+      - *input_validation
+      - *least_privilege
+      - *error_handling

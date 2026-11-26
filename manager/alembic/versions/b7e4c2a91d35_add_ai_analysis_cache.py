@@ -39,6 +39,10 @@ def upgrade():
                         ["tenant", "subject", "detection_type"])
         op.create_index("ix_ai_analysis_cache_expires_at", "ai_analysis_cache", ["expires_at"])
         op.create_index("ix_ai_analysis_cache_created_at", "ai_analysis_cache", ["created_at"])
+    existing = {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("ai_analysis_cache")}
+    if "ix_ai_analysis_cache_tenant_evidence" not in existing:
+        op.create_index("ix_ai_analysis_cache_tenant_evidence", "ai_analysis_cache",
+                        ["tenant", "evidence_hash", "detection_type"])
     if not inspector.has_table("incident_pattern_cases"):
         op.create_table(
             "incident_pattern_cases",

@@ -26,6 +26,7 @@ class AIAnalysisCache(Base):
     __tablename__ = "ai_analysis_cache"
     __table_args__ = (
         Index("ix_ai_analysis_cache_tenant_subject", "tenant", "subject", "detection_type"),
+        Index("ix_ai_analysis_cache_tenant_evidence", "tenant", "evidence_hash", "detection_type"),
         Index("ix_ai_analysis_cache_expires_at", "expires_at"),
         Index("ix_ai_analysis_cache_created_at", "created_at"),
     )

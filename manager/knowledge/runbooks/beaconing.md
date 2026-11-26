@@ -19,7 +19,7 @@ attack_ids: [T1071, T1071.001, T1572]
 
 ## ATT&CK mapping
 
-- T1071.001 for web-protocol C2; T1071 when the protocol is unspecified; T1572 for protocol tunneling such as DNS tunneling.
+- T1071.001 when the periodic traffic is HTTP or HTTPS; T1071 when the protocol is not identified; T1572 when the traffic is carried inside another protocol such as DNS.
 
 ## Alternative explanations
 

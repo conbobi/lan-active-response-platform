@@ -59,15 +59,16 @@ levels:
     name: brute_force_success
     requires:
       all: [auth_failures_observed, brute_force_criteria_met, success_after_failures]
-    conclusion: "Sau chuỗi brute force đã có lần xác thực thành công từ cùng nguồn, nên nghi ngờ tài khoản đã bị chiếm."
+    conclusion: "Nhóm bằng chứng brute force của một nguồn và một tài khoản có ghi nhận xác thực thành công, nên nghi ngờ tài khoản đã bị chiếm dù chưa xác minh lần thành công xảy ra sau chuỗi thất bại."
     confirmed:
       - predicate: brute_force_criteria_met
         text: "Số lần thất bại trong cửa sổ thời gian đạt tiêu chí brute force"
       - predicate: success_after_failures
-        text: "Có lần xác thực thành công trong cùng nhóm bằng chứng"
+        text: "Có lần xác thực thành công trong cùng nhóm bằng chứng của một nguồn và một tài khoản"
     suspected:
       - "Mật khẩu có thể đã bị đoán trúng."
     missing_evidence:
+      - "Thời điểm của lần xác thực thành công so với các lần thất bại đạt ngưỡng (thành công trước chuỗi thất bại sẽ hạ mức)."
       - "Xác nhận của chủ tài khoản về lần đăng nhập thành công."
     alternative_explanations:
       - "Chủ tài khoản đăng nhập đúng sau nhiều lần gõ sai."

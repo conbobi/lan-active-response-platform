@@ -15,6 +15,7 @@ from app.services.ai.analysis_cache import (
     AnalysisCache, AnalysisKey, KnowledgeCache, cache_stats, find_similar, fingerprint, normalize_endpoint,
     record_case, reset_cache_stats, similarity, update_label,
 )
+from app.services.ai.alert_context_projector import AlertContext
 from app.services.ai.triage_schema import ValidatedVerdict
 
 AGENT = "agent-cache"
@@ -124,6 +125,35 @@ async def test_version_mismatch_row_is_stale(db, l1):
     assert cache_stats()["l1"]["stale"] == 1
 
 
+@pytest.mark.parametrize("bump", [{"model_version": "sha:2"}, {"prompt_version": "p2"}, {"schema_version": "s2"},
+                                  {"knowledge_version": "k2"}])
+async def test_version_bump_without_subject_is_stale(db, l1, bump):
+    await l1.put(db, key(), OUTPUT)
+    assert await l1.get(db, key(**bump)) is None
+    assert cache_stats()["l1"]["stale"] == 1
+    assert await l1.put(db, key(**bump), OUTPUT)
+    # The row of the old version is replaced, not left behind until TTL.
+    assert set((await db.scalars(select(AIAnalysisCache.cache_key))).all()) == {key(**bump).digest()}
+    assert await l1.get(db, key(tenant="acme", **bump)) is None
+    assert cache_stats()["l1"]["stale"] == 1
+
+
+async def test_put_race_keeps_caller_transaction(db, l1, monkeypatch):
+    assert await l1.put(db, key(), OUTPUT)
+    db.add(Incident(id="inc-pending", title="t", agent_id=AGENT, risk_score=1))
+    await db.flush()
+    db.expunge_all()
+
+    async def missing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(db, "get", missing)  # another writer inserted the row after our lookup
+    assert not await l1.put(db, key(), {**OUTPUT, "confidence": 0.1})
+    monkeypatch.undo()
+    assert await db.get(Incident, "inc-pending") is not None
+    assert (await l1.get(db, key())).output == OUTPUT
+
+
 async def test_new_version_for_subject_is_stale(db, l1):
     await l1.put(db, key(), OUTPUT, subject="inc-1")
     assert await l1.get(db, key(model_version="sha:2"), subject="inc-1") is None
@@ -158,12 +188,35 @@ async def test_scrubs_secrets_and_tokens(db, l1):
 
 @pytest.mark.parametrize("state", [
     {"status": "approved"}, {"approved": True}, {"approved_by": "admin"}, {"authorization": "granted"},
-    {"nested": [{"dispatch": "queued"}]},
+    {"nested": [{"dispatch": "queued"}]}, {"approvedBy": "admin"}, {"isApproved": True},
+    {"dispatchStatus": "queued"}, {"approval_state": "ok"}, {"action_status": "x"},
+    {"authorization_status": "granted"}, {"ExecutionResult": "done"},
 ])
 async def test_refuses_approval_state(db, l1, state):
     assert not await l1.put(db, key(), {**OUTPUT, **state})
     assert await db.get(AIAnalysisCache, key().digest()) is None
     assert cache_stats()["l1"]["refused"] == 1
+
+
+def test_state_check_allows_observed_status_fields():
+    assert cache.find_state_keys({"http_status": 200, "authenticationStatus": "failure", "statusCode": 1}) == set()
+
+
+def test_scrub_catches_header_variants_and_session_cookies():
+    dirty = {"Proxy-Authorization": "Basic dXNlcjpwYXNz", "sessionid": "a", "PHPSESSID": "b", "csrftoken": "c",
+             "jsessionid": "d", "privatekey": "e", "credential": "f", "accessToken": "g", "keep": "ok",
+             "note": "Authorization: Basic dXNlcjpwYXNz then Cookie: sid=1; x=2",
+             "other": "proxy-authorization=Bearer zzz9 and Basic QWxhZGRpbjpvcGVu"}
+    cleaned = cache.scrub(dirty)
+    assert set(cleaned) == {"keep", "note", "other"}
+    assert "dXNlcjpwYXNz" not in cleaned["note"] and "sid=1" not in cleaned["note"]
+    assert "zzz9" not in cleaned["other"] and "QWxhZGRpbjpvcGVu" not in cleaned["other"]
+
+
+def test_key_is_deterministic_for_sets_and_rejects_unknown_types():
+    assert key(evidence={"ids": {"F3", "F1", "F2"}}).digest() == key(evidence={"ids": ["F1", "F2", "F3"]}).digest()
+    with pytest.raises(TypeError):
+        key(evidence={"x": object()}).digest()
 
 
 async def test_payload_size_limit(db, l1):
@@ -217,6 +270,24 @@ def test_endpoint_normalization():
     assert normalize_endpoint("/API/Users/42/orders/550e8400-e29b-41d4-a716-446655440000?x=1#f") == \
         "/api/users/{n}/orders/{uuid}"
     assert normalize_endpoint("https://example.test/files/deadbeef00/v2") == "/files/{hex}/v{n}"
+
+
+def test_endpoint_normalization_bounds_tokens():
+    assert normalize_endpoint("/reset/AbCdEfGhIjKlMnOp") == "/reset/{token}"
+    assert normalize_endpoint("/reset/c2VjcmV0LXRva2Vu%3D") == "/reset/{token}"
+    assert normalize_endpoint("/a/" + "x" * 3000) == "/a/{token}"
+    deep = normalize_endpoint("/" + "/".join(["seg"] * 50))
+    assert deep.endswith("/{more}") and deep.count("/") == 13
+    assert len(normalize_endpoint("/" + "/".join(["abcdefghij-" * 2] * 40))) <= 256
+
+
+def test_fingerprint_from_alert_context():
+    context = AlertContext({"rule_id": "ssh_bruteforce"}, facts=[{
+        "id": "F1", "kind": "behavior", "classification": "ssh_bruteforce", "authentication_status": "failure",
+        "direction": "inbound", "source_ip": "198.51.100.9", "username": "root"}])
+    features = fingerprint(context).features
+    assert features["auth_outcome"] == ["failure"] and features["network_direction"] == ["inbound"]
+    assert "198.51" not in str(features) and "root" not in str(features)
 
 
 def test_fingerprint_excludes_identities():
@@ -300,6 +371,23 @@ async def test_record_case_upserts(db):
     assert len(rows) == 1 and rows[0].features["payload_indicators"] == ["union_select"]
 
 
+async def test_record_case_race_updates_existing_row(db, monkeypatch):
+    incident = await add_incident(db, "inc-1")
+    real_scalar, calls = db.scalar, []
+
+    async def first_lookup_misses(statement, *args, **kwargs):
+        calls.append(1)
+        return None if len(calls) == 1 else await real_scalar(statement, *args, **kwargs)
+
+    db.expunge(await db.scalar(select(IncidentPatternCase)))
+    monkeypatch.setattr(db, "scalar", first_lookup_misses)
+    row = await record_case(db, incident, fingerprint(investigation(indicators=("union_select",))), {})
+    monkeypatch.undo()
+    assert row is not None and len(calls) == 2
+    rows = (await db.scalars(select(IncidentPatternCase))).all()
+    assert len(rows) == 1 and rows[0].features["payload_indicators"] == ["union_select"]
+
+
 # ------------------------------------------------------------------------------------------------ L3
 
 class FakeKB:
@@ -328,6 +416,16 @@ def test_l3_hits_normalized_query():
     lru.search(kb, "sql injection", categories=["sql_injection"], limit=4)
     lru.search(kb, "sql injection", categories=["sql_injection"], attack_ids=["T1190"], limit=3)
     assert len(kb.calls) == 3
+
+
+def test_l3_passes_normalized_arguments():
+    kb, lru = FakeKB(), KnowledgeCache()
+    lru.search(kb, "SQL Injection", categories="sql_injection", attack_ids=["t1190"], limit=3)
+    lru.search(kb, "sql injection", categories=["sql_injection"], attack_ids=["T1190"], limit=3)
+    assert kb.calls == [("sql injection", ["sql_injection"], ["T1190"], 3)]
+    assert KnowledgeCache.make_key("v", "q", categories="sql_injection")[2] == ("sql_injection",)
+    lru.search(kb, "sql injection", categories=["web_attack"], attack_ids=["T1190"], limit=3)
+    assert len(kb.calls) == 2
 
 
 def test_l3_kb_version_invalidates():

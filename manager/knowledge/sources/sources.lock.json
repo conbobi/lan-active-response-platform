@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "larp-runbooks": {
+      "files": {},
+      "license": "internal (LARP project)",
+      "raw_sha256": "708846ff78e739aa9fea2ffed9805ee77e5ad4b2ac8eaa271d73bd1a61b6f15f",
+      "retrieved_at": "2026-11-26",
+      "title": "LARP internal runbooks (INTERNAL, derived from this repository)",
+      "url": "internal://larp/knowledge/runbooks/",
+      "version": "708846ff78e739aa9fea2ffed9805ee77e5ad4b2ac8eaa271d73bd1a61b6f15f"
+    },
+    "mitre-attack": {
+      "files": {
+        "enterprise-attack-20.1.json": "539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5"
+      },
+      "license": "MITRE ATT&CK Terms of Use (https://attack.mitre.org/resources/legal-and-branding/terms-of-use/)",
+      "raw_file": "enterprise-attack-20.1.json",
+      "raw_sha256": "539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5",
+      "retrieved_at": "2026-11-26",
+      "title": "MITRE ATT&CK Enterprise (STIX 2.1)",
+      "url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-20.1.json",
+      "version": "ATT&CK v20.1"
+    },
+    "nist-sp800-61r3": {
+      "files": {
+        "NIST.SP.800-61r3.layout.txt": "431889e3a3870e3ac9b6ad634a9f6d7847e61fd1d1d469343dd3985ac6b2769e",
+        "NIST.SP.800-61r3.pdf": "e5593d6bb85daecec7e8d9549400c7b3473bcc3f06e469c82218073afa7fba2d"
+      },
+      "license": "U.S. Government work, not subject to copyright in the United States (17 U.S.C. 105)",
+      "raw_file": "NIST.SP.800-61r3.pdf",
+      "raw_sha256": "e5593d6bb85daecec7e8d9549400c7b3473bcc3f06e469c82218073afa7fba2d",
+      "raw_url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-61r3.pdf",
+      "retrieved_at": "2026-11-26",
+      "text_file": "NIST.SP.800-61r3.layout.txt",
+      "title": "NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations for Cybersecurity Risk Management",
+      "url": "https://csrc.nist.gov/pubs/sp/800/61/r3/final",
+      "version": "SP 800-61 Rev. 3 (April 2025)"
+    },
+    "owasp-os-command-injection": {
+      "files": {
+        "owasp-OS_Command_Injection_Defense_Cheat_Sheet@6629957e3345.md": "b497005071ae30fce01d1e911a4a7ee5375157496b92b8f1a497b3224fb32d6d"
+      },
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "raw_file": "owasp-OS_Command_Injection_Defense_Cheat_Sheet@6629957e3345.md",
+      "raw_sha256": "b497005071ae30fce01d1e911a4a7ee5375157496b92b8f1a497b3224fb32d6d",
+      "raw_url": "https://raw.githubusercontent.com/OWASP/CheatSheetSeries/6629957e3345995f2fce919cdbcea29fbcc6eedc/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.md",
+      "retrieved_at": "2026-11-26",
+      "title": "OWASP OS Command Injection Defense Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html",
+      "version": "git:6629957e3345995f2fce919cdbcea29fbcc6eedc"
+    },
+    "owasp-query-parameterization": {
+      "files": {
+        "owasp-Query_Parameterization_Cheat_Sheet@9a91ba5afc71.md": "273a906037e6389dc1683e44272bba9392807c477060f7736f403d6e20ff57ec"
+      },
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "raw_file": "owasp-Query_Parameterization_Cheat_Sheet@9a91ba5afc71.md",
+      "raw_sha256": "273a906037e6389dc1683e44272bba9392807c477060f7736f403d6e20ff57ec",
+      "raw_url": "https://raw.githubusercontent.com/OWASP/CheatSheetSeries/9a91ba5afc717829ef2dbc1b97feeaad65cc7510/cheatsheets/Query_Parameterization_Cheat_Sheet.md",
+      "retrieved_at": "2026-11-26",
+      "title": "OWASP Query Parameterization Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html",
+      "version": "git:9a91ba5afc717829ef2dbc1b97feeaad65cc7510"
+    },
+    "owasp-sqli-prevention": {
+      "files": {
+        "owasp-SQL_Injection_Prevention_Cheat_Sheet@9a91ba5afc71.md": "6c377eef95804d03ed29c27b8002a1d714ced833dfc651e1ee69ccf4abdadd6b"
+      },
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "raw_file": "owasp-SQL_Injection_Prevention_Cheat_Sheet@9a91ba5afc71.md",
+      "raw_sha256": "6c377eef95804d03ed29c27b8002a1d714ced833dfc651e1ee69ccf4abdadd6b",
+      "raw_url": "https://raw.githubusercontent.com/OWASP/CheatSheetSeries/9a91ba5afc717829ef2dbc1b97feeaad65cc7510/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.md",
+      "retrieved_at": "2026-11-26",
+      "title": "OWASP SQL Injection Prevention Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html",
+      "version": "git:9a91ba5afc717829ef2dbc1b97feeaad65cc7510"
+    }
+  }
+}

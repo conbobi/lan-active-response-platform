@@ -19,7 +19,7 @@ attack_ids: [T1110, T1110.001, T1110.003, T1110.004, T1078, T1021.004]
 
 ## ATT&CK mapping
 
-- T1110.001 password guessing (one account, many passwords); T1110.003 password spraying (many accounts); T1110.004 credential stuffing; T1110 when the variant is unknown.
+- T1110.001 when one account receives many passwords from one source; T1110.003 when many accounts each receive few passwords from one source; T1110.004 only when the tried pairs are shown to come from a credential dump; T1110 when the variant is unknown.
 - T1078 only when a valid account is shown to be used; T1021.004 when SSH logins are used for lateral movement.
 
 ## Alternative explanations

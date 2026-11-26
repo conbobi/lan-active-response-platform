@@ -49,3 +49,6 @@ antigravity_history.txt
 models/Modelfile.soc-q5
 Modelfile.harvest-q5
 Modelfile.soc-q5
+
+# Knowledge base raw downloads (rebuild with manager/scripts/sync_knowledge.py)
+manager/knowledge/sources/raw/

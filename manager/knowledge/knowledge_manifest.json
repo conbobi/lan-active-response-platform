@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "kb_version": "226193840554e6859c2e793dd568889693706160933d4baad882e9e8b32215fb",
+  "built_at": "2026-11-26T04:38:19+00:00",
+  "chunk_count": 278,
+  "note": "Reference material, never incident evidence. Source larp-runbooks is internal.",
+  "sources": [
+    {
+      "source_id": "larp-runbooks",
+      "title": "LARP internal runbooks (INTERNAL, derived from this repository)",
+      "url": "internal://larp/knowledge/runbooks/",
+      "version": "708846ff78e739aa9fea2ffed9805ee77e5ad4b2ac8eaa271d73bd1a61b6f15f",
+      "license": "internal (LARP project)",
+      "retrieved_at": "2026-11-26",
+      "raw_sha256": "708846ff78e739aa9fea2ffed9805ee77e5ad4b2ac8eaa271d73bd1a61b6f15f",
+      "chunk_count": 99,
+      "missing_items": [],
+      "internal": true
+    },
+    {
+      "source_id": "mitre-attack",
+      "title": "MITRE ATT&CK Enterprise (STIX 2.1)",
+      "url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-20.1.json",
+      "version": "ATT&CK v20.1",
+      "license": "MITRE ATT&CK Terms of Use (https://attack.mitre.org/resources/legal-and-branding/terms-of-use/)",
+      "retrieved_at": "2026-11-26",
+      "raw_sha256": "539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5",
+      "chunk_count": 67,
+      "missing_items": [],
+      "note": "DET0080 and its analytics are read from the STIX bundle only. The attack.mitre.org HTML fallback is not implemented; if a bundle lacks DET0080 it is listed in missing_items."
+    },
+    {
+      "source_id": "nist-sp800-61r3",
+      "title": "NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations for Cybersecurity Risk Management",
+      "url": "https://csrc.nist.gov/pubs/sp/800/61/r3/final",
+      "version": "SP 800-61 Rev. 3 (April 2025)",
+      "license": "U.S. Government work, not subject to copyright in the United States (17 U.S.C. 105)",
+      "retrieved_at": "2026-11-26",
+      "raw_sha256": "e5593d6bb85daecec7e8d9549400c7b3473bcc3f06e469c82218073afa7fba2d",
+      "chunk_count": 59,
+      "missing_items": []
+    },
+    {
+      "source_id": "owasp-os-command-injection",
+      "title": "OWASP OS Command Injection Defense Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html",
+      "version": "git:6629957e3345995f2fce919cdbcea29fbcc6eedc",
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "retrieved_at": "2026-11-26",
+      "raw_sha256": "b497005071ae30fce01d1e911a4a7ee5375157496b92b8f1a497b3224fb32d6d",
+      "chunk_count": 18,
+      "missing_items": []
+    },
+    {
+      "source_id": "owasp-query-parameterization",
+      "title": "OWASP Query Parameterization Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html",
+      "version": "git:9a91ba5afc717829ef2dbc1b97feeaad65cc7510",
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "retrieved_at": "2026-11-26",
+      "raw_sha256": "273a906037e6389dc1683e44272bba9392807c477060f7736f403d6e20ff57ec",
+      "chunk_count": 17,
+      "missing_items": []
+    },
+    {
+      "source_id": "owasp-sqli-prevention",
+      "title": "OWASP SQL Injection Prevention Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html",
+      "version": "git:9a91ba5afc717829ef2dbc1b97feeaad65cc7510",
+      "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+      "retrieved_at": "2026-11-26",
+      "raw_sha256": "6c377eef95804d03ed29c27b8002a1d714ced833dfc651e1ee69ccf4abdadd6b",
+      "chunk_count": 18,
+      "missing_items": []
+    }
+  ]
+}

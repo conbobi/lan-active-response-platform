@@ -19,7 +19,8 @@ levels:
     classifications: [sqli_tool_indicator, sqli_probing, sqli_probe_observed, sqli_exploitation_suspected, sqli_exploitation_confirmed]
     requires:
       all: [trusted_http_facts, sqli_tool_user_agent]
-    conclusion: "Client HTTP tự khai báo là công cụ kiểm thử SQL khi gửi POST /login, đây chỉ là chỉ báo công cụ và việc khai thác chưa được xác nhận."
+    # The request path is asserted only when the evidence carries it (investigate() facts do not).
+    conclusion: "Client HTTP tự khai báo là công cụ kiểm thử SQL khi gửi request POST tới ứng dụng, đây chỉ là chỉ báo công cụ và việc khai thác chưa được xác nhận."
     confirmed:
       - predicate: sqli_tool_user_agent
         text: "Request POST mang User-Agent tự khai báo của công cụ kiểm thử SQL"
