@@ -7,9 +7,13 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import HTTPException, RequestValidationError
+from sqlalchemy import select
 from app.core.config import settings
-from app.core.network_security import token_matches, verify_operator_or_admin
+from app.core.deps import get_db, get_session
+from app.core.network_security import authenticate_operator_request, token_matches
 from app.core.database import get_pool_status
+from app.models.soc_auth import SocUser
+from app.services.auth.jwt_service import uses_ephemeral_key
 from app.initializers.init_db import ensure_activity_schema, ensure_network_evidence_columns, ensure_process_instance_column, init_db
 from app.routers.v1 import api_router
 from app.websocket.agent_ws import agent_websocket_endpoint
@@ -72,6 +76,11 @@ async def lifespan(app: FastAPI):
     # ── STEP 3: Background tasks ─────────────────────────────
     logger.info("[STARTUP] Starting background tasks...")
     scheduler = await start_background_tasks()
+    if uses_ephemeral_key():
+        logger.warning(
+            "[STARTUP] JWT_SECRET_KEY is not configured; using an ephemeral per-process signing key. "
+            "Set JWT_SECRET_KEY (>=32 chars) in .env so user sessions survive Manager restarts."
+        )
 
     logger.info("🚀 LAN Active Response Manager startup complete.")
     yield
@@ -93,7 +102,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,7 +122,7 @@ _V1 = re.escape(settings.API_V1_STR)
 _ID = r"[^/]+"
 # Routes that authenticate and scope the operator themselves (Agent scope, read/write role).
 OWN_AUTHORIZATION = [re.compile(p) for p in (
-    rf"{_V1}/auth/session/?",
+    rf"{_V1}/auth/(login|refresh|logout|logout-all|me|session)/?",
     rf"{_V1}/network/agents/.*",
     rf"{_V1}/incidents/{_ID}/response-proposals(/batch)?/?",
     rf"{_V1}/response-actions/{_ID}/(approve|reject|execute|rollback)/?",
@@ -135,6 +144,17 @@ def analyst_write(method, path):
     return any(method in methods and rule.fullmatch(path) for methods, rule in ANALYST_WRITE)
 
 
+async def _open_middleware_db():
+    provider = (
+        app.dependency_overrides.get(get_db)
+        or app.dependency_overrides.get(get_session)
+        or get_db
+    )
+    gen = provider()
+    db = await anext(gen)
+    return db, gen
+
+
 @app.middleware("http")
 async def protect_sensitive_legacy_apis(request: Request, call_next):
     """Authorize every state-changing API call once credentials are configured.
@@ -147,24 +167,57 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
     path = request.url.path
     network = path.startswith(f"{settings.API_V1_STR}/network/agents/")
     request.state.operator = None
-    has_auth_configured = bool(settings.NETWORK_LEGACY_ADMIN_TOKEN or settings.NETWORK_OPERATORS)
-    if has_auth_configured and path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"}:
+    if path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"}:
         auth_header = request.headers.get("authorization", "")
         if path.startswith(f"{settings.API_V1_STR}/commands"):
-            # Legacy raw command endpoints stay restricted to the legacy administrator token.
-            kind, _, token = auth_header.partition(" ")
-            if kind.lower() != "bearer" or not token_matches(token.strip(), settings.NETWORK_LEGACY_ADMIN_TOKEN):
-                return JSONResponse({"detail": "Legacy administration requires its administrator token",
-                                     "outcome_code": AUTHORIZATION_FAILED}, status_code=401)
-            request.state.operator = "legacy_admin"
+            has_legacy_or_prod = bool(
+                not settings.DEBUG
+                or settings.NETWORK_LEGACY_ADMIN_TOKEN
+                or settings.NETWORK_OPERATORS
+            )
+            if has_legacy_or_prod:
+                # Legacy raw command endpoints stay restricted to the legacy administrator token.
+                kind, _, token = auth_header.partition(" ")
+                if kind.lower() != "bearer" or not token_matches(
+                    token.strip(), settings.NETWORK_LEGACY_ADMIN_TOKEN
+                ):
+                    return JSONResponse(
+                        {
+                            "detail": "Legacy administration requires its administrator token",
+                            "outcome_code": AUTHORIZATION_FAILED,
+                        },
+                        status_code=401,
+                    )
+                request.state.operator = "legacy_admin"
         elif not any(rule.fullmatch(path) for rule in OWN_AUTHORIZATION):
+            db, gen = await _open_middleware_db()
             try:
-                identity, _ = verify_operator_or_admin(
-                    auth_header, write=not analyst_write(request.method, path))
-            except HTTPException as exc:
-                return JSONResponse({"detail": exc.detail, "outcome_code": getattr(exc, "outcome", AUTHORIZATION_FAILED)},
-                                    status_code=exc.status_code, headers=exc.headers or {})
-            request.state.operator = identity
+                has_soc_users = (await db.scalar(select(SocUser.id).limit(1))) is not None
+                has_auth_configured = bool(
+                    not settings.DEBUG
+                    or has_soc_users
+                    or (settings.ALLOW_LEGACY_OPERATOR_TOKENS and (settings.NETWORK_LEGACY_ADMIN_TOKEN or settings.NETWORK_OPERATORS))
+                    or auth_header.strip()
+                )
+                if has_auth_configured:
+                    try:
+                        identity, _ = await authenticate_operator_request(
+                            auth_header,
+                            db,
+                            write=not analyst_write(request.method, path),
+                        )
+                    except HTTPException as exc:
+                        return JSONResponse(
+                            {
+                                "detail": exc.detail,
+                                "outcome_code": getattr(exc, "outcome", AUTHORIZATION_FAILED),
+                            },
+                            status_code=exc.status_code,
+                            headers=exc.headers or {},
+                        )
+                    request.state.operator = identity
+            finally:
+                await gen.aclose()
 
     response = await call_next(request)
     if network:

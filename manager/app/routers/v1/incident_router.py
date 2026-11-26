@@ -32,13 +32,13 @@ def authenticated_actor(request: Request):
 
 async def response_actor(request, db, incident_id):
     from app.models.incident import Incident
-    from app.core.network_security import verify_operator_or_admin
+    from app.core.network_security import authenticate_operator_request
     authorization = request.headers.get("authorization")
-    verify_operator_or_admin(authorization, write=True)
+    await authenticate_operator_request(authorization, db, write=True)
     incident = await db.get(Incident, incident_id)
     if not incident or not incident.agent_id:
         raise HTTPException(404, "Incident or Agent unavailable")
-    return verify_operator_or_admin(authorization, incident.agent_id, write=True)[0]
+    return (await authenticate_operator_request(authorization, db, agent_id=incident.agent_id, write=True))[0]
 
 
 logger = logging.getLogger(__name__)

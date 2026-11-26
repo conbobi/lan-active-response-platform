@@ -8,7 +8,13 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import get_db
-from app.core.network_security import verify_operator_or_admin, is_enrolled, issue_session, token_matches
+from app.core.network_security import (
+    authenticate_operator_request,
+    is_enrolled,
+    issue_session,
+    token_matches,
+    verify_operator_or_admin,
+)
 from app.core.config import settings
 from app.core import response_outcome as oc
 from app.core.response_outcome import OutcomeHTTPException
@@ -35,19 +41,25 @@ class ProposalRequest(EmptyRequest):
     action_type: Literal["collect_additional_evidence", "temporary_ip_block", "apply_rate_limit", "revoke_session", "generate_remediation_guidance", "increase_monitoring"] | None = None
 
 
-def operator(token, agent=None, write=False):
-    identity, role = verify_operator_or_admin(token, agent)
-    if write and role is not None and role.role not in {"admin", "operator"}:
-        raise OutcomeHTTPException(403, "Response operator role required", oc.AUTHORIZATION_FAILED)
-    if role is None and identity != "legacy_admin":
-        raise OutcomeHTTPException(401, "Configured operator credentials required", oc.AUTHORIZATION_FAILED)
+async def operator(token, db, agent=None, write=False):
+    identity, _ = await authenticate_operator_request(
+        token, db, agent_id=agent, write=write, allowed_write_roles={"admin", "operator"}
+    )
     return identity
 
 
-@router.post("/auth/session")
+@router.post("/auth/session", deprecated=True)
 async def sign_in(response: Response, authorization: str | None = Header(None)):
+    if not settings.ALLOW_LEGACY_OPERATOR_TOKENS:
+        raise OutcomeHTTPException(401, "Legacy operator token login disabled; use /auth/login", oc.AUTHORIZATION_FAILED)
     identity, config = verify_operator_or_admin(authorization)
-    digest = config.token_sha256 if config else settings.NETWORK_LEGACY_ADMIN_TOKEN
+    digest = config.token_sha256 if getattr(config, "token_sha256", None) else None
+    if digest is None:
+        # Look up digest from settings for OperatorContext returned by legacy verifier
+        if identity == "legacy_admin":
+            digest = settings.NETWORK_LEGACY_ADMIN_TOKEN
+        elif identity in settings.NETWORK_OPERATORS:
+            digest = settings.NETWORK_OPERATORS[identity].token_sha256
     if not token_matches((authorization or "").partition(" ")[2].strip(), digest):
         raise OutcomeHTTPException(401, "Operator credential required to sign in", oc.AUTHORIZATION_FAILED)
     session, expires = issue_session(digest)
@@ -57,12 +69,12 @@ async def sign_in(response: Response, authorization: str | None = Header(None)):
 
 
 async def scoped_incident(db, key, token, lock=False):
-    operator(token)
+    await operator(token, db)
     query = select(Incident).where(Incident.id == key).execution_options(populate_existing=True)
     incident = await db.scalar(query.with_for_update() if lock else query)
     if not incident or not incident.agent_id:
         raise OutcomeHTTPException(404, "Incident unavailable", oc.NOT_FOUND)
-    operator(token, incident.agent_id)
+    await operator(token, db, incident.agent_id)
     return incident
 
 
@@ -88,7 +100,7 @@ async def proposals(incident_id: str, authorization: str | None = Header(None), 
     for row in actions:
         await reconcile(db, row)
         await reconcile_watch(db, row)
-    _, config = verify_operator_or_admin(authorization, incident.agent_id)
+    _, config = await authenticate_operator_request(authorization, db, agent_id=incident.agent_id)
     return {"can_execute": config is None or config.role in {"admin", "operator"},
             "agent_online": is_enrolled(incident.agent_id) and incident.agent_id in connection_manager.authenticated_connections,
             "investigation": investigation, "policy_decision": decision(proposal.action_type if proposal else COLLECT, proposal),
@@ -99,7 +111,7 @@ async def proposals(incident_id: str, authorization: str | None = Header(None), 
 async def propose(incident_id: str, body: ProposalRequest, authorization: str | None = Header(None), db=Depends(get_db)):
     started = monotonic()
     incident = await scoped_incident(db, incident_id, authorization)
-    actor = operator(authorization, incident.agent_id)
+    actor = await operator(authorization, db, incident.agent_id)
     investigation, proposal = await investigate(db, incident)
     if body.action_type:
         candidate = next((p for p in (investigation or {}).get("recommended_responses", [])
@@ -151,12 +163,12 @@ async def propose(incident_id: str, body: ProposalRequest, authorization: str | 
 
 
 async def scoped_action(db, key, token, *, write=False, lock=False):
-    operator(token)
+    await operator(token, db)
     query = select(ResponseAction).where(ResponseAction.id == key, ResponseAction.action_type.in_(ASSIST_TYPES))
     row = await db.scalar(query.with_for_update() if lock else query)
     if not row:
         raise OutcomeHTTPException(404, "Action unavailable", oc.NOT_FOUND)
-    return row, operator(token, row.agent_id, write)
+    return row, await operator(token, db, row.agent_id, write)
 
 
 @router.get("/response-actions/{action_id}")

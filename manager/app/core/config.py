@@ -43,6 +43,30 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     NETWORK_AGENT_TOKENS: dict[str, TokenDigest] = Field(default_factory=dict, repr=False)
     OPERATOR_SESSION_KEY: str | None = Field(default=None, min_length=32, repr=False)
+    JWT_SECRET_KEY: str | None = Field(default=None, min_length=32, repr=False)
+    JWT_KEY_ID: str = Field(default="v1", min_length=1, max_length=32)
+    JWT_PREVIOUS_KEYS: dict[str, str] = Field(default_factory=dict, repr=False)
+    JWT_ISSUER: str = "larp-manager"
+    JWT_AUDIENCE: str = "larp-soc-dashboard"
+    JWT_ACCESS_TTL_SECONDS: int = Field(default=900, ge=60, le=3600)
+    REFRESH_TOKEN_TTL_SECONDS: int = Field(default=7 * 24 * 3600, ge=300, le=90 * 24 * 3600)
+    REFRESH_COOKIE_NAME: str = "larp_refresh_token"
+    REFRESH_COOKIE_SECURE: bool | None = None
+    REFRESH_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
+    REFRESH_COOKIE_DOMAIN: str | None = None
+    CORS_ALLOWED_ORIGINS: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost",
+            "https://edr.alwayready.id.vn",
+        ]
+    )
+    AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, ge=10, le=3600)
+    AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = Field(default=10, ge=1, le=200)
+    AUTH_LOCKOUT_THRESHOLD: int = Field(default=5, ge=1, le=50)
+    AUTH_LOCKOUT_SECONDS: int = Field(default=300, ge=30, le=86400)
+    ALLOW_LEGACY_OPERATOR_TOKENS: bool = True
     NETWORK_OPERATORS: dict[Annotated[str, Field(min_length=1, max_length=64)], NetworkOperator] = Field(default_factory=dict, repr=False)
     HTTP_RESPONSE_LAB_WAFS: dict[str, LabWaf] = Field(default_factory=dict)
     NETWORK_SSH_PROBES: dict[str, NetworkSSHProbe] = Field(default_factory=dict, repr=False)

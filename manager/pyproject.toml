@@ -7,7 +7,9 @@ requires-python = ">=3.12, <3.13"
 dependencies = [
     "aiogram>=3.30.0",
     "aiosqlite>=0.22.1",
+    "argon2-cffi>=25.1.0",
     "asyncpg>=0.31.0",
+    "pyjwt>=2.10.0",
     "docker>=7.1.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
@@ -30,6 +32,12 @@ dependencies = [
     "websockets>=17.1",
     "yara-python>=4.5.4",
 ]
+
+[project.scripts]
+larp = "app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [dependency-groups]
 dev = [

@@ -14,11 +14,15 @@ from app.services.response.response_policy_service import ResponsePolicyService
 from app.services.response.policy_engine_service import PolicyEngineService
 from app.core.exceptions import NotFoundError
 
-from app.core.network_security import verify_operator_or_admin
+from app.core.network_security import authenticate_operator_request
 
 
-def policy_access(request: Request, authorization: str | None = Header(None)):
-    return verify_operator_or_admin(authorization, write=request.method != "GET")
+async def policy_access(
+    request: Request,
+    authorization: str | None = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    return await authenticate_operator_request(authorization, db, write=request.method != "GET")
 
 
 router = APIRouter(tags=["Response Policies & Policy Engine"], dependencies=[Depends(policy_access)])
@@ -142,7 +146,7 @@ async def evaluate_policy(
     - dry_run = true: Mô phỏng hành vi, trả về policy khớp và danh sách các máy/nhóm sẽ bị tác động mà KHÔNG thực thi lệnh thật.
     - dry_run = false: Tự động kích hoạt phản ứng thật dựa trên policy và scope đã xác định.
     """
-    _, config = verify_operator_or_admin(authorization, req.agent_id, write=True)
+    _, config = await authenticate_operator_request(authorization, db, agent_id=req.agent_id, write=True)
     service = PolicyEngineService(db)
     return await service.evaluate_and_execute(
         agent_id=req.agent_id,

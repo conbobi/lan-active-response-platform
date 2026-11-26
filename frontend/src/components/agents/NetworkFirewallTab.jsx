@@ -10,7 +10,8 @@ import {
 } from '../../api/network';
 import './NetworkFirewallTab.css';
 
-import { readSession, requestSignIn, saveSession, subscribeSession } from '../../api/operatorSession';
+import { readSession, requestSignIn, subscribeSession } from '../../api/operatorSession';
+import { logoutSession } from '../../api/api';
 
 const mainTabs = [
   ['firewall', '🛡️ Quy Tắc Tường Lửa (Rules)'],
@@ -978,8 +979,8 @@ export default function NetworkFirewallTab({ agent }) {
               >
                 <FiRefreshCw size={14} className={busy ? 'spin' : ''} /> Làm mới
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => {
-                saveSession(''); setView(null); setError(''); setCommand(null);
+              <button className="btn btn-secondary" type="button" onClick={async () => {
+                await logoutSession(); setView(null); setError(''); setCommand(null);
               }}>Đăng xuất</button>
             </>
           )}

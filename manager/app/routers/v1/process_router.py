@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
-from app.core.network_security import verify_operator_or_admin
+from app.core.network_security import authenticate_operator_request
 from app.services.process.process_tree_service import ProcessTreeService
 from app.services.response.response_action_service import ResponseActionService
 from app.models.process_info import ProcessInfo
@@ -14,14 +14,8 @@ from app.schemas.command import CommandOut
 router = APIRouter(tags=["Process & Root Cause Analysis"])
 
 
-def _enforce_operator(authorization: Optional[str], agent_id: Optional[str] = None) -> str:
-    identity, role = verify_operator_or_admin(authorization, agent_id=agent_id, write=True)
-    if role is None and identity != "legacy_admin":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Configured operator credentials required for process termination",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+async def _enforce_operator(authorization: Optional[str], db: AsyncSession, agent_id: Optional[str] = None) -> str:
+    identity, _ = await authenticate_operator_request(authorization, db, agent_id=agent_id, write=True)
     return identity
 
 
@@ -59,7 +53,7 @@ async def kill_agent_process(
     db: AsyncSession = Depends(get_db)
 ):
     """Issue kill_process command to terminate a specified PID on an agent."""
-    _enforce_operator(authorization, agent_id=agent_id)
+    await _enforce_operator(authorization, db, agent_id=agent_id)
     pid = payload.get("pid")
     if not pid:
         from app.core.exceptions import BadRequestError
@@ -78,7 +72,7 @@ async def kill_agent_process_tree(
     db: AsyncSession = Depends(get_db)
 ):
     """Issue kill_process_tree command to terminate a process and its child processes on an agent."""
-    _enforce_operator(authorization, agent_id=agent_id)
+    await _enforce_operator(authorization, db, agent_id=agent_id)
     pid = payload.get("pid")
     if not pid:
         from app.core.exceptions import BadRequestError
@@ -98,7 +92,7 @@ async def kill_process_on_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger kill_process or kill_process_tree command on agent via ResponseActionService."""
-    actor = _enforce_operator(authorization, agent_id=agent_id)
+    actor = await _enforce_operator(authorization, db, agent_id=agent_id)
     if pid <= 2:
         raise HTTPException(status_code=400, detail="PID must be greater than 2")
 

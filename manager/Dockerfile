@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir 'uvicorn[standard]'
 
 # Copy source code
 COPY . .
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Expose port 8000
 EXPOSE 8000

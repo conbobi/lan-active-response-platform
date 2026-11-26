@@ -1,25 +1,50 @@
-const key = 'larp_operator_session';
-const changed = 'larp-session-changed';
+let accessToken = '';
+let currentUser = null;
+const listeners = new Set();
 
-export function readSession() {
-  try {
-    return sessionStorage.getItem(key) || '';
-  } catch (error) {
-    if (error.name === 'SecurityError') return '';
-    throw error;
+// Ensure no legacy operator tokens remain in browser storage across upgrades.
+try {
+  sessionStorage.removeItem('larp_operator_session');
+  sessionStorage.removeItem('larp_network_token');
+} catch {
+  // Ignore storage restrictions
+}
+
+function notify() {
+  for (const listener of listeners) {
+    listener();
   }
 }
 
+export function readSession() {
+  return accessToken;
+}
+
+export function readUser() {
+  return currentUser;
+}
+
+export function saveAuthSession(payload) {
+  accessToken = payload?.access_token || '';
+  currentUser = payload?.user || null;
+  notify();
+}
+
+export function clearAuthSession() {
+  accessToken = '';
+  currentUser = null;
+  notify();
+}
+
 export function saveSession(token) {
-  if (token) sessionStorage.setItem(key, token);
-  else sessionStorage.removeItem(key);
-  sessionStorage.removeItem('larp_network_token');
-  window.dispatchEvent(new Event(changed));
+  accessToken = token || '';
+  if (!accessToken) currentUser = null;
+  notify();
 }
 
 export function subscribeSession(listener) {
-  window.addEventListener(changed, listener);
-  return () => window.removeEventListener(changed, listener);
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 export function requestSignIn(reason) {

@@ -89,6 +89,7 @@ async def test_actor_is_the_authenticated_identity_not_the_body(lab):
 
 def test_development_mode_without_credentials_stays_open(lab, monkeypatch):
     client, _ = lab
+    monkeypatch.setattr(settings, "DEBUG", True)
     monkeypatch.setattr(settings, "NETWORK_OPERATORS", {})
     monkeypatch.setattr(settings, "NETWORK_LEGACY_ADMIN_TOKEN", None)
     r = client.post("/api/v1/incidents/inc/notes", json={"content": "dev"})
