@@ -65,7 +65,7 @@ def engine_support(rule_yaml: str) -> tuple[bool, str]:
 def validation_summary(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not result:
         return None
-    return {key: result.get(key) for key in ("verdict", "passed", "reason", "engine_supported", "dataset")}
+    return {key: result.get(key) for key in ("verdict", "passed", "reason", "engine_supported", "dataset", "confusion")}
 
 
 @router.post("/harvest")

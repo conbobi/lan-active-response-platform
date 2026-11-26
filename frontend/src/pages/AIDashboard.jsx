@@ -577,15 +577,21 @@ export default function AIDashboard() {
                         <div>
                           <strong>{VERDICT_TEXT[validation.verdict] || validation.verdict}</strong>
                           {rule.fpr != null && (
-                            <span className="font-mono ml-1">
+                            <span className="font-mono" style={{ marginLeft: '0.35rem' }}>
                               <span className={getFprBadgeColor(rule.fpr)}>FPR {(rule.fpr * 100).toFixed(1)}%</span>
                               {' · '}
                               <span className={getPrecisionBadgeColor(rule.precision)}>P {(rule.precision * 100).toFixed(1)}%</span>
                             </span>
                           )}
-                          {validation.dataset && (
-                            <div className="text-gray-500" title="Tập kiểm định">
-                              {validation.dataset.real_process_info} log thật · {validation.dataset.synthetic_benign} mẫu benign tổng hợp · {validation.dataset.malicious_fixture} mẫu độc hại cố định
+                          {validation.confusion && (
+                            <div className="font-mono text-gray-400">
+                              TP {validation.confusion.tp} · FP {validation.confusion.fp} · FN {validation.confusion.fn} · TN {validation.confusion.tn}
+                            </div>
+                          )}
+                          {validation.dataset?.total != null && (
+                            <div className="text-gray-500" title="Tập kiểm định có nhãn">
+                              {validation.dataset.attack} mẫu tấn công · {validation.dataset.benign} mẫu benign
+                              {' '}({Object.keys(validation.dataset.by_source || {}).join(', ')})
                             </div>
                           )}
                         </div>

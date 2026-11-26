@@ -1,0 +1,223 @@
+{
+ "captured_at": "2026-11-26T11:38:40.560925+00:00",
+ "host": "ip-172-31-32-238",
+ "processes": [
+  {
+   "pid": 1,
+   "ppid": 0,
+   "name": "systemd",
+   "exe": "/usr/lib/systemd/systemd",
+   "username": "root",
+   "cmdline": "/sbin/init",
+   "create_time": 1795661165.12
+  },
+  {
+   "pid": 273,
+   "ppid": 1,
+   "name": "systemd-journald",
+   "exe": "/usr/lib/systemd/systemd-journald",
+   "username": "root",
+   "cmdline": "/usr/lib/systemd/systemd-journald",
+   "create_time": 1795661168.41
+  },
+  {
+   "pid": 315,
+   "ppid": 1,
+   "name": "systemd-resolved",
+   "exe": "/usr/lib/systemd/systemd-resolved",
+   "username": "systemd-resolve",
+   "cmdline": "/usr/lib/systemd/systemd-resolved",
+   "create_time": 1795661168.77
+  },
+  {
+   "pid": 316,
+   "ppid": 1,
+   "name": "systemd-timesyncd",
+   "exe": "/usr/lib/systemd/systemd-timesyncd",
+   "username": "systemd-timesync",
+   "cmdline": "/usr/lib/systemd/systemd-timesyncd",
+   "create_time": 1795661168.77
+  },
+  {
+   "pid": 323,
+   "ppid": 1,
+   "name": "systemd-udevd",
+   "exe": "/usr/bin/udevadm",
+   "username": "root",
+   "cmdline": "/usr/lib/systemd/systemd-udevd",
+   "create_time": 1795661168.82
+  },
+  {
+   "pid": 585,
+   "ppid": 1,
+   "name": "systemd-networkd",
+   "exe": "/usr/lib/systemd/systemd-networkd",
+   "username": "systemd-network",
+   "cmdline": "/usr/lib/systemd/systemd-networkd",
+   "create_time": 1795661177.97
+  },
+  {
+   "pid": 634,
+   "ppid": 1,
+   "name": "dbus-daemon",
+   "exe": "/usr/bin/dbus-daemon",
+   "username": "messagebus",
+   "cmdline": "/usr/bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+   "create_time": 1795661178.45
+  },
+  {
+   "pid": 643,
+   "ppid": 1,
+   "name": "systemd-logind",
+   "exe": "/usr/lib/systemd/systemd-logind",
+   "username": "root",
+   "cmdline": "/usr/lib/systemd/systemd-logind",
+   "create_time": 1795661178.53
+  },
+  {
+   "pid": 648,
+   "ppid": 1,
+   "name": "tailscaled",
+   "exe": "/usr/sbin/tailscaled",
+   "username": "root",
+   "cmdline": "/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641",
+   "create_time": 1795661178.56
+  },
+  {
+   "pid": 673,
+   "ppid": 1,
+   "name": "agetty",
+   "exe": "/usr/sbin/agetty",
+   "username": "root",
+   "cmdline": "/sbin/agetty -o -- \\u --noreset --noclear - linux",
+   "create_time": 1795661178.72
+  },
+  {
+   "pid": 678,
+   "ppid": 1,
+   "name": "agetty",
+   "exe": "/usr/sbin/agetty",
+   "username": "root",
+   "cmdline": "/sbin/agetty -o -- \\u --noreset --noclear --keep-baud 115200,57600,38400,9600 - vt220",
+   "create_time": 1795661178.77
+  },
+  {
+   "pid": 695,
+   "ppid": 1,
+   "name": "unattended-upgr",
+   "exe": "/usr/bin/python3.13",
+   "username": "root",
+   "cmdline": "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+   "create_time": 1795661178.88
+  },
+  {
+   "pid": 722,
+   "ppid": 1,
+   "name": "polkitd",
+   "exe": "/usr/lib/polkit-1/polkitd",
+   "username": "polkitd",
+   "cmdline": "/usr/lib/polkit-1/polkitd --no-debug --log-level=notice",
+   "create_time": 1795661179.13
+  },
+  {
+   "pid": 1278,
+   "ppid": 1,
+   "name": "sshd",
+   "exe": "/usr/sbin/sshd",
+   "username": "root",
+   "cmdline": "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+   "create_time": 1795661182.38
+  },
+  {
+   "pid": 3691,
+   "ppid": 1,
+   "name": "python",
+   "exe": "/usr/bin/python3.13",
+   "username": "root",
+   "cmdline": "/opt/larp-agent/venv/bin/python -u /opt/larp-agent/vulnerable_web/app.py",
+   "create_time": 1795662363.03
+  },
+  {
+   "pid": 49094,
+   "ppid": 1,
+   "name": "python",
+   "exe": "/usr/bin/python3.13",
+   "username": "root",
+   "cmdline": "/opt/larp-agent/venv/bin/python -u /opt/larp-agent/agent.py",
+   "create_time": 1795686775.93
+  },
+  {
+   "pid": 58115,
+   "ppid": 49094,
+   "name": "journalctl",
+   "exe": "/usr/bin/journalctl",
+   "username": "root",
+   "cmdline": "journalctl -u cloudflared -u vulnerable_web -f -o json -n 0",
+   "create_time": 1795692072.78
+  },
+  {
+   "pid": 58532,
+   "ppid": 1278,
+   "name": "sshd-session",
+   "exe": "/usr/lib/openssh/sshd-session",
+   "username": "root",
+   "cmdline": "sshd-session: admin [priv]         ",
+   "create_time": 1795692290.75
+  },
+  {
+   "pid": 58544,
+   "ppid": 1,
+   "name": "systemd",
+   "exe": "/usr/lib/systemd/systemd",
+   "username": "admin",
+   "cmdline": "/usr/lib/systemd/systemd --user",
+   "create_time": 1795692292.91
+  },
+  {
+   "pid": 58547,
+   "ppid": 58544,
+   "name": "(sd-pam)",
+   "exe": "/usr/lib/systemd/systemd-executor",
+   "username": "admin",
+   "cmdline": "(sd-pam)",
+   "create_time": 1795692292.94
+  },
+  {
+   "pid": 58559,
+   "ppid": 58532,
+   "name": "sshd-session",
+   "exe": "/usr/lib/openssh/sshd-session",
+   "username": "admin",
+   "cmdline": "sshd-session: admin@pts/0          ",
+   "create_time": 1795692293.05
+  },
+  {
+   "pid": 58563,
+   "ppid": 58559,
+   "name": "bash",
+   "exe": "/usr/bin/bash",
+   "username": "admin",
+   "cmdline": "-bash",
+   "create_time": 1795692293.56
+  },
+  {
+   "pid": 60159,
+   "ppid": 1278,
+   "name": "sshd-session",
+   "exe": "/usr/lib/openssh/sshd-session",
+   "username": "root",
+   "cmdline": "sshd-session: admin [priv]         ",
+   "create_time": 1795693117.17
+  },
+  {
+   "pid": 60167,
+   "ppid": 60159,
+   "name": "sshd-session",
+   "exe": "/usr/lib/openssh/sshd-session",
+   "username": "admin",
+   "cmdline": "sshd-session: admin@notty          ",
+   "create_time": 1795693119.42
+  }
+ ],
+ "note": "Read-only psutil capture through the LARP Agent venv on the lab VPS; capture tooling removed. No attack scenario was running."
+}

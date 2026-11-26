@@ -121,7 +121,9 @@ async def test_rule_matching_no_positive_sample_is_inconclusive_not_validated(la
     result = client.post(f"{RULES}/{rule_id}/validate", headers=ADMIN, json={}).json()
     assert result["validation_result"]["verdict"] == "INCONCLUSIVE"
     assert result["status"] == "pending"
-    assert result["validation_result"]["dataset"]["malicious_fixture"] == 10
+    dataset = result["validation_result"]["dataset"]
+    assert (dataset["attack"], dataset["benign"]) == (9, 36)
+    assert dataset["datasets"][0]["name"] == "linux_process_v1.jsonl"
     assert client.get(METRICS).json()["accuracy_metrics"]["measured_rules"] == 0
     assert "error" in client.post(f"{RULES}/{rule_id}/activate", headers=ADMIN, json={}).json()
 

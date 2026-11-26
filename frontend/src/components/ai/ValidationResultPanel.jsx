@@ -34,6 +34,25 @@ export default function ValidationResultPanel({ result }) {
   } = result;
 
   const isPassed = passed || verdict === 'PASSED';
+  const dataset = result.dataset;
+
+  // No statistics to show: never render missing metrics as 0%.
+  if (!result.confusion || fpr == null || verdict === 'INCONCLUSIVE' || verdict === 'UNSUPPORTED_BY_ENGINE') {
+    const title = verdict === 'UNSUPPORTED_BY_ENGINE' ? 'Detection Engine không hỗ trợ rule này'
+      : verdict === 'INCONCLUSIVE' ? 'Chưa đủ dữ liệu kiểm định' : 'Kiểm định không thành công';
+    return (
+      <div role="status" style={{ padding: '1rem 1.25rem', borderRadius: '0.75rem', border: '1px solid rgba(245, 158, 11, 0.4)',
+                                  background: 'rgba(245, 158, 11, 0.08)', color: '#fcd34d' }}>
+        <strong>{title}</strong>
+        {reason && <div style={{ marginTop: '0.35rem', color: '#e5e7eb' }}>{reason}</div>}
+        {dataset?.total != null && (
+          <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#9ca3af' }}>
+            Tập kiểm định: {dataset.attack} mẫu tấn công, {dataset.benign} mẫu benign
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // Helper colors
   const fprClass = fpr < 0.05 ? 'good' : fpr <= 0.10 ? 'warn' : 'bad';

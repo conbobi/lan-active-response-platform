@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '../api/api';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -23,6 +24,16 @@ import MITRETags from '../components/ai/MITRETags';
 import ValidationResultPanel from '../components/ai/ValidationResultPanel';
 import './RuleDetail.css';
 
+// Shared client: sends the signed-in JWT. Returns the backend's {error} shape on failure so the
+// handlers below keep one error path.
+async function apiCall(path, { method = 'GET', body } = {}) {
+  try {
+    return method === 'GET' ? await api.get(path) : await api.post(path, body ? JSON.parse(body) : {});
+  } catch (e) {
+    return { error: e.message || 'Yêu cầu thất bại' };
+  }
+}
+
 export default function RuleDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -38,8 +49,7 @@ export default function RuleDetail() {
   const fetchRule = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/v1/rules/${id}`);
-      const data = await res.json();
+      const data = await apiCall(`/rules/${id}`);
       if (data.error) {
         toast.error(data.error);
       } else {
@@ -67,16 +77,15 @@ export default function RuleDetail() {
   const handleValidate = async () => {
     try {
       setActionLoading(true);
-      const res = await fetch(`/api/v1/rules/${id}/validate`, {
+      const data = await apiCall(`/rules/${id}/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fpr_threshold: 0.05, precision_threshold: 0.95 })
       });
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
-        toast.success(`Agent B: Rule ${data.status.toUpperCase()}`);
+        toast.success(`Kiểm định xong: ${data.validation_result?.verdict || data.status}`);
         fetchRule();
         setActiveTab('validation');
       }
@@ -90,16 +99,15 @@ export default function RuleDetail() {
   const handleActivate = async () => {
     try {
       setActionLoading(true);
-      const res = await fetch(`/api/v1/rules/${id}/activate`, {
+      const data = await apiCall(`/rules/${id}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ analyst_id: 'soc_analyst' })
       });
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
-        toast.success('Rule successfully activated');
+        toast.success('Rule đã được nạp vào Detection Engine');
         fetchRule();
       }
     } catch (err) {
@@ -110,21 +118,20 @@ export default function RuleDetail() {
   };
 
   const handleReject = async () => {
-    const reason = prompt('Enter rejection reason:');
+    const reason = prompt('Lý do từ chối:');
     if (reason === null) return;
 
     try {
       setActionLoading(true);
-      const res = await fetch(`/api/v1/rules/${id}/reject`, {
+      const data = await apiCall(`/rules/${id}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: reason || 'Manual analyst rejection', analyst_id: 'soc_analyst' })
       });
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
-        toast.success('Rule rejected');
+        toast.success('Đã từ chối rule');
         fetchRule();
       }
     } catch (err) {
@@ -137,14 +144,13 @@ export default function RuleDetail() {
   const handleDisable = async () => {
     try {
       setActionLoading(true);
-      const res = await fetch(`/api/v1/rules/${id}/disable`, {
+      const data = await apiCall(`/rules/${id}/disable`, {
         method: 'POST'
       });
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
-        toast.success('Rule disabled');
+        toast.success('Đã tắt rule');
         fetchRule();
       }
     } catch (err) {
@@ -157,11 +163,10 @@ export default function RuleDetail() {
   const handleSuggestExclusion = async () => {
     try {
       setExclusionLoading(true);
-      const res = await fetch(`/api/v1/rules/${id}/suggest-exclusion`, {
+      const data = await apiCall(`/rules/${id}/suggest-exclusion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
@@ -294,19 +299,19 @@ export default function RuleDetail() {
           <div className="rule-kpi-block">
             <span className="rule-kpi-title">False Positive Rate</span>
             <div className={`rule-kpi-metric ${rule.fpr != null ? (rule.fpr < 0.05 ? 'metric-good' : rule.fpr <= 0.10 ? 'metric-warn' : 'metric-bad') : ''}`}>
-              {rule.fpr != null ? `${(rule.fpr * 100).toFixed(2)}%` : 'Not tested'}
+              {rule.fpr != null ? `${(rule.fpr * 100).toFixed(2)}%` : 'Chưa đủ dữ liệu'}
             </div>
           </div>
           <div className="rule-kpi-block">
             <span className="rule-kpi-title">Precision</span>
             <div className={`rule-kpi-metric ${rule.precision != null ? (rule.precision >= 0.95 ? 'metric-good' : rule.precision >= 0.85 ? 'metric-warn' : 'metric-bad') : ''}`}>
-              {rule.precision != null ? `${(rule.precision * 100).toFixed(2)}%` : 'Not tested'}
+              {rule.precision != null ? `${(rule.precision * 100).toFixed(2)}%` : 'Chưa đủ dữ liệu'}
             </div>
           </div>
           <div className="rule-kpi-block">
             <span className="rule-kpi-title">Recall</span>
             <div className={`rule-kpi-metric ${rule.recall != null ? (rule.recall >= 0.90 ? 'metric-good' : 'metric-warn') : ''}`}>
-              {rule.recall != null ? `${(rule.recall * 100).toFixed(2)}%` : 'Not tested'}
+              {rule.recall != null ? `${(rule.recall * 100).toFixed(2)}%` : 'Chưa đủ dữ liệu'}
             </div>
           </div>
           <div className="rule-kpi-block">

@@ -21,6 +21,9 @@ from app.core.agent_health import as_utc
 from app.models.incident import Incident
 from app.schemas.enums import IncidentSeverity, IncidentStatus
 from app.services.detection.network_shell import detect_network_shell
+from app.services.detection import sigma_runtime
+from app.services.detection.behavior_evidence import stable_id
+from app.services.detection.sigma_runtime import SAFE_PROCESSES, SUSPICIOUS_DIRS, is_safe_process  # noqa: F401 (re-export)
 
 logger = logging.getLogger("larp.services.rule_engine")
 
@@ -114,51 +117,9 @@ def match_endpoint_telemetry(telemetry: Dict[str, Any]) -> List[RuleMatch]:
     return matches
 
 
-SAFE_PROCESSES = ['python3', 'python', 'node', 'bash', 'sh', 'xfwm4', 'systemd', 'dbus-daemon', 'xfce4-panel']
-SUSPICIOUS_DIRS = ('/tmp', '/dev/shm', '/var/tmp')
-
-
-def is_safe_process(event: Dict[str, Any]) -> bool:
-    """
-    Kiểm tra nếu tiến trình nằm trong SAFE_PROCESSES và không nằm trong thư mục tạm.
-    Nếu đúng, trả về True để bỏ qua hoàn toàn, không tạo Incident, không chấm điểm.
-    """
-    if not isinstance(event, dict):
-        return False
-
-    proc_name = str(
-        event.get("process_name")
-        or event.get("name")
-        or event.get("process")
-        or event.get("Image")
-        or ""
-    ).strip().lower()
-    base_name = proc_name.replace("\\", "/").split("/")[-1]
-
-    safe_set = {p.lower() for p in SAFE_PROCESSES}
-    if base_name in safe_set or proc_name in safe_set:
-        exe_path = str(
-            event.get("exe")
-            or event.get("exe_path")
-            or event.get("path")
-            or event.get("Image")
-            or ""
-        ).strip().lower()
-        # Nếu nằm trong thư mục tạm /tmp, /dev/shm, /var/tmp -> không an toàn (có thể là mã độc mạo danh)
-        in_temp = any(exe_path.startswith(d) or f"{d}/" in exe_path for d in SUSPICIOUS_DIRS)
-        if not in_temp:
-            return True
-
-    return False
-
-
 def is_reverse_shell_match(m: RuleMatch) -> bool:
     """Kiểm tra match có phải là Reverse Shell / Command Interpreter không (T1059)."""
-    shell_techniques = {"T1059", "T1059.004", "T1059.001", "T1059.003"}
-    if any(t in shell_techniques for t in m.mitre_techniques):
-        return True
-    r_name = m.rule_name.lower()
-    return any(k in r_name for k in ("reverse shell", "unix shell", "command execution", "shell spawned", "interactive shell"))
+    return sigma_runtime.is_reverse_shell_rule(m.mitre_techniques, m.rule_name)
 
 
 def is_generic_network_match(m: RuleMatch) -> bool:
@@ -198,33 +159,8 @@ class RuleEngine:
 
     CACHE_TTL_SEC = 60
     SUPPORTED_SEVERITIES = {"low", "medium", "high", "critical"}
-    SUPPORTED_MODIFIERS = {"contains", "endswith", "startswith", "re", "regex", "in"}
-    # Sigma field → telemetry key
-    FIELD_ALIASES = {
-        "commandline": "cmdline",
-        "cmdline": "cmdline",
-        "image": "exe",
-        "exe": "exe",
-        "process": "exe",
-        "processname": "name",
-        "name": "name",
-        "processid": "pid",
-        "pid": "pid",
-        "parentprocessid": "parent_pid",
-        "parent_pid": "parent_pid",
-        "parentimage": "parent_exe",
-        "parent_exe": "parent_exe",
-        "destinationport": "dst_port",
-        "dst_port": "dst_port",
-        "destinationip": "dst_ip",
-        "dst_ip": "dst_ip",
-        "sourceport": "src_port",
-        "src_port": "src_port",
-        "sourceip": "src_ip",
-        "src_ip": "src_ip",
-        "targetfilename": "file_path",
-        "file_path": "file_path",
-    }
+    SUPPORTED_MODIFIERS = sigma_runtime.SUPPORTED_MODIFIERS
+    FIELD_ALIASES = sigma_runtime.FIELD_ALIASES
 
     def __init__(self):
         self._cached_rules: List[Dict[str, Any]] = []
@@ -252,26 +188,7 @@ class RuleEngine:
                 logger.error(f"rule_engine: rule '{rule.get('rule_name')}' eval failed: {e}")
                 continue
 
-        # Lọc bỏ matches nếu process_name hoặc Image nằm trong SAFE_PROCESSES và không ở /tmp, /dev/shm, /var/tmp
-        filtered_matches = []
-        for m in matches:
-            event = m.matched_event
-            if is_safe_process(event):
-                # Ngoại lệ: chỉ giữ lại nếu match là reverse shell thực sự với payload độc hại trên cmdline
-                if is_reverse_shell_match(m) and any(
-                    re.search(pat, str(event.get("cmdline") or ""), re.IGNORECASE)
-                    for pat in (r"/dev/tcp/", r"\bbash\s+-[a-zA-Z]*i", r"\bsh\s+-[a-zA-Z]*i", r"\bpty\.spawn", r"\bsocket\.socket")
-                ):
-                    filtered_matches.append(m)
-                    continue
-
-                logger.info(
-                    f"rule_engine: suppressed safe process '{event.get('name') or event.get('process_name') or event.get('Image')}' "
-                    f"(rule '{m.rule_name}') - not in suspicious dirs (/tmp, /dev/shm, /var/tmp)"
-                )
-                continue
-            filtered_matches.append(m)
-        matches = filtered_matches
+        # Safe-process suppression is applied inside sigma_runtime.matching_events (shared with the validator).
 
         # Lọc bỏ generic network match (T1071) nếu tiến trình không bị coi là đáng ngờ
         # (Chỉ gán T1071 nếu tiến trình đáng ngờ / reverse shell / path độc hại)
@@ -401,6 +318,7 @@ class RuleEngine:
                         "mitre_techniques": mitre_list,
                         "detection": rule_dict.get("detection", {}),
                         "logsource": rule_dict.get("logsource", {}),
+                        "sigma": rule_dict,
                     })
                 except yaml.YAMLError as e:
                     logger.warning(f"rule_engine: invalid YAML for rule {r.id}: {e}")
@@ -413,201 +331,34 @@ class RuleEngine:
 
     @classmethod
     def check_sigma_support(cls, rule: Any) -> tuple[bool, str]:
-        """Can this engine execute the Sigma rule exactly as written?
-
-        The runtime evaluates one ``selection`` block of field criteria against process, network or
-        file telemetry. Anything else would be silently ignored at runtime (filters, other blocks,
-        conditions, nested criteria), so such rules must not be validated or activated.
-        """
-        if not isinstance(rule, dict):
-            return False, "Sigma phải là một mapping YAML"
-        detection = rule.get("detection")
-        if not isinstance(detection, dict):
-            return False, "Thiếu khối detection"
-        blocks = {k: v for k, v in detection.items() if k != "condition"}
-        if set(blocks) != {"selection"}:
-            extra = sorted(set(blocks) - {"selection"})
-            return False, ("Detection Engine chỉ hỗ trợ một khối 'selection'"
-                           + (f"; không hỗ trợ: {', '.join(map(str, extra))}" if extra else ""))
-        condition = str(detection.get("condition", "selection")).strip()
-        if condition != "selection":
-            return False, f"Detection Engine chỉ hỗ trợ condition 'selection', không hỗ trợ '{condition}'"
-        selection = blocks["selection"]
-        if not isinstance(selection, dict) or not selection:
-            return False, "Khối selection phải là danh sách trường không rỗng (dạng keyword list chưa được hỗ trợ)"
-        logsource = rule.get("logsource") or {}
-        category = str(logsource.get("category") or logsource.get("product") or "process_creation").lower()
-        if not any(kind in category for kind in ("process", "endpoint", "network", "file")):
-            return False, f"Logsource '{category}' không có telemetry tương ứng trên Agent"
-        for key, value in selection.items():
-            parts = [part.strip().lower() for part in str(key).split("|")]
-            unsupported = [m for m in parts[1:] if m not in cls.SUPPORTED_MODIFIERS]
-            if unsupported:
-                return False, f"Modifier không được hỗ trợ: {', '.join(unsupported)} (trường {parts[0]})"
-            if parts[0] not in cls.FIELD_ALIASES:
-                return False, f"Trường '{parts[0]}' không có trong telemetry của Agent"
-            values = value if isinstance(value, list) else [value]
-            if any(isinstance(v, (dict, list)) for v in values):
-                return False, f"Giá trị lồng nhau cho trường '{parts[0]}' chưa được hỗ trợ"
-        return True, "Detection Engine hỗ trợ rule này"
+        """Can this engine execute the Sigma rule exactly as written? (shared with the validator)"""
+        return sigma_runtime.check_support(rule)
 
     def _evaluate_rule(self, rule: Dict[str, Any], telemetry: Dict[str, Any]) -> List[RuleMatch]:
-        """
-        Evaluate 1 Sigma rule against telemetry.
-        Support các kiểu match cơ bản của Sigma:
-          - Process: process_list[].name, cmdline, exe, parent_pid
-          - Network: network_connections[].dst_port, dst_ip
-          - File: FIM alerts (nếu telemetry có file_changes)
-        """
-        detection = rule.get("detection") or {}
-        if not detection:
-            return []
-
-        selection = detection.get("selection")
-        if not selection or not isinstance(selection, dict):
-            return []
-
-        matches: List[RuleMatch] = []
-
-        logsource = rule.get("logsource") or {}
-        category = str(logsource.get("category") or logsource.get("product") or "process_creation").lower()
-
-        candidates = self._get_candidates(telemetry, category)
-
-        for event in candidates:
-            # Bỏ qua nếu là tiến trình trong SAFE_PROCESSES và không ở thư mục tạm
-            if is_safe_process(event):
-                cmdline = str(event.get("cmdline") or "")
-                if not any(pat in cmdline for pat in ("/dev/tcp/", "-i", "pty.spawn", "socket.socket")):
-                    continue
-            try:
-                if self._match_selection(selection, event):
-                    matches.append(RuleMatch(
-                        rule_id=rule["id"],
-                        rule_name=rule["rule_name"],
-                        severity=rule["severity"],
-                        mitre_techniques=rule["mitre_techniques"],
-                        matched_event=event,
-                        detail=self._build_detail(selection, event),
-                        version=rule.get("version", "sigma:1"),
-                    ))
-            except Exception as e:
-                logger.debug(f"_match_selection error: {e}")
-                continue
-
-        return matches
+        """Evaluate one active Sigma rule through the shared path used by the validator
+        (canonical events, parent enrichment from the same snapshot, safe-process policy)."""
+        sigma = rule.get("sigma") or {"detection": rule.get("detection") or {}, "logsource": rule.get("logsource") or {}}
+        events = sigma_runtime.candidates(sigma, telemetry)
+        selection = (sigma.get("detection") or {}).get("selection") or {}
+        return [RuleMatch(
+            rule_id=rule["id"],
+            rule_name=rule["rule_name"],
+            severity=rule["severity"],
+            mitre_techniques=rule["mitre_techniques"],
+            matched_event=event,
+            detail=self._build_detail(selection, event),
+            version=rule.get("version", "sigma:1"),
+        ) for event in sigma_runtime.matching_events(
+            sigma, events, mitre=rule["mitre_techniques"], name=rule["rule_name"])]
 
     def _get_candidates(self, telemetry: Dict[str, Any], category: str) -> List[Dict[str, Any]]:
-        """Trả về list event cần match, dựa vào loại logsource."""
-        if "process" in category or "endpoint" in category:
-            return telemetry.get("process_list") or telemetry.get("processes") or []
-        if "network" in category:
-            return telemetry.get("network_connections") or telemetry.get("conns") or []
-        if "file" in category:
-            return telemetry.get("file_changes") or telemetry.get("fim_alerts") or []
-
-        # Fallback: gộp process + network
-        procs = telemetry.get("process_list") or telemetry.get("processes") or []
-        conns = telemetry.get("network_connections") or telemetry.get("conns") or []
-        return procs + conns
+        return sigma_runtime.candidates({"logsource": {"category": category}}, telemetry)
 
     def _match_selection(self, selection: Dict[str, Any], event: Dict[str, Any]) -> bool:
-        """
-        Match 1 selection dict lên 1 event.
-        Hỗ trợ các modifier: |contains, |endswith, |startswith, |re, |in
-        """
-        for key, expected in selection.items():
-            if isinstance(expected, list):
-                # OR logic cho list các giá trị
-                if not any(self._match_field(key, v, event) for v in expected):
-                    return False
-            elif isinstance(expected, dict):
-                # Nested criteria are not supported by this engine: fail closed instead of
-                # silently treating them as matched (check_sigma_support refuses such rules).
-                return False
-            else:
-                if not self._match_field(key, expected, event):
-                    return False
-        return True
+        return sigma_runtime.match_selection(selection, event)
 
     def _match_field(self, key_spec: str, expected: Any, event: Dict[str, Any]) -> bool:
-        """
-        Match 1 field với modifier. Ví dụ:
-          - "CommandLine|contains" → check 'contains' trên field 'cmdline'
-          - "Image|endswith" → check 'endswith' trên field 'exe'
-        """
-        parts = key_spec.split("|")
-        field_name = parts[0].strip()
-        modifiers = [m.strip().lower() for m in parts[1:]]
-
-        field_aliases = self.FIELD_ALIASES
-        actual_key = field_aliases.get(field_name.lower(), field_name.lower())
-        actual_value = event.get(actual_key)
-
-        # Fallback cho process/image: nếu exe rỗng, thử name
-        if actual_value is None and actual_key in ("exe", "name"):
-            actual_value = event.get("name") or event.get("exe") or event.get("process")
-
-        # Fallback cho parent: nếu parent_exe rỗng, thử parent_name hoặc parent
-        if actual_value is None and actual_key == "parent_exe":
-            actual_value = event.get("parent_exe") or event.get("parent_name") or event.get("parent")
-
-        # Logic trace parent: nếu không tìm thấy parent (None, 0, rỗng, unknown), không được tự động match hay cộng rủi ro
-        # Không trace process nếu parent_pid < 100 (ngoại trừ nếu rule tìm đích danh PID 1 hoặc systemd)
-        if actual_key in ("parent_pid", "parent_exe"):
-            if actual_value is None or str(actual_value).strip().lower() in ("", "0", "none", "null", "unknown", "-1"):
-                return False
-            if actual_key == "parent_pid":
-                try:
-                    val_int = int(actual_value)
-                    if val_int < 100 and val_int != 1 and str(expected).strip() not in (str(val_int), "systemd"):
-                        return False
-                except (ValueError, TypeError):
-                    pass
-
-        if actual_value is None:
-            return False
-
-        actual_str = str(actual_value).lower()
-        expected_str = str(expected).lower()
-
-        for mod in modifiers:
-            if mod == "contains":
-                if expected_str not in actual_str:
-                    return False
-            elif mod == "endswith":
-                if not actual_str.endswith(expected_str):
-                    return False
-            elif mod == "startswith":
-                if not actual_str.startswith(expected_str):
-                    return False
-            elif mod in ("re", "regex"):
-                try:
-                    if not re.search(str(expected), str(actual_value), re.IGNORECASE):
-                        return False
-                except re.error:
-                    return False
-            elif mod == "in":
-                if isinstance(actual_value, list):
-                    if expected_str not in [str(x).lower() for x in actual_value]:
-                        return False
-                else:
-                    if expected_str not in actual_str:
-                        return False
-            else:
-                # Modifiers khác hoặc exact match
-                if actual_str != expected_str:
-                    return False
-
-        # Nếu không có modifier: so sánh exact (hoặc number)
-        if not modifiers:
-            if isinstance(actual_value, (int, float)) and isinstance(expected, (int, float)):
-                if actual_value != expected:
-                    return False
-            elif actual_str != expected_str:
-                return False
-
-        return True
+        return sigma_runtime.match_field(key_spec, expected, event)
 
     def _build_detail(self, selection: Dict[str, Any], event: Dict[str, Any]) -> str:
         """Human-readable detail để show cho analyst."""
@@ -726,6 +477,16 @@ class RuleEngine:
                 "parent_pid": event.get("parent_pid"), "cmdline": str(event.get("cmdline") or "")[:2048],
                 "name": str(event.get("process_name") or event.get("name") or posixpath.basename(path))[:128],
             }
+            # Stable ID of this process instance (PID + start time + executable) for evidence references.
+            saved["evidence_id"] = stable_id("proc_", identity[0], identity[1], path)
+            if event.get("parent_cmdline") or event.get("parent_exe"):
+                saved["parent"] = {
+                    "pid": event.get("parent_pid"), "process_start_time": event.get("parent_process_start_time"),
+                    "name": str(event.get("parent_name") or "")[:128], "exe_path": str(event.get("parent_exe") or "")[:1024],
+                    "cmdline": str(event.get("parent_cmdline") or "")[:2048],
+                    "source": "same_snapshot_by_pid",
+                }
+            saved["matched_fields"] = match.detail[:1024]
         key = socket_key(event)
         if key:
             saved["network"] = dict(zip(("protocol", "src_ip", "src_port", "dst_ip", "dst_port"), key))
