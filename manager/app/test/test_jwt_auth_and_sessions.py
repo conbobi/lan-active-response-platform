@@ -444,3 +444,40 @@ def test_cli_admin_bootstrap_password_reset_and_alembic_migration(tmp_path, monk
             for tbl in ("soc_users", "soc_user_agent_scopes", "soc_refresh_sessions", "soc_auth_audit_logs"):
                 assert not insp2.has_table(tbl)
     mig_engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["/api/v1/rules", "/api/rules"])
+async def test_ai_rules_jwt_permissions(jwt_lab, monkeypatch, prefix):
+    from app.services.ai import harvest_service as harvest_module
+    from test_ai_soc_studio import SUPPORTED
+
+    client, factory = jwt_lab
+
+    async def model(cti_text):
+        return SUPPORTED
+
+    monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
+    monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", model)
+    admin = _bearer(_login(client, "soc-admin", "AdminPassword!123").json()["access_token"])
+    operator = _bearer(_login(client, "soc-operator", "OperatorPass!123").json()["access_token"])
+    analyst = _bearer(_login(client, "soc-analyst", "AnalystPass!123").json()["access_token"])
+    body = {"cti_text": "Synthetic report for rule generation"}
+    for headers in (admin, operator):
+        created = client.post(f"{prefix}/harvest", headers=headers, json=body)
+        assert created.status_code == 200 and created.json()["status"] == "pending"
+    path = f"{prefix}/{created.json()['rule_id']}"
+    assert client.get(path, headers=analyst).json()["rule_yaml"]
+    assert client.post(f"{prefix}/harvest", json=body).status_code == 401
+    assert client.post(f"{prefix}/harvest", headers=analyst, json=body).status_code == 403
+    for method, url, payload, expected_status in [
+        ("PUT", path, {"notes": "reviewed"}, "pending"),
+        ("POST", f"{path}/validate", {}, "validated"),
+        ("POST", f"{path}/activate", {}, "active"),
+        ("POST", f"{path}/reject", {}, "rejected"),
+        ("POST", f"{path}/disable", {}, "disabled"),
+    ]:
+        assert client.request(method, url, json=payload).status_code == 401
+        assert client.request(method, url, headers=analyst, json=payload).status_code == 403
+        result = client.request(method, url, headers=operator, json=payload)
+        assert result.status_code == 200 and result.json().get("status") == expected_status, result.text

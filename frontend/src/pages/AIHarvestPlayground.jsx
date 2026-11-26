@@ -17,6 +17,8 @@ import {
   FiExternalLink
 } from 'react-icons/fi';
 
+import api from '../api/api';
+import { harvestRule } from '../api/rules';
 import ValidationResultPanel from '../components/ai/ValidationResultPanel';
 import './AIHarvestPlayground.css';
 
@@ -85,18 +87,7 @@ export default function AIHarvestPlayground() {
       setGeneratedYaml('');
       setRuleCandidateId(null);
 
-      const res = await fetch('/api/v1/rules/harvest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cti_text: ctiText.trim(), analyst_id: analystId })
-      });
-
-      if (!res.ok && res.status >= 500) {
-        toast.error(`Harvest request returned HTTP ${res.status}. Please check manager logs.`);
-        return;
-      }
-
-      const data = await res.json();
+      const data = await harvestRule({ cti_text: ctiText.trim(), analyst_id: analystId });
       if (data.error) {
         toast.error(data.error);
       } else {
@@ -123,16 +114,10 @@ export default function AIHarvestPlayground() {
 
     try {
       setSaving(true);
-      const res = await fetch(`/api/v1/rules/${ruleCandidateId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rule_yaml: generatedYaml,
-          analyst_id: analystId
-        })
+      const data = await api.put(`/rules/${ruleCandidateId}`, {
+        rule_yaml: generatedYaml,
+        analyst_id: analystId,
       });
-
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
@@ -140,7 +125,7 @@ export default function AIHarvestPlayground() {
         setIsEditing(false);
       }
     } catch (err) {
-      toast.error('Failed to save rule changes');
+      toast.error(err.message || 'Failed to save rule changes');
     } finally {
       setSaving(false);
     }
@@ -155,13 +140,10 @@ export default function AIHarvestPlayground() {
 
     try {
       setValidating(true);
-      const res = await fetch(`/api/v1/rules/${ruleCandidateId}/validate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fpr_threshold: 0.05, precision_threshold: 0.95 })
+      const data = await api.post(`/rules/${ruleCandidateId}/validate`, {
+        fpr_threshold: 0.05,
+        precision_threshold: 0.95,
       });
-
-      const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
@@ -174,7 +156,7 @@ export default function AIHarvestPlayground() {
         }
       }
     } catch (err) {
-      toast.error('Validation request failed');
+      toast.error(err.message || 'Validation request failed');
     } finally {
       setValidating(false);
     }
@@ -186,13 +168,7 @@ export default function AIHarvestPlayground() {
 
     try {
       setActivating(true);
-      const res = await fetch(`/api/v1/rules/${ruleCandidateId}/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ analyst_id: analystId })
-      });
-
-      const data = await res.json();
+      const data = await api.post(`/rules/${ruleCandidateId}/activate`, { analyst_id: analystId });
       if (data.error) {
         toast.error(data.error);
       } else {
@@ -200,7 +176,7 @@ export default function AIHarvestPlayground() {
         toast.success('Rule successfully activated into detection pipeline!');
       }
     } catch (err) {
-      toast.error('Failed to activate rule');
+      toast.error(err.message || 'Failed to activate rule');
     } finally {
       setActivating(false);
     }

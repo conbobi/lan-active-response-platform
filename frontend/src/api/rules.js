@@ -1,5 +1,5 @@
 // src/api/rules.js
-import api from './api';
+import api from './api.js';
 
 export const getRules = async () => {
   try {
@@ -22,3 +22,5 @@ export const deleteRule = async (ruleId) => {
 export const getRule = async (ruleId) => {
   return await api.get(`/rules/${ruleId}`);
 };
+
+export const harvestRule = (body) => api.post('/rules/harvest', body);

@@ -128,6 +128,12 @@ OWN_AUTHORIZATION = [re.compile(p) for p in (
     rf"{_V1}/response-actions/{_ID}/(approve|reject|execute|rollback)/?",
     rf"{_V1}/response-actions/batch/(approve|reject)/?",
 )]
+# Only these candidate mutations grant write access to scoped SOC operators.
+_AI_RULES = r"/api/(?:v1/)?rules"
+RULE_WRITES = {
+    "POST": re.compile(rf"{_AI_RULES}/(?:harvest|{_ID}/(?:validate|activate|reject|disable))/?"),
+    "PUT": re.compile(rf"{_AI_RULES}/{_ID}/?"),
+}
 # Incident workflow calls any configured operator (analyst or admin) may make. They change incident
 # bookkeeping or request read-only analysis; none dispatches a command to an endpoint.
 ANALYST_WRITE = [(frozenset(methods), re.compile(p)) for methods, p in (
@@ -160,7 +166,7 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
     """Authorize every state-changing API call once credentials are configured.
 
     Default deny: a mutating request needs an admin operator (or the legacy admin token) unless it is
-    an analyst-level incident workflow call (ANALYST_WRITE) or a route with its own scoped checks
+    an AI rule candidate write (RULE_WRITES), an analyst workflow (ANALYST_WRITE), or a route with its own checks
     (OWN_AUTHORIZATION). The authenticated identity is exposed as ``request.state.operator`` so
     routes record it as the actor instead of trusting a client-supplied name.
     """
@@ -193,8 +199,11 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
             db, gen = await _open_middleware_db()
             try:
                 has_soc_users = (await db.scalar(select(SocUser.id).limit(1))) is not None
+                rule_write = RULE_WRITES.get(request.method)
+                is_rule_write = bool(rule_write and rule_write.fullmatch(path))
                 has_auth_configured = bool(
-                    not settings.DEBUG
+                    is_rule_write
+                    or not settings.DEBUG
                     or has_soc_users
                     or (settings.ALLOW_LEGACY_OPERATOR_TOKENS and (settings.NETWORK_LEGACY_ADMIN_TOKEN or settings.NETWORK_OPERATORS))
                     or auth_header.strip()
@@ -205,6 +214,7 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
                             auth_header,
                             db,
                             write=not analyst_write(request.method, path),
+                            allowed_write_roles={"admin", "operator"} if is_rule_write else None,
                         )
                     except HTTPException as exc:
                         return JSONResponse(
