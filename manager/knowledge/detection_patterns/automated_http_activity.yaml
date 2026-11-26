@@ -1,0 +1,32 @@
+# Automated HTTP clients identified only by a self-declared User-Agent.
+pattern_id: automated_http_activity
+title: Automated HTTP activity
+category: false_positive_investigation
+applies_to:
+  classifications: [automated_http_activity]
+forbidden_techniques: [T1110, T1190, T1218]
+levels:
+  - level: 1
+    name: automation_indicator
+    requires:
+      all: [trusted_http_facts, http_automation_hint]
+    conclusion: "Client HTTP tự khai báo là công cụ tự động, đây là chỉ báo hoạt động tự động và không phải bằng chứng tấn công."
+    confirmed:
+      - predicate: http_automation_hint
+        text: "Request HTTP mang User-Agent tự khai báo của công cụ tự động"
+    suspected:
+      - "Có thể là quét hoặc liệt kê tự động, nhưng User-Agent do client tự đặt."
+    missing_evidence:
+      - "Chỉ báo payload trong request đã chuẩn hóa."
+      - "Tần suất và tập đường dẫn của các request từ cùng nguồn."
+    alternative_explanations:
+      - "Giám sát sẵn sàng, tác vụ cron hoặc script nội bộ dùng curl/python-requests."
+      - "Kiểm thử được ủy quyền."
+    investigation_steps:
+      - "Xác định chủ sở hữu nguồn và mục đích của client tự động."
+    attack: []
+    playbook: automated_http_review
+    knowledge:
+      - terms: "automated HTTP client false positive triage"
+        categories: [false_positive_investigation]
+        attack_ids: []

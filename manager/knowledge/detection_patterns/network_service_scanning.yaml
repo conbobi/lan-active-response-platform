@@ -1,0 +1,56 @@
+# Inbound network service scanning from flow evidence (network_scan_rule.py).
+pattern_id: network_service_scanning
+title: Network service scanning
+category: network_scanning
+applies_to:
+  classifications: [network_service_scanning]
+forbidden_techniques: [T1110, T1190, T1218]
+levels:
+  - level: 1
+    name: inbound_port_contacts
+    requires:
+      all: [inbound_port_contacts]
+    conclusion: "Một nguồn đã kết nối tới nhiều cổng cục bộ, nhưng số cổng chưa đạt ngưỡng quét dịch vụ."
+    confirmed:
+      - predicate: inbound_port_contacts
+        text: "Các luồng TCP chiều vào từ cùng nguồn tới nhiều cổng cục bộ"
+    suspected:
+      - "Có thể là bước đầu của quét dịch vụ."
+    missing_evidence:
+      - "Ít nhất tám cổng đích khác nhau trong cửa sổ phát hiện (sẽ nâng lên mức quét dịch vụ)."
+    alternative_explanations:
+      - "Client hợp lệ dùng nhiều dịch vụ trên cùng máy."
+    investigation_steps:
+      - "Liệt kê cổng đích và dịch vụ đang lắng nghe tương ứng."
+    attack: []
+    playbook: network_scan_review
+    knowledge:
+      - terms: "inbound port scan triage"
+        categories: [network_scanning, false_positive_investigation]
+        attack_ids: []
+
+  - level: 2
+    name: service_scanning
+    requires:
+      all: [inbound_port_contacts, service_scan_threshold]
+    conclusion: "Một nguồn đã kết nối tới ít nhất tám cổng cục bộ khác nhau trong cửa sổ ngắn, cho thấy hoạt động quét dịch vụ mạng."
+    confirmed:
+      - predicate: service_scan_threshold
+        text: "Luồng TCP chiều vào từ cùng nguồn tới ít nhất tám cổng cục bộ khác nhau"
+    suspected:
+      - "Kẻ tấn công có thể đang liệt kê dịch vụ để chọn mục tiêu khai thác."
+    missing_evidence:
+      - "Bằng chứng nguồn tiếp tục tương tác với một dịch vụ cụ thể sau khi quét."
+    alternative_explanations:
+      - "Quét kiểm kê hoặc quét lỗ hổng được ủy quyền."
+    investigation_steps:
+      - "Đối chiếu nguồn với danh sách máy quét được phê duyệt."
+      - "Kiểm tra log dịch vụ trên các cổng bị chạm tới."
+    attack:
+      - technique_id: T1046
+        evidence_from: [service_scan_threshold]
+    playbook: network_scan_response
+    knowledge:
+      - terms: "network service discovery scanning response"
+        categories: [network_scanning]
+        attack_ids: [T1046]

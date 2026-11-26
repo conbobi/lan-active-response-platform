@@ -1,0 +1,83 @@
+# Authentication abuse ladder for auth_events behavior evidence.
+# T1110 is mapped only when the brute-force criteria of brute_force_rule.py are met.
+pattern_id: authentication_abuse
+title: Authentication abuse
+category: authentication_abuse
+applies_to:
+  classifications: [repeated_auth_failures, authentication_brute_force]
+forbidden_techniques: [T1190, T1218]
+levels:
+  - level: 1
+    name: repeated_auth_failures
+    requires:
+      all: [auth_failures_observed]
+    conclusion: "Có nhiều lần xác thực thất bại từ cùng nguồn, nhưng chưa đạt tiêu chí brute force."
+    confirmed:
+      - predicate: auth_failures_observed
+        text: "Sự kiện xác thực ghi nhận các lần thất bại lặp lại"
+    suspected:
+      - "Có thể là đoán mật khẩu ở tốc độ thấp."
+    missing_evidence:
+      - "Chuỗi thất bại dồn dập cùng tài khoản và nguồn trong cửa sổ phát hiện (sẽ nâng lên mức brute force)."
+    alternative_explanations:
+      - "Người dùng nhập sai mật khẩu hoặc client lưu mật khẩu cũ."
+    investigation_steps:
+      - "Kiểm tra tài khoản bị nhắm và lịch sử đăng nhập hợp lệ của nguồn."
+    attack: []
+    playbook: auth_repeated_failures
+    knowledge:
+      - terms: "repeated authentication failures triage"
+        categories: [authentication_abuse, false_positive_investigation]
+        attack_ids: []
+
+  - level: 2
+    name: authentication_brute_force
+    requires:
+      all: [auth_failures_observed, brute_force_criteria_met]
+    conclusion: "Chuỗi xác thực thất bại dồn dập đạt tiêu chí brute force, cho thấy đang có tấn công đoán mật khẩu."
+    confirmed:
+      - predicate: brute_force_criteria_met
+        text: "Số lần thất bại trong cửa sổ thời gian đạt tiêu chí brute force"
+    suspected:
+      - "Kẻ tấn công có thể đang thử danh sách mật khẩu cho tài khoản mục tiêu."
+    missing_evidence:
+      - "Một lần xác thực thành công sau chuỗi thất bại (sẽ nâng lên mức nghi ngờ chiếm tài khoản)."
+    alternative_explanations:
+      - "Kiểm thử mật khẩu được ủy quyền."
+    investigation_steps:
+      - "Kiểm tra có lần đăng nhập thành công nào từ cùng nguồn sau chuỗi thất bại."
+    attack:
+      - technique_id: T1110
+        evidence_from: [brute_force_criteria_met]
+    playbook: auth_brute_force
+    knowledge:
+      - terms: "brute force password guessing detection response"
+        categories: [authentication_abuse]
+        attack_ids: [T1110]
+
+  - level: 3
+    name: brute_force_success
+    requires:
+      all: [auth_failures_observed, brute_force_criteria_met, success_after_failures]
+    conclusion: "Sau chuỗi brute force đã có lần xác thực thành công từ cùng nguồn, nên nghi ngờ tài khoản đã bị chiếm."
+    confirmed:
+      - predicate: brute_force_criteria_met
+        text: "Số lần thất bại trong cửa sổ thời gian đạt tiêu chí brute force"
+      - predicate: success_after_failures
+        text: "Có lần xác thực thành công trong cùng nhóm bằng chứng"
+    suspected:
+      - "Mật khẩu có thể đã bị đoán trúng."
+    missing_evidence:
+      - "Xác nhận của chủ tài khoản về lần đăng nhập thành công."
+    alternative_explanations:
+      - "Chủ tài khoản đăng nhập đúng sau nhiều lần gõ sai."
+    investigation_steps:
+      - "Liên hệ chủ tài khoản và kiểm tra hoạt động sau đăng nhập."
+    attack:
+      - technique_id: T1110
+        evidence_from: [brute_force_criteria_met]
+    playbook: auth_brute_force
+    knowledge:
+      - terms: "compromised account credential reset session revocation"
+        categories: [authentication_abuse, session_revocation]
+        attack_ids: [T1110]

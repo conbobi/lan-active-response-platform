@@ -1,0 +1,57 @@
+# Command injection via the web application, assessed from related host evidence.
+# T1059 only when the web server process verifiably spawned a shell
+# (ancestry verified by process_info pid + process_start_time and web-app identity).
+pattern_id: web_command_injection
+title: Command injection via web application
+category: command_injection
+applies_to:
+  host_evidence: true
+forbidden_techniques: [T1110, T1218]
+levels:
+  - level: 1
+    name: related_host_activity
+    requires:
+      all: [host_activity_unverified]
+    conclusion: "Có hoạt động tiến trình trên cùng máy trong khung thời gian, nhưng chưa xác minh được nó do ứng dụng web sinh ra nên chỉ là liên quan, chưa tương quan."
+    confirmed: []
+    suspected:
+      - "Ứng dụng web có thể đã bị lợi dụng để thực thi lệnh."
+    missing_evidence:
+      - "Chuỗi tiến trình cha có PID và thời điểm khởi động khớp bản ghi process_info của ứng dụng Flask."
+    alternative_explanations:
+      - "Tiến trình do quản trị viên hoặc tác vụ định kỳ khởi chạy."
+      - "PID của ứng dụng web đã được tái sử dụng."
+    investigation_steps:
+      - "Thu thập cây tiến trình đầy đủ của Agent để xác minh tiến trình cha."
+    attack: []
+    playbook: web_command_injection_unverified
+    knowledge:
+      - terms: "command injection web application process ancestry"
+        categories: [command_injection, suspicious_process_execution]
+        attack_ids: []
+
+  - level: 2
+    name: web_server_spawned_shell
+    requires:
+      all: [web_spawned_shell_verified]
+    conclusion: "Tiến trình ứng dụng web đã được xác minh là tổ tiên của một shell, cho thấy thực thi lệnh thông qua ứng dụng web."
+    confirmed:
+      - predicate: web_spawned_shell_verified
+        text: "Shell có chuỗi tiến trình cha khớp PID và thời điểm khởi động của ứng dụng Flask"
+    suspected:
+      - "Kẻ tấn công có thể đã chiếm quyền thực thi lệnh với quyền của dịch vụ web."
+    missing_evidence:
+      - "Request HTTP cụ thể đã kích hoạt việc sinh tiến trình."
+    alternative_explanations:
+      - "Ứng dụng gọi shell hợp lệ theo thiết kế."
+    investigation_steps:
+      - "Xác định điểm gọi subprocess trong mã ứng dụng."
+      - "Thu thập kết nối mạng của shell trước khi ngăn chặn."
+    attack:
+      - technique_id: T1059
+        evidence_from: [web_spawned_shell_verified]
+    playbook: web_post_exploitation
+    knowledge:
+      - terms: "OS command injection defense web application"
+        categories: [command_injection, remediation]
+        attack_ids: [T1059]

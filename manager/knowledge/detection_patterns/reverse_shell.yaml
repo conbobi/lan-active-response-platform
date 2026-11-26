@@ -1,0 +1,59 @@
+# Reverse / suspicious shell from network_shell.py detection evidence.
+# T1059.004 only when process identity, socket inode and stdio file descriptors are linked.
+pattern_id: reverse_shell
+title: Reverse or network-attached shell
+category: reverse_shell
+applies_to:
+  rule_ids: [builtin_linux_network_shell]
+forbidden_techniques: [T1110, T1190, T1218]
+levels:
+  - level: 1
+    name: suspicious_shell_socket
+    requires:
+      all: [shell_socket_holder]
+    conclusion: "Một tiến trình shell giữ socket TCP đã thiết lập với máy từ xa, nhưng chưa xác minh được socket gắn vào luồng nhập/xuất của shell."
+    confirmed:
+      - predicate: shell_socket_holder
+        text: "Tiến trình shell (PID và thời điểm khởi động xác định) giữ inode socket đã xác minh"
+    suspected:
+      - "Shell có thể đang bị điều khiển từ xa."
+    missing_evidence:
+      - "Cùng một socket trên stdin và stdout/stderr của shell (sẽ nâng lên mức reverse shell xác nhận)."
+    alternative_explanations:
+      - "Script quản trị mở kết nối mạng từ shell."
+    investigation_steps:
+      - "Kiểm tra cây tiến trình cha và dòng lệnh của shell."
+    attack: []
+    playbook: reverse_shell_suspected
+    knowledge:
+      - terms: "suspicious shell network connection triage"
+        categories: [reverse_shell, suspicious_process_execution]
+        attack_ids: []
+
+  - level: 2
+    name: reverse_shell_confirmed
+    classifications: ["High-Confidence Reverse Shell"]
+    requires:
+      all: [shell_socket_holder, shell_stdio_on_socket]
+    conclusion: "Shell có cùng một socket TCP trên stdin và luồng xuất, nên đây là reverse shell đã được xác nhận bằng bằng chứng tiến trình, socket và file descriptor."
+    confirmed:
+      - predicate: shell_socket_holder
+        text: "Tiến trình shell (PID và thời điểm khởi động xác định) giữ inode socket đã xác minh"
+      - predicate: shell_stdio_on_socket
+        text: "Socket nằm trên stdin và stdout/stderr của shell"
+    suspected:
+      - "Kẻ tấn công có thể đang thực thi lệnh tương tác trên máy."
+    missing_evidence:
+      - "Tiến trình cha khởi tạo shell và vector truy cập ban đầu."
+    alternative_explanations: []
+    investigation_steps:
+      - "Xác định tiến trình cha và dịch vụ đã sinh ra shell."
+      - "Thu thập ảnh chụp kết nối mạng trước khi ngăn chặn."
+    attack:
+      - technique_id: T1059.004
+        evidence_from: [shell_socket_holder, shell_stdio_on_socket]
+    playbook: reverse_shell_confirmed
+    knowledge:
+      - terms: "reverse shell unix shell containment"
+        categories: [reverse_shell, host_containment]
+        attack_ids: [T1059.004]
