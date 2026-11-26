@@ -2,6 +2,15 @@ import React from 'react';
 import { FiCpu, FiUser } from 'react-icons/fi';
 
 export default function SourceBadge({ source }) {
+  if ((source || '').toLowerCase() === 'template_fallback') {
+    return (
+      <span title="Model không trả Sigma hợp lệ; rule được tạo từ mẫu từ khóa"
+            style={{ display: 'inline-flex', padding: '0.15rem 0.5rem', borderRadius: '0.375rem', fontSize: '0.75rem',
+                     fontWeight: 600, color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.4)', whiteSpace: 'nowrap' }}>
+        Mẫu dự phòng
+      </span>
+    );
+  }
   const isAI = !source || source.toLowerCase().includes('ai');
 
   if (isAI) {
@@ -46,7 +55,7 @@ export default function SourceBadge({ source }) {
       }}
     >
       <FiUser size={11} className="text-blue-400" style={{ color: '#60a5fa' }} />
-      Human
+      Thủ công
     </span>
   );
 }

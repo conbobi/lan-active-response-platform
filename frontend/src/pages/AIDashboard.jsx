@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -31,11 +31,18 @@ import {
   Cell
 } from 'recharts';
 
+import api from '../api/api';
 import MetricsCard from '../components/ai/MetricsCard';
 import StatusBadge from '../components/ai/StatusBadge';
 import SourceBadge from '../components/ai/SourceBadge';
 import MITRETags from '../components/ai/MITRETags';
 import './AIDashboard.fallback.css';
+
+const STATUS_TEXT = {
+  pending: 'Chờ kiểm định', validating: 'Đang kiểm định', validated: 'Đã kiểm định',
+  active: 'Đang chạy', rejected: 'Bị từ chối', disabled: 'Đã tắt',
+};
+const SOURCE_TEXT = { all: 'Tất cả', ai_harvest: 'AI', template_fallback: 'Mẫu dự phòng', human: 'Thủ công' };
 
 export default function AIDashboard() {
   const navigate = useNavigate();
@@ -54,128 +61,64 @@ export default function AIDashboard() {
   const [selectedMitre, setSelectedMitre] = useState(null);
 
   // Sorting
-  const [sortBy, setSortBy] = useState('created_at');
-  const [sortDesc, setSortDesc] = useState(true);
+  const [sortBy] = useState('created_at');
+  const [sortDesc] = useState(true);
 
-  // Fetch Dashboard Metrics & Rules
+  const [loadError, setLoadError] = useState('');
+  const [expanded, setExpanded] = useState(null);
+
+  // Fetch Dashboard Metrics & Rules (shared client: attaches the signed-in JWT)
   const fetchData = async () => {
-    try {
-      setLoading(true);
-      const [metricsRes, rulesRes] = await Promise.all([
-        fetch('/api/v1/dashboard/ai-metrics?period=7d'),
-        fetch('/api/v1/rules?limit=100')
-      ]);
-
-      if (metricsRes.ok) {
-        const mData = await metricsRes.json();
-        setMetrics(mData);
-      }
-
-      if (rulesRes.ok) {
-        const rData = await rulesRes.json();
-        setRules(rData.items || []);
-      }
-    } catch (err) {
-      console.error('Failed to load AI Dashboard data:', err);
-      toast.error('Failed to load AI Dashboard data');
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true);
+    const [metricsRes, rulesRes] = await Promise.allSettled([
+      api.get('/dashboard/ai-metrics?period=7d'),
+      api.get('/rules?limit=100'),
+    ]);
+    const failed = [metricsRes, rulesRes].find((r) => r.status === 'rejected' || r.value?.error);
+    setMetrics(metricsRes.status === 'fulfilled' && !metricsRes.value?.error ? metricsRes.value : null);
+    setRules(rulesRes.status === 'fulfilled' && !rulesRes.value?.error ? rulesRes.value.items || [] : []);
+    const message = failed ? (failed.reason?.message || failed.value?.error) : '';
+    setLoadError(message ? `Không tải được dữ liệu AI SOC Studio: ${message}` : '');
+    setLoading(false);
   };
 
   useEffect(() => {
     fetchData();
   }, []);
 
-  // Action Handlers
-  const handleValidate = async (ruleId) => {
+  // Backend rule routes answer business errors as {error}; transport/auth errors throw.
+  const runAction = async (ruleId, state, path, body, success) => {
+    setActionLoading((prev) => ({ ...prev, [ruleId]: state }));
     try {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: 'validating' }));
-      const res = await fetch(`/api/v1/rules/${ruleId}/validate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fpr_threshold: 0.05, precision_threshold: 0.95 })
-      });
-      const data = await res.json();
-      if (data.error) {
+      const data = await api.post(`/rules/${ruleId}/${path}`, body);
+      if (data?.error) {
         toast.error(data.error);
       } else {
-        toast.success(`Agent B: Rule ${data.status.toUpperCase()}`);
-        fetchData();
+        toast.success(success(data));
       }
+      await fetchData();
     } catch (err) {
-      toast.error('Validation request failed');
+      toast.error(err.message || 'Thao tác thất bại');
     } finally {
       setActionLoading((prev) => ({ ...prev, [ruleId]: null }));
     }
   };
 
-  const handleActivate = async (ruleId) => {
-    try {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: 'activating' }));
-      const res = await fetch(`/api/v1/rules/${ruleId}/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ analyst_id: 'soc_lead' })
-      });
-      const data = await res.json();
-      if (data.error) {
-        toast.error(data.error);
-      } else {
-        toast.success('Rule activated into live detection engine');
-        fetchData();
-      }
-    } catch (err) {
-      toast.error('Failed to activate rule');
-    } finally {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: null }));
-    }
+  const VERDICT_TEXT = {
+    PASSED: 'Đạt', FAILED: 'Không đạt', INCONCLUSIVE: 'Chưa đủ dữ liệu', UNSUPPORTED_BY_ENGINE: 'Engine không hỗ trợ',
   };
 
-  const handleReject = async (ruleId) => {
-    const reason = prompt('Enter rejection reason:');
+  const handleValidate = (ruleId) => runAction(ruleId, 'validating', 'validate',
+    { fpr_threshold: 0.05, precision_threshold: 0.95 },
+    (d) => `Kiểm định: ${VERDICT_TEXT[d.validation_result?.verdict] || d.validation_result?.verdict} → ${STATUS_TEXT[d.status] || d.status}`);
+  const handleActivate = (ruleId) => runAction(ruleId, 'activating', 'activate', {},
+    () => 'Rule đã được nạp vào Detection Engine của Manager');
+  const handleReject = (ruleId) => {
+    const reason = prompt('Lý do từ chối:');
     if (reason === null) return;
-
-    try {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: 'rejecting' }));
-      const res = await fetch(`/api/v1/rules/${ruleId}/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: reason || 'Analyst discretion', analyst_id: 'soc_lead' })
-      });
-      const data = await res.json();
-      if (data.error) {
-        toast.error(data.error);
-      } else {
-        toast.success('Rule marked as rejected');
-        fetchData();
-      }
-    } catch (err) {
-      toast.error('Failed to reject rule');
-    } finally {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: null }));
-    }
+    return runAction(ruleId, 'rejecting', 'reject', { reason: reason || 'Analyst quyết định' }, () => 'Đã từ chối rule');
   };
-
-  const handleDisable = async (ruleId) => {
-    try {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: 'disabling' }));
-      const res = await fetch(`/api/v1/rules/${ruleId}/disable`, {
-        method: 'POST'
-      });
-      const data = await res.json();
-      if (data.error) {
-        toast.error(data.error);
-      } else {
-        toast.success('Rule disabled');
-        fetchData();
-      }
-    } catch (err) {
-      toast.error('Failed to disable rule');
-    } finally {
-      setActionLoading((prev) => ({ ...prev, [ruleId]: null }));
-    }
-  };
+  const handleDisable = (ruleId) => runAction(ruleId, 'disabling', 'disable', {}, () => 'Đã tắt rule');
 
   // Filter and Sort Rules
   const filteredRules = useMemo(() => {
@@ -230,6 +173,11 @@ export default function AIDashboard() {
     return `${Math.floor(diffSec / 86400)}d ago`;
   };
 
+  const percent = (val) => (val == null ? 'Chưa đủ dữ liệu' : `${(val * 100).toFixed(1)}%`);
+  const measuredSubtitle = metrics?.accuracy_metrics?.measured_rules
+    ? `Trung bình trên ${metrics.accuracy_metrics.measured_rules} rule có kết quả kiểm định`
+    : 'Chưa có rule nào có kết quả kiểm định';
+
   const getFprBadgeColor = (val) => {
     if (val == null) return 'text-gray-500';
     if (val < 0.05) return 'text-emerald-400 font-bold';
@@ -259,7 +207,7 @@ export default function AIDashboard() {
             </span>
           </div>
           <p className="text-sm text-gray-400 mt-1">
-            Agent A (CTI Harvest) &rarr; Agent B (Statistical Validation) &rarr; Agent C (Agent EDR Engine)
+            Agent A (sinh Sigma từ CTI) &rarr; Agent B (kiểm định thống kê) &rarr; Detection Engine của Manager (chạy trên telemetry Agent gửi về)
           </p>
         </div>
 
@@ -282,7 +230,7 @@ export default function AIDashboard() {
             }}
           >
             <FiRefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            Refresh
+            Làm mới
           </button>
           <button
             onClick={() => navigate('/ai-dashboard/harvest')}
@@ -303,43 +251,45 @@ export default function AIDashboard() {
             }}
           >
             <FiPlus size={14} />
-            Harvest from CTI
+            Tạo rule từ CTI
           </button>
         </div>
       </div>
 
+      {loadError && (
+        <div role="alert" className="text-xs" style={{ padding: '0.6rem 0.9rem', borderRadius: 8, border: '1px solid rgba(239,68,68,0.4)', color: '#f87171' }}>
+          {loadError}
+        </div>
+      )}
+
       {/* ── KHỐI 1: TOP KPI CARDS ───────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0 ai-kpi-grid">
         <MetricsCard
-          title="Total AI-Generated Rules"
-          value={metrics?.rule_stats?.total ?? 42}
-          delta="+14.2%"
+          title="Tổng số rule"
+          value={metrics ? metrics.rule_stats.total : '—'}
           variant="purple"
-          subtitle={`${metrics?.rule_stats?.pending ?? 5} pending | ${metrics?.rule_stats?.active ?? 7} active`}
+          subtitle={metrics ? `${metrics.rule_stats.pending} chờ kiểm định · ${metrics.rule_stats.validated} đạt · ${metrics.rule_stats.active} đang chạy` : 'Chưa tải được'}
           icon={<FiCpu size={18} />}
         />
         <MetricsCard
-          title="Avg FPR (Validated Rules)"
-          value={`${((metrics?.accuracy_metrics?.avg_fpr ?? 0.032) * 100).toFixed(1)}%`}
-          delta="-0.8%"
-          variant={(metrics?.accuracy_metrics?.avg_fpr ?? 0.032) < 0.05 ? 'green' : 'yellow'}
-          subtitle="Target < 5.0% False Positives"
+          title="FPR trung bình (đã kiểm định)"
+          value={percent(metrics?.accuracy_metrics?.avg_fpr)}
+          variant={metrics?.accuracy_metrics?.avg_fpr == null ? 'blue' : metrics.accuracy_metrics.avg_fpr < 0.05 ? 'green' : 'yellow'}
+          subtitle={measuredSubtitle}
           icon={<FiPercent size={18} />}
         />
         <MetricsCard
-          title="Avg Detection Precision"
-          value={`${((metrics?.accuracy_metrics?.avg_precision ?? 0.941) * 100).toFixed(1)}%`}
-          delta="+2.5%"
-          variant={(metrics?.accuracy_metrics?.avg_precision ?? 0.941) >= 0.95 ? 'green' : 'blue'}
-          subtitle="True Positives / Total Alerts"
+          title="Precision trung bình"
+          value={percent(metrics?.accuracy_metrics?.avg_precision)}
+          variant={metrics?.accuracy_metrics?.avg_precision == null ? 'blue' : metrics.accuracy_metrics.avg_precision >= 0.95 ? 'green' : 'yellow'}
+          subtitle={measuredSubtitle}
           icon={<FiShield size={18} />}
         />
         <MetricsCard
-          title="Avg AI Triage Latency"
-          value={`${metrics?.ai_triage_stats?.avg_latency_sec ?? 52}s`}
-          delta="-6s"
+          title="Độ trễ AI triage trung bình"
+          value={metrics?.ai_triage_stats?.avg_latency_sec == null ? 'Chưa đủ dữ liệu' : `${metrics.ai_triage_stats.avg_latency_sec}s`}
           variant="blue"
-          subtitle="LLM inference + validation"
+          subtitle={metrics ? `${metrics.ai_triage_stats.total_analyses} phân tích đã lưu; độ trễ chưa được ghi nhận` : ''}
           icon={<FiClock size={18} />}
         />
       </div>
@@ -483,7 +433,7 @@ export default function AIDashboard() {
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm" />
               <input
                 type="text"
-                placeholder="Search rule name or syntax..."
+                placeholder="Tìm theo tên rule hoặc nội dung Sigma..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg bg-gray-900 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
@@ -504,7 +454,7 @@ export default function AIDashboard() {
 
             {selectedMitre && (
               <div className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md bg-purple-500/15 text-purple-300 border border-purple-500/30">
-                <span>Filter: MITRE {selectedMitre}</span>
+                <span>Lọc MITRE: {selectedMitre}</span>
                 <FiX
                   size={13}
                   className="cursor-pointer hover:text-white"
@@ -517,7 +467,7 @@ export default function AIDashboard() {
           <div className="flex flex-wrap items-center gap-4 text-xs pt-1 ai-filter-row">
             {/* Status Tabs */}
             <div className="flex items-center gap-1 ai-filter-group">
-              <span className="text-gray-500 font-medium mr-1">Status:</span>
+              <span className="text-gray-500 font-medium mr-1">Trạng thái:</span>
               {['all', 'pending', 'validated', 'active', 'rejected', 'disabled'].map((st) => (
                 <button
                   key={st}
@@ -528,15 +478,15 @@ export default function AIDashboard() {
                       : 'bg-gray-800/60 text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                   }`}
                 >
-                  {st}
+                  {st === 'all' ? 'Tất cả' : STATUS_TEXT[st]}
                 </button>
               ))}
             </div>
 
             {/* Source */}
             <div className="flex items-center gap-1 ai-filter-group">
-              <span className="text-gray-500 font-medium mr-1">Source:</span>
-              {['all', 'ai_harvest', 'human'].map((src) => (
+              <span className="text-gray-500 font-medium mr-1">Nguồn:</span>
+              {['all', 'ai_harvest', 'template_fallback', 'human'].map((src) => (
                 <button
                   key={src}
                   onClick={() => setSourceFilter(src)}
@@ -546,14 +496,14 @@ export default function AIDashboard() {
                       : 'bg-gray-800/60 text-gray-400 hover:bg-gray-800'
                   }`}
                 >
-                  {src === 'ai_harvest' ? 'AI' : src}
+                  {SOURCE_TEXT[src]}
                 </button>
               ))}
             </div>
 
             {/* Severity */}
             <div className="flex items-center gap-1 ai-filter-group">
-              <span className="text-gray-500 font-medium mr-1">Severity:</span>
+              <span className="text-gray-500 font-medium mr-1">Mức độ:</span>
               {['all', 'low', 'medium', 'high', 'critical'].map((sev) => (
                 <button
                   key={sev}
@@ -564,7 +514,7 @@ export default function AIDashboard() {
                       : 'bg-gray-800/60 text-gray-400 hover:bg-gray-800'
                   }`}
                 >
-                  {sev}
+                  {sev === 'all' ? 'Tất cả' : sev}
                 </button>
               ))}
             </div>
@@ -573,127 +523,92 @@ export default function AIDashboard() {
 
         {/* Rules Table */}
         <div className="overflow-x-auto min-w-0 ai-dashboard-table-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
-          <table className="w-full text-left text-xs min-w-[1200px]" style={{ minWidth: '1200px', width: '100%' }}>
+          <table className="w-full text-left text-xs min-w-[1100px]" style={{ minWidth: '1100px', width: '100%' }}>
             <thead>
               <tr className="border-b border-gray-800 text-gray-400 uppercase tracking-wider bg-gray-900/40">
-                <th className="py-3 px-4 font-semibold sticky-header">Rule Name & Severity</th>
-                <th className="py-3 px-3 font-semibold sticky-header">Source</th>
+                <th className="py-3 px-4 font-semibold sticky-header">Rule</th>
+                <th className="py-3 px-3 font-semibold sticky-header">Mức độ</th>
+                <th className="py-3 px-3 font-semibold sticky-header">Nguồn</th>
                 <th className="py-3 px-3 font-semibold sticky-header">MITRE ATT&CK</th>
-                <th className="py-3 px-3 font-semibold sticky-header">Status</th>
-                <th
-                  className="py-3 px-3 font-semibold cursor-pointer hover:text-white sticky-header"
-                  onClick={() => {
-                    if (sortBy === 'fpr') setSortDesc(!sortDesc);
-                    else {
-                      setSortBy('fpr');
-                      setSortDesc(false);
-                    }
-                  }}
-                >
-                  FPR {sortBy === 'fpr' && (sortDesc ? '↓' : '↑')}
-                </th>
-                <th
-                  className="py-3 px-3 font-semibold cursor-pointer hover:text-white sticky-header"
-                  onClick={() => {
-                    if (sortBy === 'precision') setSortDesc(!sortDesc);
-                    else {
-                      setSortBy('precision');
-                      setSortDesc(true);
-                    }
-                  }}
-                >
-                  Precision {sortBy === 'precision' && (sortDesc ? '↓' : '↑')}
-                </th>
-                <th className="py-3 px-3 font-semibold sticky-header">Recall</th>
-                <th className="py-3 px-3 font-semibold sticky-header">Model</th>
-                <th
-                  className="py-3 px-3 font-semibold cursor-pointer hover:text-white sticky-header"
-                  onClick={() => {
-                    if (sortBy === 'created_at') setSortDesc(!sortDesc);
-                    else {
-                      setSortBy('created_at');
-                      setSortDesc(true);
-                    }
-                  }}
-                >
-                  Created {sortBy === 'created_at' && (sortDesc ? '↓' : '↑')}
-                </th>
-                <th className="py-3 px-4 text-right font-semibold sticky-header">Actions</th>
+                <th className="py-3 px-3 font-semibold sticky-header">Trạng thái</th>
+                <th className="py-3 px-3 font-semibold sticky-header">Kết quả kiểm định</th>
+                <th className="py-3 px-4 text-right font-semibold sticky-header">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800/60">
               {filteredRules.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-gray-500">
-                    No rules matched the current filters.
+                  <td colSpan={7} className="py-12 text-center text-gray-500">
+                    {loading ? 'Đang tải…' : rules.length === 0
+                      ? 'Chưa có rule nào trong cơ sở dữ liệu. Dùng "Tạo rule từ CTI" để sinh rule Sigma đầu tiên.'
+                      : 'Không có rule nào khớp bộ lọc hiện tại.'}
                   </td>
                 </tr>
               ) : (
-                filteredRules.map((rule) => (
-                  <tr
-                    key={rule.id}
-                    onClick={() => navigate(`/ai-dashboard/rules/${rule.id}`)}
-                    className="hover:bg-gray-800/40 cursor-pointer transition"
-                  >
+                filteredRules.map((rule) => {
+                  const validation = rule.validation;
+                  const isOpen = expanded === rule.id;
+                  return (
+                  <Fragment key={rule.id}>
+                  <tr className="hover:bg-gray-800/40 transition">
                     <td className="py-3.5 px-4">
                       <div className="font-bold text-white max-w-xs truncate" title={rule.rule_name}>
                         {rule.rule_name}
                       </div>
-                      <span className="inline-block mt-0.5 text-[10px] uppercase font-mono font-bold text-gray-400">
-                        {rule.severity || 'medium'}
-                      </span>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{getRelativeTime(rule.created_at)}</div>
                     </td>
-
+                    <td className="py-3.5 px-3 text-[11px] uppercase font-mono font-bold text-gray-300">
+                      {rule.severity || '—'}
+                    </td>
                     <td className="py-3.5 px-3">
                       <SourceBadge source={rule.source} />
                     </td>
-
-                    <td className="py-3.5 px-3" onClick={(e) => e.stopPropagation()}>
+                    <td className="py-3.5 px-3">
                       <MITRETags
                         techniques={rule.mitre_techniques || []}
                         onTagClick={(t) => setSelectedMitre(t)}
                       />
                     </td>
-
                     <td className="py-3.5 px-3">
                       <StatusBadge status={rule.status} />
                     </td>
-
-                    <td className={`py-3.5 px-3 font-mono ${getFprBadgeColor(rule.fpr)}`}>
-                      {rule.fpr != null ? `${(rule.fpr * 100).toFixed(1)}%` : '—'}
+                    <td className="py-3.5 px-3 text-[11px]">
+                      {!validation ? <span className="text-gray-500">Chưa kiểm định</span> : (
+                        <div>
+                          <strong>{VERDICT_TEXT[validation.verdict] || validation.verdict}</strong>
+                          {rule.fpr != null && (
+                            <span className="font-mono ml-1">
+                              <span className={getFprBadgeColor(rule.fpr)}>FPR {(rule.fpr * 100).toFixed(1)}%</span>
+                              {' · '}
+                              <span className={getPrecisionBadgeColor(rule.precision)}>P {(rule.precision * 100).toFixed(1)}%</span>
+                            </span>
+                          )}
+                          {validation.dataset && (
+                            <div className="text-gray-500" title="Tập kiểm định">
+                              {validation.dataset.real_process_info} log thật · {validation.dataset.synthetic_benign} mẫu benign tổng hợp · {validation.dataset.malicious_fixture} mẫu độc hại cố định
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
-
-                    <td className={`py-3.5 px-3 font-mono ${getPrecisionBadgeColor(rule.precision)}`}>
-                      {rule.precision != null ? `${(rule.precision * 100).toFixed(1)}%` : '—'}
-                    </td>
-
-                    <td className="py-3.5 px-3 font-mono text-gray-300">
-                      {rule.recall != null ? `${(rule.recall * 100).toFixed(1)}%` : '—'}
-                    </td>
-
-                    <td className="py-3.5 px-3 font-mono text-gray-400 text-[11px]">
-                      {rule.model_generated || 'harvest-q6'}
-                    </td>
-
-                    <td className="py-3.5 px-3 text-gray-400 text-xs">
-                      {getRelativeTime(rule.created_at)}
-                    </td>
-
-                    <td
-                      className="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    <td className="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap">
+                      <button
+                        onClick={() => setExpanded(isOpen ? null : rule.id)}
+                        aria-expanded={isOpen}
+                        className="ai-action-btn px-2 py-1 text-[11px] rounded bg-gray-800 text-gray-300 hover:bg-gray-700 transition"
+                      >
+                        {isOpen ? 'Ẩn Sigma' : 'Xem Sigma'}
+                      </button>
                       {rule.status === 'pending' && (
                         <button
                           onClick={() => handleValidate(rule.id)}
                           disabled={actionLoading[rule.id] === 'validating'}
                           className="ai-action-btn ai-action-btn-validate px-2.5 py-1 text-[11px] font-semibold rounded bg-blue-600/80 hover:bg-blue-600 text-white transition whitespace-nowrap"
-                          title="Run Agent B Statistical Validation"
+                          title="Kiểm định thống kê (Agent B) và kiểm tra Detection Engine hỗ trợ"
                         >
-                          {actionLoading[rule.id] === 'validating' ? 'Validating...' : 'Validate'}
+                          {actionLoading[rule.id] === 'validating' ? 'Đang kiểm định…' : 'Kiểm định'}
                         </button>
                       )}
-
                       {rule.status === 'validated' && (
                         <>
                           <button
@@ -701,39 +616,55 @@ export default function AIDashboard() {
                             disabled={actionLoading[rule.id] === 'activating'}
                             className="ai-action-btn ai-action-btn-activate px-2.5 py-1 text-[11px] font-semibold rounded bg-emerald-600/80 hover:bg-emerald-600 text-white transition whitespace-nowrap"
                           >
-                            Activate
+                            Duyệt & kích hoạt
                           </button>
                           <button
                             onClick={() => handleReject(rule.id)}
                             disabled={actionLoading[rule.id] === 'rejecting'}
                             className="ai-action-btn ai-action-btn-reject px-2 py-1 text-[11px] font-semibold rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 transition whitespace-nowrap"
                           >
-                            Reject
+                            Từ chối
                           </button>
                         </>
                       )}
-
                       {rule.status === 'active' && (
                         <button
                           onClick={() => handleDisable(rule.id)}
                           disabled={actionLoading[rule.id] === 'disabling'}
                           className="ai-action-btn ai-action-btn-disable px-2.5 py-1 text-[11px] font-semibold rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition whitespace-nowrap"
                         >
-                          Disable
+                          Tắt
                         </button>
                       )}
-
                       <button
                         onClick={() => navigate(`/ai-dashboard/rules/${rule.id}`)}
                         className="ai-action-btn p-1 rounded text-gray-400 hover:text-white transition inline-block align-middle"
-                        title="View Rule Details"
+                        title="Xem chi tiết rule"
+                        aria-label="Xem chi tiết rule"
                         style={{ background: 'transparent' }}
                       >
                         <FiExternalLink size={13} />
                       </button>
                     </td>
                   </tr>
-                ))
+                  {isOpen && (
+                    <tr className="bg-gray-900/40">
+                      <td colSpan={7} className="px-4 py-3">
+                        {(validation?.reason || rule.notes) && (
+                          <div className="text-[11px] mb-2" style={{ color: rule.status === 'rejected' ? '#fb7185' : '#cbd5e1' }}>
+                            <strong>{rule.status === 'rejected' ? 'Lý do bị từ chối: ' : 'Ghi chú: '}</strong>
+                            {validation?.reason || rule.notes}
+                          </div>
+                        )}
+                        <pre className="text-[11px] font-mono" style={{ whiteSpace: 'pre-wrap', margin: 0, maxHeight: 320, overflow: 'auto' }}>
+                          {rule.rule_yaml}
+                        </pre>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                  );
+                })
               )}
             </tbody>
           </table>

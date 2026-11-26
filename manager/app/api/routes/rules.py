@@ -52,6 +52,22 @@ class UpdateRuleRequest(BaseModel):
 
 # ── Endpoints ───────────────────────────────────────────────────────────
 
+def engine_support(rule_yaml: str) -> tuple[bool, str]:
+    import yaml
+    from app.services.rule_engine import RuleEngine
+    try:
+        parsed = yaml.safe_load(rule_yaml or "")
+    except yaml.YAMLError as exc:
+        return False, f"YAML không hợp lệ: {exc.__class__.__name__}"
+    return RuleEngine.check_sigma_support(parsed)
+
+
+def validation_summary(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not result:
+        return None
+    return {key: result.get(key) for key in ("verdict", "passed", "reason", "engine_supported", "dataset")}
+
+
 @router.post("/harvest")
 async def harvest_rule(
     body: HarvestRequest
@@ -120,6 +136,17 @@ async def update_rule_endpoint(
         if body.rule_yaml is not None and body.rule_yaml.strip() != candidate.rule_yaml:
             candidate.rule_yaml = body.rule_yaml.strip()
             yaml_changed = True
+            # Changed YAML is unvalidated: it must not keep running or stay approved.
+            was_active = candidate.status == "active"
+            if candidate.status in ("validated", "active", "rejected"):
+                candidate.status = "pending"
+                candidate.validation_result = None
+                candidate.fpr = candidate.precision = candidate.recall = None
+                candidate.validated_at = None
+                candidate.activated_at = None
+            if was_active:
+                from app.services.rule_engine import rule_engine
+                rule_engine.invalidate_cache()
 
             try:
                 import yaml
@@ -186,6 +213,22 @@ async def validate_rule_endpoint(
         fpr_th = body.fpr_threshold if body and body.fpr_threshold is not None else 0.05
         prec_th = body.precision_threshold if body and body.precision_threshold is not None else 0.95
 
+        supported, support_reason = engine_support(candidate.rule_yaml)
+        if not supported:
+            # A rule the Detection Engine cannot execute as written is not deployable; its metrics
+            # would describe semantics that never run.
+            candidate.validation_result = {"passed": False, "verdict": "UNSUPPORTED_BY_ENGINE",
+                                           "reason": support_reason, "engine_supported": False}
+            candidate.fpr = candidate.precision = candidate.recall = None
+            candidate.validated_at = datetime.now(timezone.utc)
+            candidate.status = "rejected"
+            candidate.notes = f"Detection Engine không hỗ trợ: {support_reason}"
+            await db.commit()
+            await db.refresh(candidate)
+            return {"rule_id": str(candidate.id), "rule_name": candidate.rule_name, "status": candidate.status,
+                    "fpr": None, "precision": None, "recall": None,
+                    "validation_result": candidate.validation_result}
+
         val_result = await validation_service.validate_rule(
             rule_yaml=candidate.rule_yaml,
             fpr_threshold=fpr_th,
@@ -193,6 +236,7 @@ async def validate_rule_endpoint(
             db_session=db
         )
 
+        val_result["engine_supported"] = True
         candidate.validation_result = val_result
         candidate.fpr = val_result.get("fpr")
         candidate.precision = val_result.get("precision")
@@ -202,9 +246,13 @@ async def validate_rule_endpoint(
 
         if val_result.get("passed"):
             candidate.status = "validated"
+        elif val_result.get("verdict") == "INCONCLUSIVE":
+            # Not the rule's fault: the evaluation set has no matching positive sample.
+            candidate.status = "pending"
+            candidate.notes = f"Kiểm định chưa kết luận: {val_result.get('reason')}"
         else:
             candidate.status = "rejected"
-            candidate.notes = f"Agent B validation failed: {val_result.get('reason')}"
+            candidate.notes = f"Kiểm định thất bại: {val_result.get('reason')}"
 
         await db.commit()
         await db.refresh(candidate)
@@ -248,8 +296,13 @@ async def activate_rule(
 
         if candidate.status != "validated":
             return {
-                "error": f"Cannot activate rule with status '{candidate.status}'. Only 'validated' rules can be activated."
+                "error": f"Không thể kích hoạt rule ở trạng thái '{candidate.status}'. Chỉ rule đã kiểm định đạt mới được kích hoạt."
             }
+        if not (candidate.validation_result or {}).get("passed"):
+            return {"error": "Rule chưa có kết quả kiểm định đạt; hãy kiểm định lại trước khi kích hoạt."}
+        supported, support_reason = engine_support(candidate.rule_yaml)
+        if not supported:
+            return {"error": f"Detection Engine không hỗ trợ rule này: {support_reason}"}
 
         candidate.status = "active"
         candidate.activated_at = datetime.now(timezone.utc)
@@ -265,7 +318,8 @@ async def activate_rule(
             "rule_id": str(candidate.id),
             "status": candidate.status,
             "activated_at": candidate.activated_at.isoformat(),
-            "message": "Rule successfully activated into detection pipeline."
+            "engine_supported": True,
+            "message": "Rule đã được nạp vào Detection Engine của Manager."
         }
     except Exception as e:
         logger.error(f"Error in /activate: {e}", exc_info=True)
@@ -418,7 +472,8 @@ async def list_rules(
                 "disabled_at": r.disabled_at.isoformat() if r.disabled_at else None,
                 "created_by": r.created_by,
                 "approved_by": r.approved_by,
-                "notes": r.notes
+                "notes": r.notes,
+                "validation": validation_summary(r.validation_result),
             })
 
         return {

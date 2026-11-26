@@ -198,6 +198,33 @@ class RuleEngine:
 
     CACHE_TTL_SEC = 60
     SUPPORTED_SEVERITIES = {"low", "medium", "high", "critical"}
+    SUPPORTED_MODIFIERS = {"contains", "endswith", "startswith", "re", "regex", "in"}
+    # Sigma field → telemetry key
+    FIELD_ALIASES = {
+        "commandline": "cmdline",
+        "cmdline": "cmdline",
+        "image": "exe",
+        "exe": "exe",
+        "process": "exe",
+        "processname": "name",
+        "name": "name",
+        "processid": "pid",
+        "pid": "pid",
+        "parentprocessid": "parent_pid",
+        "parent_pid": "parent_pid",
+        "parentimage": "parent_exe",
+        "parent_exe": "parent_exe",
+        "destinationport": "dst_port",
+        "dst_port": "dst_port",
+        "destinationip": "dst_ip",
+        "dst_ip": "dst_ip",
+        "sourceport": "src_port",
+        "src_port": "src_port",
+        "sourceip": "src_ip",
+        "src_ip": "src_ip",
+        "targetfilename": "file_path",
+        "file_path": "file_path",
+    }
 
     def __init__(self):
         self._cached_rules: List[Dict[str, Any]] = []
@@ -384,6 +411,46 @@ class RuleEngine:
             logger.debug(f"rule_engine: reloaded {len(parsed_rules)} active rules")
             return parsed_rules
 
+    @classmethod
+    def check_sigma_support(cls, rule: Any) -> tuple[bool, str]:
+        """Can this engine execute the Sigma rule exactly as written?
+
+        The runtime evaluates one ``selection`` block of field criteria against process, network or
+        file telemetry. Anything else would be silently ignored at runtime (filters, other blocks,
+        conditions, nested criteria), so such rules must not be validated or activated.
+        """
+        if not isinstance(rule, dict):
+            return False, "Sigma phải là một mapping YAML"
+        detection = rule.get("detection")
+        if not isinstance(detection, dict):
+            return False, "Thiếu khối detection"
+        blocks = {k: v for k, v in detection.items() if k != "condition"}
+        if set(blocks) != {"selection"}:
+            extra = sorted(set(blocks) - {"selection"})
+            return False, ("Detection Engine chỉ hỗ trợ một khối 'selection'"
+                           + (f"; không hỗ trợ: {', '.join(map(str, extra))}" if extra else ""))
+        condition = str(detection.get("condition", "selection")).strip()
+        if condition != "selection":
+            return False, f"Detection Engine chỉ hỗ trợ condition 'selection', không hỗ trợ '{condition}'"
+        selection = blocks["selection"]
+        if not isinstance(selection, dict) or not selection:
+            return False, "Khối selection phải là danh sách trường không rỗng (dạng keyword list chưa được hỗ trợ)"
+        logsource = rule.get("logsource") or {}
+        category = str(logsource.get("category") or logsource.get("product") or "process_creation").lower()
+        if not any(kind in category for kind in ("process", "endpoint", "network", "file")):
+            return False, f"Logsource '{category}' không có telemetry tương ứng trên Agent"
+        for key, value in selection.items():
+            parts = [part.strip().lower() for part in str(key).split("|")]
+            unsupported = [m for m in parts[1:] if m not in cls.SUPPORTED_MODIFIERS]
+            if unsupported:
+                return False, f"Modifier không được hỗ trợ: {', '.join(unsupported)} (trường {parts[0]})"
+            if parts[0] not in cls.FIELD_ALIASES:
+                return False, f"Trường '{parts[0]}' không có trong telemetry của Agent"
+            values = value if isinstance(value, list) else [value]
+            if any(isinstance(v, (dict, list)) for v in values):
+                return False, f"Giá trị lồng nhau cho trường '{parts[0]}' chưa được hỗ trợ"
+        return True, "Detection Engine hỗ trợ rule này"
+
     def _evaluate_rule(self, rule: Dict[str, Any], telemetry: Dict[str, Any]) -> List[RuleMatch]:
         """
         Evaluate 1 Sigma rule against telemetry.
@@ -455,8 +522,9 @@ class RuleEngine:
                 if not any(self._match_field(key, v, event) for v in expected):
                     return False
             elif isinstance(expected, dict):
-                # Nested criteria (nếu có)
-                continue
+                # Nested criteria are not supported by this engine: fail closed instead of
+                # silently treating them as matched (check_sigma_support refuses such rules).
+                return False
             else:
                 if not self._match_field(key, expected, event):
                     return False
@@ -472,32 +540,7 @@ class RuleEngine:
         field_name = parts[0].strip()
         modifiers = [m.strip().lower() for m in parts[1:]]
 
-        # Alias mapping (Sigma field → telemetry key)
-        field_aliases = {
-            "commandline": "cmdline",
-            "cmdline": "cmdline",
-            "image": "exe",
-            "exe": "exe",
-            "process": "exe",
-            "processname": "name",
-            "name": "name",
-            "processid": "pid",
-            "pid": "pid",
-            "parentprocessid": "parent_pid",
-            "parent_pid": "parent_pid",
-            "parentimage": "parent_exe",
-            "parent_exe": "parent_exe",
-            "destinationport": "dst_port",
-            "dst_port": "dst_port",
-            "destinationip": "dst_ip",
-            "dst_ip": "dst_ip",
-            "sourceport": "src_port",
-            "src_port": "src_port",
-            "sourceip": "src_ip",
-            "src_ip": "src_ip",
-            "targetfilename": "file_path",
-            "file_path": "file_path",
-        }
+        field_aliases = self.FIELD_ALIASES
         actual_key = field_aliases.get(field_name.lower(), field_name.lower())
         actual_value = event.get(actual_key)
 

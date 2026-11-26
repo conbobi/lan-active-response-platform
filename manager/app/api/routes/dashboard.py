@@ -43,149 +43,87 @@ async def get_ai_metrics(
 ):
     """
     GET /api/dashboard/ai-metrics?period=7d
-    Returns aggregated AI rule lifecycle metrics, statistical accuracy, 7-day trend,
-    top MITRE ATT&CK techniques, and AI triage latency stats.
+    Rule lifecycle counts, validation accuracy, trend, MITRE coverage and triage stats computed
+    from the database only. Values without a data source are null (UI: "Chưa đủ dữ liệu");
+    nothing is filled in with baseline or demo numbers.
     """
     try:
         now = datetime.now(timezone.utc)
         days = 30 if period == "30d" else 7
-        start_date = now - timedelta(days=days)
 
-        # 1. Query Rule Candidates stats
-        stmt = select(RuleCandidate)
-        res = await db.execute(stmt)
-        all_rules = res.scalars().all()
+        all_rules = (await db.execute(select(RuleCandidate))).scalars().all()
+        by_status = {name: sum(1 for r in all_rules if r.status == name)
+                     for name in ("pending", "validated", "rejected", "active", "disabled")}
+        by_source: Dict[str, int] = {}
+        for r in all_rules:
+            by_source[r.source or "unknown"] = by_source.get(r.source or "unknown", 0) + 1
 
-        total = len(all_rules)
-        pending = sum(1 for r in all_rules if r.status == "pending")
-        validated = sum(1 for r in all_rules if r.status == "validated")
-        rejected = sum(1 for r in all_rules if r.status == "rejected")
-        active = sum(1 for r in all_rules if r.status == "active")
-        disabled = sum(1 for r in all_rules if r.status == "disabled")
+        # Accuracy only from rules with an actual statistical verdict.
+        measured = [r for r in all_rules
+                    if (r.validation_result or {}).get("verdict") in ("PASSED", "FAILED")
+                    and r.fpr is not None and r.precision is not None]
 
-        ai_harvest_count = sum(1 for r in all_rules if r.source == "ai_harvest")
-        human_count = sum(1 for r in all_rules if r.source != "ai_harvest")
+        def mean(values):
+            values = [v for v in values if v is not None]
+            return round(sum(values) / len(values), 4) if values else None
 
-        # Fallback/seed baseline if table is brand new so UI isn't completely empty
-        if total == 0:
-            total, pending, validated, rejected, active = 42, 5, 20, 10, 7
-            ai_harvest_count, human_count = 30, 12
+        avg_fpr = mean(r.fpr for r in measured)
+        avg_precision = mean(r.precision for r in measured)
+        avg_recall = mean(r.recall for r in measured)
+        avg_f1 = (round(2 * avg_precision * avg_recall / (avg_precision + avg_recall), 4)
+                  if avg_precision is not None and avg_recall is not None and (avg_precision + avg_recall) > 0 else None)
 
-        # 2. Accuracy metrics from validated/active rules
-        rules_with_metrics = [r for r in all_rules if r.fpr is not None and r.precision is not None]
-        if rules_with_metrics:
-            avg_fpr = sum(r.fpr for r in rules_with_metrics) / len(rules_with_metrics)
-            avg_precision = sum(r.precision for r in rules_with_metrics) / len(rules_with_metrics)
-            recalls = [r.recall for r in rules_with_metrics if r.recall is not None]
-            avg_recall = (sum(recalls) / len(recalls)) if recalls else 0.887
-            if (avg_precision + avg_recall) > 0:
-                avg_f1 = (2 * avg_precision * avg_recall) / (avg_precision + avg_recall)
-            else:
-                avg_f1 = 0.0
-            median_val_time = 47
-        else:
-            avg_fpr = 0.032
-            avg_precision = 0.941
-            avg_recall = 0.887
-            avg_f1 = 0.913
-            median_val_time = 47
-
-        # 3. 7-Day Trend
         trend_days = []
-        for i in range(6, -1, -1):
+        for i in range(days - 1, -1, -1):
             day_dt = (now - timedelta(days=i)).date()
-            day_str = day_dt.strftime("%Y-%m-%d")
-
-            # Count rules on this day if any exist
-            gen_cnt = sum(1 for r in all_rules if r.created_at and r.created_at.date() == day_dt)
-            val_cnt = sum(1 for r in all_rules if r.validated_at and r.validated_at.date() == day_dt)
-            rej_cnt = sum(1 for r in all_rules if r.status == "rejected" and r.created_at and r.created_at.date() == day_dt)
-
-            # If no historical distribution yet in fresh database, provide baseline pattern
-            if total == 42 and sum(1 for r in all_rules if r.created_at and r.created_at.date() == day_dt) == 0:
-                baseline_gen = [4, 6, 5, 8, 7, 5, 7][6 - i]
-                baseline_val = [3, 4, 3, 5, 5, 4, 5][6 - i]
-                baseline_rej = [1, 2, 1, 2, 1, 1, 1][6 - i]
-                gen_cnt, val_cnt, rej_cnt = baseline_gen, baseline_val, baseline_rej
-
+            fprs = [r.fpr for r in measured if r.validated_at and r.validated_at.date() == day_dt]
             trend_days.append({
-                "date": day_str,
-                "rules_generated": gen_cnt,
-                "validated": val_cnt,
-                "rejected": rej_cnt,
-                "avg_fpr": round(avg_fpr * (0.9 + 0.2 * (i % 3)), 3)
+                "date": day_dt.strftime("%Y-%m-%d"),
+                "rules_generated": sum(1 for r in all_rules if r.created_at and r.created_at.date() == day_dt),
+                "validated": sum(1 for r in all_rules if r.validated_at and r.validated_at.date() == day_dt
+                                 and r.status in ("validated", "active", "disabled")),
+                "rejected": sum(1 for r in all_rules if r.status == "rejected" and r.validated_at
+                                and r.validated_at.date() == day_dt),
+                "avg_fpr": round(sum(fprs) / len(fprs), 4) if fprs else None,
             })
 
-        # 4. Top MITRE Techniques
         technique_counts: Dict[str, int] = {}
         for r in all_rules:
-            if r.mitre_techniques and isinstance(r.mitre_techniques, list):
+            if isinstance(r.mitre_techniques, list):
                 for tech in r.mitre_techniques:
-                    t_clean = str(tech).upper()
-                    technique_counts[t_clean] = technique_counts.get(t_clean, 0) + 1
+                    key = str(tech).upper()
+                    technique_counts[key] = technique_counts.get(key, 0) + 1
+        top_mitre_list = [{"id": tech_id, "count": count, "name": MITRE_NAME_MAP.get(tech_id, tech_id)}
+                          for tech_id, count in sorted(technique_counts.items(), key=lambda x: x[1], reverse=True)[:10]]
 
-        if not technique_counts:
-            # Baseline realistic top techniques
-            technique_counts = {
-                "T1059.001": 8,
-                "T1490": 6,
-                "T1003.001": 5,
-                "T1059.003": 5,
-                "T1112": 4,
-                "T1078": 3,
-                "T1105": 3,
-                "T1036": 2,
-            }
-
-        top_mitre_list = []
-        for tech_id, count in sorted(technique_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
-            top_mitre_list.append({
-                "id": tech_id,
-                "count": count,
-                "name": MITRE_NAME_MAP.get(tech_id, "Technique " + tech_id)
-            })
-
-        # 5. AI Triage Stats from ai_analysis
-        ai_triage_stmt = select(AIAnalysis)
-        triage_res = await db.execute(ai_triage_stmt)
-        analyses = triage_res.scalars().all()
-
-        total_analyses = len(analyses)
-        if total_analyses > 0:
-            avg_conf = sum(a.confidence for a in analyses) / total_analyses
-        else:
-            total_analyses = 128
-            avg_conf = 0.78
+        analyses = (await db.execute(select(AIAnalysis))).scalars().all()
+        confidences = [a.confidence for a in analyses if a.confidence is not None]
 
         return {
             "period": period,
             "rule_stats": {
-                "total": total,
-                "pending": pending,
-                "validated": validated,
-                "rejected": rejected,
-                "active": active,
-                "disabled": disabled,
-                "by_source": {
-                    "ai_harvest": ai_harvest_count,
-                    "human": human_count
-                }
+                "total": len(all_rules),
+                **by_status,
+                "by_source": {"ai_harvest": by_source.get("ai_harvest", 0),
+                              "human": len(all_rules) - by_source.get("ai_harvest", 0) - by_source.get("template_fallback", 0),
+                              "template_fallback": by_source.get("template_fallback", 0)},
             },
             "accuracy_metrics": {
-                "avg_fpr": round(avg_fpr, 4),
-                "avg_precision": round(avg_precision, 4),
-                "avg_recall": round(avg_recall, 4),
-                "avg_f1": round(avg_f1, 4),
-                "median_validation_time_sec": median_val_time
+                "measured_rules": len(measured),
+                "avg_fpr": avg_fpr,
+                "avg_precision": avg_precision,
+                "avg_recall": avg_recall,
+                "avg_f1": avg_f1,
+                "median_validation_time_sec": None,
             },
             "trend_last_7_days": trend_days,
             "top_mitre_techniques": top_mitre_list,
             "ai_triage_stats": {
-                "total_analyses": total_analyses,
-                "avg_confidence": round(avg_conf, 2),
-                "hallucinated_mitre_rejected": 14,
-                "avg_latency_sec": 52
-            }
+                "total_analyses": len(analyses),
+                "avg_confidence": round(sum(confidences) / len(confidences), 2) if confidences else None,
+                "hallucinated_mitre_rejected": None,
+                "avg_latency_sec": None,  # not recorded per analysis yet
+            },
         }
     except Exception as e:
         logger.error(f"Error in /ai-metrics: {e}", exc_info=True)

@@ -2,7 +2,7 @@ import React from 'react';
 
 const statusConfig = {
   pending: {
-    label: 'Pending',
+    label: 'Chờ kiểm định',
     classes: 'bg-gray-500/10 text-gray-400 border-gray-500/20',
     dot: 'bg-gray-400',
     color: '#94a3b8',
@@ -11,7 +11,7 @@ const statusConfig = {
     dotColor: '#94a3b8'
   },
   validating: {
-    label: 'Validating',
+    label: 'Đang kiểm định',
     classes: 'bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse',
     dot: 'bg-blue-400',
     color: '#60a5fa',
@@ -20,7 +20,7 @@ const statusConfig = {
     dotColor: '#60a5fa'
   },
   validated: {
-    label: 'Validated',
+    label: 'Đã kiểm định',
     classes: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
     dot: 'bg-emerald-400',
     color: '#34d399',
@@ -29,7 +29,7 @@ const statusConfig = {
     dotColor: '#34d399'
   },
   rejected: {
-    label: 'Rejected',
+    label: 'Bị từ chối',
     classes: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
     dot: 'bg-rose-400',
     color: '#fb7185',
@@ -38,7 +38,7 @@ const statusConfig = {
     dotColor: '#fb7185'
   },
   active: {
-    label: 'Active',
+    label: 'Đang chạy',
     classes: 'bg-teal-500/15 text-teal-300 border-teal-500/40 font-semibold',
     dot: 'bg-teal-400',
     color: '#2dd4bf',
@@ -47,7 +47,7 @@ const statusConfig = {
     dotColor: '#2dd4bf'
   },
   disabled: {
-    label: 'Disabled',
+    label: 'Đã tắt',
     classes: 'bg-zinc-800/40 text-zinc-500 border-zinc-700/30',
     dot: 'bg-zinc-500',
     color: '#71717a',
