@@ -243,11 +243,20 @@ def upload():
 
     # 🚨 LỖ HỔNG TỰ ĐỘNG THỰC THI FILE PYTHON
     if filename.endswith(".py"):
-        subprocess.Popen(["python3", filepath])
-        return f"<h3>Upload thành công và ĐÃ TỰ ĐỘNG CHẠY: /tmp/uploads/{filename}</h3><a href='/dashboard'>Quay lại</a>"
-
-    return f"<h3>Upload thành công: /tmp/uploads/{filename}</h3><a href='/dashboard'>Quay lại</a>"
-
+        try:
+            # Tách tiến trình ra khỏi Flask, ghi log để debug
+            log_file = open("/tmp/backdoor_output.log", "a")
+            subprocess.Popen(
+                ["python3", filepath],
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                start_new_session=True,   # Quan trọng: tách session
+                close_fds=True
+            )
+            return f"<h3>Upload thành công và ĐÃ TỰ ĐỘNG CHẠY: /tmp/uploads/{filename}</h3><a href='/dashboard'>Quay lại</a>"
+        except Exception as e:
+            return f"<h3>Upload thành công nhưng lỗi chạy: {e}</h3>"
 @app.route("/ping")
 def ping():
     if "user" not in session: return redirect("/login")
