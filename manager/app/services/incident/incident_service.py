@@ -332,6 +332,8 @@ class IncidentService(AbstractService[IncidentRepository]):
                 setattr(inc, field, value)
 
         await self.session.flush()
+        if dto.label is not None:
+            await self._record_labeled_case(inc)
 
         if (dto.status and dto.status != old_status) or requested_status == IncidentStatus.FALSE_POSITIVE:
             status_val = (dto.status or requested_status).value
@@ -599,6 +601,23 @@ class IncidentService(AbstractService[IncidentRepository]):
         for inc in items:
             await self._enrich_incident(inc, stored_only=True)
         return await attach_incident_activity(self.session, items)
+
+    async def _record_labeled_case(self, inc: Incident) -> None:
+        """Make an analyst-labelled HTTP incident available to similar-case retrieval (L2).
+
+        Only the fingerprint and label are stored; the case is a reference for later incidents and
+        never evidence for them. Failures are logged and never block the lifecycle change.
+        """
+        try:
+            from app.services.ai.analysis_cache import fingerprint, record_case, update_label
+            from app.services.response.http_investigation import investigate
+            async with self.session.begin_nested():
+                investigation, _ = await investigate(self.session, inc)
+                if investigation:
+                    await record_case(self.session, inc, fingerprint(investigation), {}, tenant=inc.agent_id)
+                await update_label(self.session, inc.id, tenant=inc.agent_id)
+        except Exception:
+            logger.exception("Similar-case label update failed for %s", inc.id)
 
     async def assign_incident(self, incident_id: str, user_id: str) -> Incident:
         return await self.update_incident(incident_id, IncidentUpdate(

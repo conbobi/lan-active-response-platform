@@ -1,7 +1,9 @@
 """Produce a bounded, evidence-grounded SOC assessment for an incident."""
 import asyncio
+import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass
 from math import isfinite
 from time import monotonic
@@ -13,6 +15,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.ai_analysis import AIAnalysis
 from app.models.incident import Incident
 from app.services.ai.ai_client import TRIAGE_SETTINGS, ai_client
+from app.services.ai.analysis_cache import AnalysisKey, analysis_cache
 from app.services.ai.alert_context_projector import (
     AlertContext,
     build_alert_context,
@@ -72,6 +75,32 @@ CLASS_LABELS = {
     "network_service_scanning": "Quan sát kết nối inbound tới nhiều cổng dịch vụ trong cùng cửa sổ.",
     "unknown_automated_activity": "Có dấu hiệu tự động hóa. Loại hoạt động chưa xác định.",
 }
+
+
+def _version(*parts) -> str:
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
+
+
+def _kb_version() -> str:
+    try:
+        from app.services.ai.knowledge.kb_store import knowledge_base
+        return knowledge_base.version or "none"
+    except Exception:
+        return "none"
+
+
+def triage_cache_key(prepared_text: str, context, schema, system) -> AnalysisKey | None:
+    """L1 key over the exact model input. Disabled unless the model revision is pinned, because a
+    mutable tag such as ``sec-q5:latest`` can change weights without changing its name."""
+    revision = os.getenv("AI_RESPONSE_MODEL_VERSION")
+    if not revision:
+        return None
+    return AnalysisKey(
+        evidence=prepared_text, detection_type=f"triage:{schema.__name__}:{context.metadata.get('rule_id')}",
+        model_name=ai_client.model, model_version=revision, prompt_version=_version(system),
+        schema_version=_version(json.dumps(schema.model_json_schema(), sort_keys=True)),
+        knowledge_version=_kb_version(), tenant="default",
+    )
 
 
 class PromptBudgetError(ValueError):
@@ -203,7 +232,7 @@ class AITriageService:
                     async with asyncio.timeout_at(
                         started + decision.deadline_seconds - PERSIST_RESERVE_SECONDS
                     ):
-                        verdict = await self._infer(context, decision.route)
+                        verdict = await self._infer(context, decision.route, manual=manual, subject=incident_id)
                     if decision.shadow_candidate:
                         baseline = fallback_verdict(context)
                         logger.info(
@@ -230,7 +259,7 @@ class AITriageService:
             logger.error("Triage DB write deadline exceeded incident=%s", incident_id)
             return None
 
-    async def _infer(self, context, route, *, settings=TRIAGE_SETTINGS, tokenizer=None, references=None):
+    async def _infer(self, context, route, *, settings=TRIAGE_SETTINGS, tokenizer=None, references=None, manual=False, subject=None):
         tokenizer = tokenizer or await asyncio.to_thread(load_tokenizer)
         if references is None:
             retrieval_start = monotonic()
@@ -240,21 +269,34 @@ class AITriageService:
         assessment = None
         if is_complex:
             assessment = await self._request(
-                context, tokenizer, EvidenceAssessment, ASSESSMENT_PROMPT, settings, is_complex,
+                context, tokenizer, EvidenceAssessment, ASSESSMENT_PROMPT, settings, is_complex, manual=manual, subject=subject,
             )
         output = await self._request(
             context, tokenizer, TriageVerdict, SYSTEM_PROMPT, settings, is_complex,
-            references=references, assessment=assessment,
+            references=references, assessment=assessment, manual=manual, subject=subject,
         )
         return validate_verdict(output, context)
 
     async def _request(
         self, context, tokenizer, schema, system, settings, complex_case, *, references=(), assessment=None,
+        manual=False, subject=None,
     ):
         prepared = prepare_prompt(
             context, tokenizer, system=system, settings=settings, complex_case=complex_case,
             references=references, assessment=assessment,
         )
+        key = triage_cache_key(prepared.text, context, schema, system)
+        if key is not None and not manual:
+            cached = await self._cache_get(key, subject)
+            if cached is not None:
+                try:
+                    # The cached output is untrusted until validated against the current prompt and,
+                    # in _infer, against the current context (validate_verdict).
+                    output = parse_output({"answer": json.dumps(cached.output)}, schema, prepared.visible_ids)
+                    logger.info("Triage L1 cache hit input_tokens=%s", prepared.token_count)
+                    return output
+                except (VerdictSchemaError, ValueError, TypeError):
+                    logger.warning("Discarding invalid cached triage output")
         result = await ai_client.generate(
             prepared.text, system, format_schema=schema.model_json_schema(), strict=True,
             **settings.request_options(),
@@ -263,7 +305,27 @@ class AITriageService:
         validation_start = monotonic()
         parsed = parse_output(result, schema, prepared.visible_ids)
         logger.info("Triage json_validation_ms=%.2f", (monotonic() - validation_start) * 1000)
+        if key is not None:
+            await self._cache_put(key, subject, parsed)
         return parsed
+
+    @staticmethod
+    async def _cache_get(key, subject):
+        """Short dedicated session: no DB connection is held across the model call."""
+        try:
+            async with AsyncSessionLocal() as session, session.begin():
+                return await analysis_cache.get(session, key, subject=subject)
+        except Exception:
+            logger.exception("Triage L1 cache read failed")
+            return None
+
+    @staticmethod
+    async def _cache_put(key, subject, parsed):
+        try:
+            async with AsyncSessionLocal() as session, session.begin():
+                await analysis_cache.put(session, key, parsed.model_dump(mode="json"), subject=subject)
+        except Exception:
+            logger.exception("Triage L1 cache write failed")
 
     async def _save(self, incident_id, expected_version, context, verdict, status):
         async with AsyncSessionLocal() as session, session.begin():

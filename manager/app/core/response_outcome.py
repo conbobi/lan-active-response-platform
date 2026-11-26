@@ -16,6 +16,7 @@ VALIDATION_ERROR = "VALIDATION_ERROR"
 CONFLICT = "CONFLICT"
 NOT_FOUND = "NOT_FOUND"
 INTERNAL_ERROR = "INTERNAL_ERROR"
+MOCK_ONLY = "MOCK_ONLY"  # simulated execution, never a verified effect
 
 
 class OutcomeHTTPException(HTTPException):

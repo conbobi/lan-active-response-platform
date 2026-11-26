@@ -3,6 +3,8 @@ import api from '../../api/api';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import { readSession, requestSignIn, subscribeSession } from '../../api/operatorSession';
+import AnalysisSummary from './assist/AnalysisSummary';
+import ActionPlan from './assist/ActionPlan';
 
 // One message per backend outcome_code (app/core/response_outcome.py); never a generic "failed".
 const OUTCOME_TEXT = {
@@ -19,6 +21,8 @@ const OUTCOME_TEXT = {
   CONFLICT: 'Trạng thái hành động đã thay đổi; tải lại để xem trạng thái mới.',
   NOT_FOUND: 'Không tìm thấy sự cố hoặc hành động trong phạm vi được cấp.',
   INTERNAL_ERROR: 'Lỗi nội bộ của Manager.',
+  MOCK_ONLY: 'Chế độ MOCK: không có tác động thật, không được coi là đã xử lý.',
+  SUCCESS: 'Thành công.',
   NETWORK_ERROR: 'Không kết nối được tới Manager.',
 };
 
@@ -40,6 +44,7 @@ function ProposalList({ incidentId }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [nowStamp, setNowStamp] = useState(Date.now);
+  const [batchResults, setBatchResults] = useState(null);
 
   const sequence = useRef(0);
   const path = `/incidents/${encodeURIComponent(incidentId)}/response-proposals`;
@@ -91,6 +96,26 @@ function ProposalList({ incidentId }) {
       actions: [saved, ...previous.actions.filter(item => item.action_id !== saved.action_id)],
     }));
   }
+
+  async function runBatch(endpoint, body) {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.post(endpoint, body);
+      setBatchResults(res.results || []);
+      await load();
+    } catch (e) {
+      setError(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const batchPropose = (actionTypes) => runBatch(`${path}/batch`, { action_types: actionTypes });
+  const batchDecision = (operation, actionIds) => {
+    if (!window.confirm(`Xác nhận ${operation === 'approve' ? 'PHÊ DUYỆT' : 'TỪ CHỐI'} ${actionIds.length} hành động?`)) return;
+    return runBatch(`/response-actions/batch/${operation}`, { action_ids: actionIds });
+  };
 
   async function handleOperation(operation, action = null) {
     if (operation === 'propose') {
@@ -156,6 +181,7 @@ function ProposalList({ incidentId }) {
       case 'executing':
       case 'dispatched': return '#3b82f6';
       case 'approved': return '#06b6d4';
+      case 'mock_succeeded': return '#a855f7';
       case 'pending_approval': return '#f59e0b';
       case 'rolled_back':
       case 'expired': return '#6b7280';
@@ -217,6 +243,42 @@ function ProposalList({ incidentId }) {
           <strong>[{error.outcome}]</strong> {OUTCOME_TEXT[error.outcome] || ''}
           {error.message && <div style={{ marginTop: '0.25rem', opacity: 0.85 }}>Manager: {error.message}</div>}
           {error.requestId && <div style={{ marginTop: '0.15rem', fontSize: '0.72rem', opacity: 0.7 }}>request_id: {error.requestId}</div>}
+        </div>
+      )}
+
+      {data?.mock_mode && (
+        <div role="status" style={{ padding: '0.5rem 0.8rem', borderRadius: 6, border: '1px solid #a855f7', color: '#a855f7', fontSize: '0.8rem' }}>
+          MOCK MODE: thực thi chỉ là mô phỏng, không gửi lệnh tới Agent, không đổi firewall/WAF.
+        </div>
+      )}
+
+      {data?.analysis && <AnalysisSummary analysis={data.analysis} />}
+
+      {data?.plan?.length > 0 && (
+        <ActionPlan
+          plan={data.plan}
+          canExecute={data.can_execute}
+          busy={busy}
+          onBatchPropose={batchPropose}
+          onBatchDecision={batchDecision}
+          pendingActions={(data.actions || []).filter((a) => a.status === 'pending_approval')}
+        />
+      )}
+
+      {batchResults && (
+        <div role="status" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '0.6rem 0.8rem', fontSize: '0.78rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <strong>Kết quả từng hành động</strong>
+            <Button size="xs" variant="outline" onClick={() => setBatchResults(null)}>Đóng</Button>
+          </div>
+          <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.2rem' }}>
+            {batchResults.map((r) => (
+              <li key={r.action_type || r.action_id}>
+                {(r.action_type || r.action_id).replaceAll('_', ' ')}: <strong>[{r.outcome_code}]</strong>{' '}
+                {OUTCOME_TEXT[r.outcome_code] || ''}{r.detail ? ` — ${r.detail}` : ''}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

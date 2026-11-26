@@ -94,13 +94,37 @@ def retrieve_references(context: AlertContext, tokenizer) -> list[dict]:
         candidates.append({"id": sop[0], "source": "larp_sop", "version": "1", "excerpt": sop[2]})
     for technique in context.mapped_techniques[:2]:
         entry = mitre_kb.get_technique(technique)
-        candidates.append({
-            "id": technique, "source": "mitre_kb", "name": entry.get("name", technique),
-            "tactic": entry.get("tactic", "N/A"),
-        })
+        base = {"id": technique, "source": "mitre_kb", "name": entry.get("name", technique),
+                "tactic": entry.get("tactic", "N/A")}
+        chunk = _technique_chunk(technique)
+        if chunk is None:
+            candidates.append((base,))
+            continue
+        # Lookup is by the already validated technique ID only; incident text never selects chunks.
+        cited = {**base, "source": chunk.source_id, "name": chunk.title, "chunk_id": chunk.chunk_id,
+                 "version": chunk.version, "url": chunk.url}
+        candidates.append(({**cited, "excerpt": _excerpt(chunk.text)}, cited, base))
     for candidate in candidates:
         if len(documents) == 2:
             break
-        if tokenizer.count_text(serialize_data([*documents, candidate])) <= 400:
-            documents.append(candidate)
+        if isinstance(candidate, dict):
+            candidate = (candidate,)
+        for option in candidate:  # richest variant that still fits the reference budget
+            if tokenizer.count_text(serialize_data([*documents, option])) <= 400:
+                documents.append(option)
+                break
     return documents
+
+
+def _technique_chunk(technique: str):
+    try:
+        from app.services.ai.knowledge.kb_store import knowledge_base
+        chunks = knowledge_base.by_attack_id(technique)
+    except Exception:
+        return None
+    return next((c for c in chunks if c.source_id == "mitre-attack" and ":description:" in c.chunk_id), None)
+
+
+def _excerpt(text: str, limit: int = 240) -> str:
+    body = text.split("\n", 1)[-1].strip() if "\n" in text else text
+    return body if len(body) <= limit else body[: limit - 1].rsplit(" ", 1)[0] + "…"

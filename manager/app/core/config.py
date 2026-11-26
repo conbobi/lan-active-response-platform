@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Security & Execution
     SECRET_KEY: str = "larp-manager-secret-key-change-in-production"
     DEBUG: bool = True
+    # Development-only response simulation: honoured only while DEBUG is true. In mock mode the
+    # Response Assist executor sends no Agent command, writes no WAF lease and changes no firewall.
+    RESPONSE_MOCK_MODE: bool = False
     NETWORK_AGENT_TOKENS: dict[str, TokenDigest] = Field(default_factory=dict, repr=False)
     OPERATOR_SESSION_KEY: str | None = Field(default=None, min_length=32, repr=False)
     JWT_SECRET_KEY: str | None = Field(default=None, min_length=32, repr=False)

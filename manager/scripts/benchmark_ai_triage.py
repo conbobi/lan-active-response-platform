@@ -1,244 +1,137 @@
-"""Compare the legacy and optimized triage against three labeled synthetic incidents."""
+"""Benchmark AI triage latency and the three cache tiers (P13).
+
+Uses a temporary SQLite database and fixture incidents; never touches the production database or the
+Manager API. Real inference goes to the configured Ollama (OLLAMA_URL / AI_MODEL) unless --stub is given.
+
+    cd manager && PYTHONPATH=..:app/test .venv/bin/python scripts/benchmark_ai_triage.py --runs 5
+"""
 import argparse
 import asyncio
 import json
-import math
+import os
+import resource
 import statistics
-import subprocess
+import sys
 import tempfile
 import time
-from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
 
-import httpx
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT), str(ROOT / "app" / "test"), str(ROOT.parent)]
+os.environ.setdefault("AI_RESPONSE_MODEL_VERSION", "benchmark-pinned")
 
-from app.models.agent import Agent
-from app.models.base import Base
-from app.services.ai import ai_triage_service as triage
-from app.services.ai.ai_client import DEFAULT_MODEL, TRIAGE_SETTINGS, AIClient
-from app.services.ai.alert_context_projector import build_alert_context
-from app.services.ai.triage_router import Route, RoutingDecision, TriageQueue, route_triage
-from app.services.ai.triage_tokens import load_tokenizer
-from app.test.test_alert_context_projector import (
-    holder,
-    incident_with,
-    socket_observation,
-    verified_incident,
-)
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+
+from app.models.base import Base  # noqa: E402
+from app.services.ai import ai_triage_service  # noqa: E402
+from app.services.ai.alert_context_projector import build_alert_context  # noqa: E402
+from app.services.ai.analysis_cache import cache_stats, cached_search, find_similar, fingerprint  # noqa: E402
+from app.services.ai.knowledge.kb_store import knowledge_base  # noqa: E402
+from app.services.ai.knowledge.triage_retriever import enrich_rule_mapping, retrieve_references  # noqa: E402
+from app.services.ai.triage_router import Route  # noqa: E402
+from app.services.ai.triage_tokens import load_tokenizer  # noqa: E402
+from test_ai_agent_pipeline import holder, verified_incident  # noqa: E402
 
 
-class MeasuredClient(AIClient):
-    def __init__(self, url, model):
-        super().__init__(url, model)
-        self.calls = []
-        self.tokenizer = load_tokenizer()
-
-    async def generate(self, prompt, system=None, **kwargs):
-        started = time.perf_counter()
-        record = {"gguf_input_tokens": self.tokenizer.count_chat(system or "", prompt)}
-        self.calls.append(record)
-        try:
-            result = await super().generate(prompt, system, **kwargs)
-            record.update(metrics=result["metrics"], answer=result["answer"])
-            return result
-        finally:
-            record["seconds"] = time.perf_counter() - started
+def pct(values, p):
+    ordered = sorted(values)
+    return round(ordered[min(len(ordered) - 1, int(round(p / 100 * (len(ordered) - 1))))], 2) if ordered else None
 
 
-async def sample_memory(path, readings, anonymous_readings):
-    if path is None:
-        return
-    while True:
-        readings.append(int(path.read_text().strip()))
-        stats = dict(line.split() for line in path.with_name("memory.stat").read_text().splitlines())
-        anonymous_readings.append(int(stats["anon"]))
-        await asyncio.sleep(0.2)
+def summary(values):
+    return {"n": len(values), "p50_ms": pct(values, 50), "p95_ms": pct(values, 95),
+            "mean_ms": round(statistics.mean(values), 2) if values else None}
 
 
-def legacy_service(ref):
-    root = Path(__file__).resolve().parents[2]
-    path = "manager/app/services/ai/ai_triage_service.py"
-    source = subprocess.check_output(["git", "--no-pager", "show", f"{ref}:{path}"], cwd=root, text=True)
-    legacy = ModuleType("larp_legacy_triage")
-    exec(compile(source, f"{ref}:{path}", "exec"), legacy.__dict__)
-    return legacy
+def counts(values):
+    return {"n": len(values), "p50": pct(values, 50), "p95": pct(values, 95)} if values else None
 
 
-def calculate(case, expected, row, context, calls, legacy):
-    raw = json.loads(row.raw_response) if row and row.raw_response and not legacy else {}
-    strict_json = False
-    if legacy and calls:
-        try:
-            raw = json.loads(calls[-1].get("answer", ""))
-            strict_json = (
-                isinstance(raw, dict)
-                and raw.get("classification") in triage.CLASS_LABELS
-                and isinstance(raw.get("summary"), str)
-                and type(raw.get("confidence")) in (int, float)
-                and 0 <= raw["confidence"] <= 1
-            )
-            if not isinstance(raw, dict):
-                raw = {}
-        except ValueError:
-            raw = {}
+async def timed(coro):
+    start = time.perf_counter()
+    result = await coro
+    return result, (time.perf_counter() - start) * 1000
+
+
+async def main(args):
+    rss_start = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    tokenizer = load_tokenizer()
+    tmp = tempfile.mkdtemp(prefix="larp-bench-")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp}/bench.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ai_triage_service.AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    usage = {"prompt_tokens": [], "output_tokens": [], "model_ms": []}
+
+    if args.stub:
+        async def generate(prompt, *a, **k):
+            await asyncio.sleep(args.stub_ms / 1000)
+            return {"answer": json.dumps({"classification": "likely_malicious", "confidence": 0.85,
+                                          "evidence_ids": ["N1"], "mitre_techniques": []}), "metrics": {}}
+        ai_triage_service.ai_client.generate = generate
     else:
-        strict_json = raw.get("status") == "ok"
+        original = ai_triage_service.ai_client.generate
 
-    techniques = {item["id"] for item in (row.mitre_techniques or [])} if row else set()
-    classification = raw.get("classification")
-    positive = bool(
-        classification in {"likely_malicious", "confirmed_malicious"}
-        or any(item.startswith(("T1071", "T1059")) for item in techniques)
-    ) if row and not row.error_message else None
-    attribution = None
-    if expected:
-        network = context.flows[0]
-        holders = {(item["pid"], tuple(item["socket_fds"])) for item in network["holders"]}
-        summary = raw.get("evidence_summary", {}).get(network["id"], {})
-        attached = {(item["pid"], tuple(item["socket_fds"])) for item in summary.get("holders", [])}
-        attribution = bool(
-            summary and summary["inode"] == network["inode"] and attached == holders
-            and summary["primary_process"] == network["primary_process"]
-        )
-        if legacy:
-            observed = raw.get("observed_facts", "")
-            attribution = (
-                not context.conflict and isinstance(observed, str) and network["inode"] in observed
-                and all(str(pid) in observed for pid, _ in holders)
-            )
-    metrics = [call["metrics"] for call in calls if call.get("metrics")]
+        async def generate(prompt, *a, **k):
+            result = await original(prompt, *a, **k)
+            metrics = result.get("metrics", {})
+            if isinstance(metrics.get("prompt_eval_count"), int):
+                usage["prompt_tokens"].append(metrics["prompt_eval_count"])
+            if isinstance(metrics.get("eval_count"), int):
+                usage["output_tokens"].append(metrics["eval_count"])
+            return result
+        ai_triage_service.ai_client.generate = generate
 
-    def total(field):
-        values = [item[field] for item in metrics if field in item]
-        return sum(values) if len(values) == len(calls) and values else None
+    service = ai_triage_service.AITriageService()
+    cold, miss, hit = [], [], []
+    for run in range(args.runs):
+        # A different holder PID per run gives different evidence, i.e. a genuine L1 miss.
+        context = build_alert_context(verified_incident(holder(900 + run)))
+        await enrich_rule_mapping(None, context)
+        _, ms = await timed(service._infer(context, Route.SINGLE_PASS, tokenizer=tokenizer, subject=f"inc{run}"))
+        (cold if run == 0 else miss).append(ms)
+        _, ms = await timed(service._infer(context, Route.SINGLE_PASS, tokenizer=tokenizer, subject=f"inc{run}"))
+        hit.append(ms)
 
-    load_ns = total("load_duration")
-    return {
-        "case": case,
-        "expected_positive": expected,
-        "observed_positive": positive,
-        "attribution_correct": attribution,
-        "valid_json": strict_json,
-        "status": raw.get("status", "legacy" if row else "timeout"),
-        "model_calls": len(calls),
-        "gguf_input_tokens": sum(call["gguf_input_tokens"] for call in calls),
-        "prompt_tokens": total("prompt_eval_count"),
-        "output_tokens": total("eval_count"),
-        "model_load_seconds": round(load_ns / 1e9, 3) if load_ns is not None else None,
-        "model_wall_seconds": round(sum(call["seconds"] for call in calls), 3),
+    context = build_alert_context(verified_incident(holder()))
+    await enrich_rule_mapping(None, context)
+    prepared = ai_triage_service.prepare_prompt(context, tokenizer, references=retrieve_references(context, tokenizer))
+
+    investigation = {"classification": "sqli_probe_observed", "observed_facts": [{
+        "evidence_ids": ["w1"], "method": "POST", "http_status": 200, "source_ip": "192.0.2.9",
+        "payload_indicators": ["sql_boolean_expression"]}], "recommended_responses": []}
+    l2 = []
+    async with ai_triage_service.AsyncSessionLocal() as session:
+        for _ in range(max(args.runs, 20)):
+            _, ms = await timed(find_similar(session, fingerprint(investigation), tenant="default"))
+            l2.append(ms)
+    kb_miss, kb_hit = [], []
+    for i in range(max(args.runs, 20)):
+        start = time.perf_counter()
+        cached_search(knowledge_base, f"brute force password guessing {i}", limit=4)
+        kb_miss.append((time.perf_counter() - start) * 1000)
+        start = time.perf_counter()
+        cached_search(knowledge_base, f"brute force password guessing {i}", limit=4)
+        kb_hit.append((time.perf_counter() - start) * 1000)
+    await engine.dispose()
+    report = {
+        "model": ai_triage_service.ai_client.model, "inference": "stub" if args.stub else "ollama",
+        "stub_latency_ms": args.stub_ms if args.stub else None, "runs": args.runs,
+        "cold_first_inference": summary(cold), "warm_inference_l1_miss": summary(miss),
+        "l1_exact_hit": summary(hit), "l2_find_similar": summary(l2),
+        "l3_kb_search_miss": summary(kb_miss), "l3_kb_search_hit": summary(kb_hit),
+        "prompt_tokens_tokenizer": prepared.token_count,
+        "prompt_tokens_ollama": counts(usage["prompt_tokens"]),
+        "output_tokens_ollama": counts(usage["output_tokens"]),
+        "cache_stats": cache_stats(),
+        "rss_delta_mb": round((resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - rss_start) / 1024, 1),
     }
-
-
-def summary(rows, readings, anonymous_readings):
-    latencies = sorted(row["job_seconds"] for row in rows)
-    negatives = [row for row in rows if not row["expected_positive"] and row["observed_positive"] is not None]
-    positives = [row for row in rows if row["expected_positive"]]
-    def mean(field):
-        values = [row[field] for row in rows if row[field] is not None]
-        return round(statistics.mean(values), 2) if values else None
-
-    return {
-        "job_seconds_p50": statistics.median(latencies),
-        "job_seconds_p95": latencies[math.ceil(0.95 * len(latencies)) - 1],
-        "mean_gguf_input_tokens": mean("gguf_input_tokens"),
-        "mean_prompt_tokens": mean("prompt_tokens"),
-        "mean_output_tokens": mean("output_tokens"),
-        "peak_cgroup_mib_sampled": round(max(readings) / 2**20, 2) if readings else None,
-        "peak_cgroup_anon_mib_sampled": round(max(anonymous_readings) / 2**20, 2) if anonymous_readings else None,
-        "strict_json_jobs": sum(row["valid_json"] for row in rows),
-        "timeout_jobs": sum(row["status"] == "timeout" for row in rows),
-        "evaluated_negatives": len(negatives),
-        "false_positive_rate": sum(row["observed_positive"] for row in negatives) / len(negatives) if negatives else None,
-        "attribution_accuracy": sum(row["attribution_correct"] for row in positives) / len(positives),
-    }
-
-
-async def benchmark(args, database):
-    legacy = legacy_service(args.baseline_ref)
-    client = MeasuredClient(args.url, DEFAULT_MODEL)
-    triage.ai_client = legacy.ai_client = client
-    cases = [
-        ("verified-shell", True, verified_incident()),
-        ("ordinary-tcp-4444", False, incident_with(
-            {"network": socket_observation(holder(name="curl", fds=(7,)))},
-            risk=5, identifier="inc-normal-tcp",
-        )),
-        ("equal-holders", True, verified_incident(holder(), holder(802, 11))),
-    ]
-    cases[-1][2].id = "inc-equal-holders"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{database}")
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    triage.AsyncSessionLocal = legacy.AsyncSessionLocal = factory
-    triage.triage_queue = TriageQueue(1)
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    async with factory() as session:
-        session.add(Agent(
-            id="agent-a", hostname="synthetic-host", ip_address="192.0.2.10", mac_address="00:00:00:00:00:01",
-        ))
-        await session.flush()
-        session.add_all(incident for _, _, incident in cases)
-        await session.commit()
-
-    class MeasuredService(triage.AITriageService):
-        async def _infer(self, context, route):
-            return await super()._infer(context, route, settings=settings)
-
-    try:
-        async with httpx.AsyncClient(base_url=args.url, timeout=10.0) as metadata:
-            listed = (await metadata.get("/api/tags")).raise_for_status().json()
-            model = next(item for item in listed["models"] if item["name"] == client.model)
-            print(json.dumps({"dataset": "synthetic", "model": model["name"], "digest": model["digest"]}), flush=True)
-            for variant in args.variants:
-                (await metadata.post(
-                    "/api/generate", json={"model": client.model, "keep_alive": 0},
-                )).raise_for_status()
-                settings = replace(TRIAGE_SETTINGS, num_ctx=8192 if variant == "B" else 4096)
-                triage.route_triage = (
-                    (lambda context, **kwargs: route_triage(context, enable_skip=False, **kwargs))
-                    if variant == "D" else (lambda *_args, **_kwargs: RoutingDecision(Route.SINGLE_PASS))
-                )
-                readings, anonymous_readings, rows = [], [], []
-                monitor = asyncio.create_task(sample_memory(args.memory_current, readings, anonymous_readings))
-                try:
-                    for name, expected, incident in cases:
-                        client.calls.clear()
-                        started = time.perf_counter()
-                        service = legacy.AITriageService() if variant == "A" else MeasuredService()
-                        try:
-                            async with asyncio.timeout(180):
-                                row = await service.analyze_incident(incident.id)
-                        except TimeoutError:
-                            row = None
-                        item = calculate(
-                            name, expected, row, build_alert_context(incident), client.calls, variant == "A",
-                        )
-                        item["job_seconds"] = round(time.perf_counter() - started, 3)
-                        rows.append(item)
-                        print(json.dumps({"variant": variant, **item}), flush=True)
-                finally:
-                    monitor.cancel()
-                    monitor_result = (await asyncio.gather(monitor, return_exceptions=True))[0]
-                    if isinstance(monitor_result, Exception):
-                        print(json.dumps({"memory_error": type(monitor_result).__name__}), flush=True)
-                running = (await metadata.get("/api/ps")).raise_for_status().json()
-                profile = next((model for model in running["models"] if model["name"] == client.model), {})
-                print(json.dumps({
-                    "variant": variant, "summary": summary(rows, readings, anonymous_readings),
-                    "ollama_model_bytes": profile.get("size"), "context_length": profile.get("context_length"),
-                }), flush=True)
-    finally:
-        await engine.dispose()
+    print(json.dumps(report, indent=1, default=str))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="http://127.0.0.1:21434", help="Isolated Ollama endpoint")
-    parser.add_argument("--baseline-ref", default="2c257ef", help="Git revision with the pre-change pipeline")
-    parser.add_argument("--variants", default="ABCD", choices=("ABCD", "BCD", "A", "B", "C", "D"))
-    parser.add_argument("--memory-current", type=Path, help="Read-only cgroup memory.current for the isolated server")
-    options = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="larp-triage-bench-") as directory:
-        asyncio.run(benchmark(options, Path(directory) / "cases.db"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--runs", type=int, default=5)
+    parser.add_argument("--stub", action="store_true", help="synthetic model latency instead of Ollama")
+    parser.add_argument("--stub-ms", type=int, default=1500)
+    asyncio.run(main(parser.parse_args()))
