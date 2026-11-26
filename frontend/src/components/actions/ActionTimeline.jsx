@@ -6,6 +6,12 @@ import AutoRollbackTimer from './AutoRollbackTimer';
 import RollbackConfirmModal from './RollbackConfirmModal';
 import AuditLogModal from './AuditLogModal';
 import {
+  ACTION_STATUS_META,
+  formatDateTimeVN,
+  getActionMeta,
+  shortenId,
+} from '../../i18n/viVN';
+import {
   FiShield,
   FiLock,
   FiLayers,
@@ -14,7 +20,6 @@ import {
   FiRotateCcw,
   FiChevronDown,
   FiChevronUp,
-  FiInfo,
 } from 'react-icons/fi';
 
 export default function ActionTimeline({
@@ -32,7 +37,11 @@ export default function ActionTimeline({
     setExpandedSnapshots((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const appliedActions = actions.filter((a) => a.status === 'applied');
+  const appliedActions = actions.filter((a) => {
+    if (a.status !== 'applied') return false;
+    const meta = getActionMeta(a.action_type || a.actionType);
+    return meta.isMitigation !== false;
+  });
 
   const getActionIcon = (type) => {
     switch (type) {
@@ -58,10 +67,10 @@ export default function ActionTimeline({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
         <div>
           <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <FiShield size={16} color="var(--primary)" /> Response Actions & Stateful Rollback
+            <FiShield size={16} color="var(--primary)" /> Hành động ứng phó & Hoàn tác trạng thái
           </h4>
           <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
-            {appliedActions.length} active mitigation(s) applied • {actions.length} total recorded
+            {appliedActions.length} hành động ngăn chặn đang hiệu lực • {actions.length} tổng hành động đã ghi nhận
           </span>
         </div>
 
@@ -73,7 +82,7 @@ export default function ActionTimeline({
             onClick={() => setBatchModalOpen(true)}
             iconLeft={<FiRotateCcw size={13} />}
           >
-            Rollback All ({appliedActions.length})
+            Hoàn tác tất cả ({appliedActions.length})
           </Button>
         )}
       </div>
@@ -81,14 +90,14 @@ export default function ActionTimeline({
       {/* Loading state */}
       {loading && (
         <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-          Loading mitigation actions...
+          Đang tải danh sách hành động ứng phó...
         </div>
       )}
 
       {/* Empty state */}
       {!loading && actions.length === 0 && (
         <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.85rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-          No response actions have been recorded yet. Use mitigation buttons above to execute actions.
+          Chưa có hành động ứng phó mức host nào được ghi nhận. Nếu đây là sự cố HTTP, vui lòng kiểm tra mục Trợ lý ứng phó AI (Response Assist).
         </div>
       )}
 
@@ -129,16 +138,22 @@ export default function ActionTimeline({
                       {getActionIcon(act.action_type)}
                     </div>
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--text-primary)', textTransform: 'capitalize' }}>
-                          {act.action_type.replace('_', ' ')}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--text-primary)' }}>
+                          {getActionMeta(act.action_type).title}
                         </span>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                          (Host: <strong style={{ color: 'var(--primary)' }}>{act.agent_id}</strong>)
+                          (Máy trạm: <strong style={{ color: 'var(--primary)' }}>{act.agent_id}</strong>)
                         </span>
+                        {ACTION_STATUS_META[act.status] && (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: ACTION_STATUS_META[act.status].color }}>
+                            • {ACTION_STATUS_META[act.status].label}
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.1rem' }}>
-                        Applied: {new Date(act.applied_at || act.created_at).toLocaleString()}
+                        Thời điểm thực thi (GMT+7): {formatDateTimeVN(act.applied_at || act.created_at)}
+                        {act.id ? ` • Mã: ${shortenId(act.id)}` : ''}
                       </div>
                     </div>
                   </div>
@@ -161,9 +176,9 @@ export default function ActionTimeline({
                       size="sm"
                       onClick={() => setSelectedAuditActionId(act.id)}
                       iconLeft={<FiActivity size={12} />}
-                      title="View Action Audit Trail"
+                      title="Xem nhật ký kiểm toán hành động"
                     >
-                      Audit
+                      Kiểm toán
                     </Button>
                   </div>
                 </div>
@@ -187,7 +202,7 @@ export default function ActionTimeline({
                       }}
                     >
                       {isExpanded ? <FiChevronUp size={13} /> : <FiChevronDown size={13} />}
-                      {isExpanded ? 'Hide Pre-Mitigation Snapshot' : 'View Pre-Mitigation Snapshot'}
+                      {isExpanded ? 'Ẩn ảnh chụp trạng thái trước can thiệp' : 'Xem ảnh chụp trạng thái trước can thiệp'}
                     </button>
 
                     {isExpanded && (
@@ -199,13 +214,28 @@ export default function ActionTimeline({
                           borderRadius: '4px',
                           padding: '0.6rem 0.75rem',
                           fontSize: '0.75rem',
-                          fontFamily: 'monospace',
                           color: 'var(--text-secondary)',
-                          maxHeight: 180,
-                          overflowY: 'auto',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.45rem',
                         }}
                       >
-                        <pre style={{ margin: 0 }}>{JSON.stringify(act.snapshot, null, 2)}</pre>
+                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.78rem' }}>
+                          {act.snapshot.action_type && (
+                            <span>Loại lệnh gốc: <code>{act.snapshot.action_type}</code></span>
+                          )}
+                          {act.snapshot.captured_at && (
+                            <span>Chụp lúc: <strong>{formatDateTimeVN(act.snapshot.captured_at)}</strong></span>
+                          )}
+                        </div>
+                        <details>
+                          <summary style={{ cursor: 'pointer', color: 'var(--text-tertiary)', fontSize: '0.74rem' }}>
+                            Xem dữ liệu JSON kỹ thuật (nâng cao)
+                          </summary>
+                          <pre style={{ margin: '0.45rem 0 0 0', fontFamily: 'monospace', maxHeight: 160, overflowY: 'auto' }}>
+                            {JSON.stringify(act.snapshot, null, 2)}
+                          </pre>
+                        </details>
                       </div>
                     )}
                   </div>
@@ -222,7 +252,7 @@ export default function ActionTimeline({
         onClose={() => setBatchModalOpen(false)}
         onConfirm={onUndoAll}
         isBatch={true}
-        title="Confirm Batch Rollback"
+        title="Xác nhận hoàn tác hàng loạt"
       />
 
       {/* Audit Log Modal */}

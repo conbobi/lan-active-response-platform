@@ -10,10 +10,7 @@ import {
   FiSlash,
   FiShield,
   FiAlertCircle,
-  FiCheckCircle,
-  FiCornerDownRight,
   FiZap,
-  FiRotateCcw
 } from 'react-icons/fi';
 
 export default function ActionSuggestions({
@@ -90,16 +87,19 @@ export default function ActionSuggestions({
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
           <FiZap size={16} color="var(--warning)" />
           <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-            Đề xuất phản ứng tiếp theo (Next-Step Recommendations)
+            Đề xuất phản ứng tiếp theo
           </h4>
         </div>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', margin: '0 0 1rem 0' }}>
-          Hệ thống phân tích rủi ro tự động đưa ra các hành động giảm thiểu phù hợp nhất với loại mã độc này:
+          Hệ thống đánh giá bối cảnh sự cố và gợi ý các hành động kiểm soát phù hợp nhất:
         </p>
 
         {suggestions.length === 0 ? (
-          <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', fontSize: '0.85rem', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <FiCheckCircle size={16} /> Mọi hành động ứng phó chính đã được thực thi đầy đủ.
+          <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', fontSize: '0.85rem', color: httpIncident ? '#93c5fd' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FiAlertCircle size={16} />
+            {httpIncident
+              ? 'Không có hành động cô lập/diệt tiến trình trực tiếp cho sự cố lớp HTTP này. Vui lòng sử dụng mục Trợ lý ứng phó AI (Response Assist) để thu thập bằng chứng, giám sát hoặc thực thi chặn/rate-limit HTTP tại điểm thực thi.'
+              : 'Chưa có thêm đề xuất kiểm soát máy trạm tức thì (máy đã được cô lập hoặc tiến trình mục tiêu đã kết thúc).'}
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.85rem' }}>
@@ -154,7 +154,7 @@ export default function ActionSuggestions({
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
           <FiShield size={16} color="var(--primary)" />
           <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-            Lịch sử hành động đã thực hiện (Executed Mitigations & Rollback)
+            Lịch sử hành động kiểm soát & Hoàn tác
           </h4>
         </div>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', margin: '0 0 1rem 0' }}>

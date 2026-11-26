@@ -16,13 +16,13 @@ import ResponseAssist from './ResponseAssist';
 import AIAnalysisTab from './AIAnalysisTab';
 
 const STORYBOARD_TABS = [
-  { value: 'story', label: '📖 Story' },
-  { value: 'process', label: '🌳 Process' },
-  { value: 'network', label: '🌐 Network' },
-  { value: 'assist', label: 'AI Response Assist' },
-  { value: 'actions', label: '⚡ Actions' },
-  { value: 'notes', label: '📝 Notes' },
-  { value: 'ai', label: '🤖 AI Analysis' },
+  { value: 'story', label: '📖 Diễn biến sự cố' },
+  { value: 'process', label: '🌳 Cây tiến trình' },
+  { value: 'network', label: '🌐 Kết nối mạng' },
+  { value: 'assist', label: '🛡️ Trợ lý ứng phó AI' },
+  { value: 'actions', label: '⚡ Hành động & Hoàn tác' },
+  { value: 'notes', label: '📝 Ghi chú' },
+  { value: 'ai', label: '🤖 Phân tích AI' },
 ];
 
 const LABEL_OPTIONS = [
@@ -186,8 +186,8 @@ export default function IncidentDetailModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={`Security Investigation Storyboard — ${detailedIncident.id}`}
-      maxWidth="1000px"
+      title={`Hồ sơ điều tra sự cố — ${detailedIncident.id}`}
+      maxWidth="1040px"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', minHeight: '620px' }}>
         {/* Toast Notification */}
@@ -260,7 +260,7 @@ export default function IncidentDetailModal({
             />
           )}
 
-          {tab === 'assist' && <ResponseAssist key={incident.id} incidentId={incident.id} />}
+          {tab === 'assist' && <ResponseAssist key={incident.id} incidentId={incident.id} incident={detailedIncident} />}
           {tab === 'actions' && (
             <ActionSuggestions
               incident={detailedIncident}
@@ -282,7 +282,9 @@ export default function IncidentDetailModal({
           {tab === 'ai' && (
             <AIAnalysisTab
               incidentId={detailedIncident.id}
+              incident={detailedIncident}
               httpIncident={httpIncident}
+              onOpenAssist={() => selectTab('assist')}
             />
           )}
         </div>
@@ -302,7 +304,7 @@ export default function IncidentDetailModal({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 700 }}>
-              Lifecycle Status:
+              Trạng thái xử lý:
             </span>
             <Button
               variant={detailedIncident.status === 'contained' ? 'primary' : 'outline'}
@@ -310,7 +312,7 @@ export default function IncidentDetailModal({
               disabled={actionLoading}
               onClick={() => handleStatusChange('contained')}
             >
-              Mark Contained
+              Đánh dấu đã cô lập
             </Button>
             <Button
               variant={detailedIncident.status === 'resolved' ? 'primary' : 'outline'}
@@ -318,7 +320,7 @@ export default function IncidentDetailModal({
               disabled={actionLoading}
               onClick={() => handleStatusChange('resolved')}
             >
-              Mark Resolved
+              Đánh dấu đã khắc phục
             </Button>
             <Button
               variant={detailedIncident.status === 'false_positive' ? 'primary' : 'outline'}
@@ -326,16 +328,16 @@ export default function IncidentDetailModal({
               disabled={actionLoading}
               onClick={() => handleStatusChange('false_positive')}
             >
-              False Positive
+              Báo động giả
             </Button>
             <Button
               variant={detailedIncident.status === 'closed' ? 'primary' : 'outline'}
               size="sm"
               disabled={actionLoading || isSubmittingClose}
               onClick={handleOpenCloseModal}
-              title="Đóng incident và ghi nhận AI ground truth"
+              title="Đóng sự cố và lưu nhãn ground truth cho AI"
             >
-              Close Incident
+              Đóng hồ sơ sự cố
             </Button>
 
             {detailedIncident.label && LABEL_BADGE_CONFIG[detailedIncident.label] && (
@@ -360,7 +362,7 @@ export default function IncidentDetailModal({
           </div>
 
           <Button variant="outline" size="sm" onClick={onClose}>
-            Close Window
+            Đóng cửa sổ
           </Button>
         </div>
       </div>

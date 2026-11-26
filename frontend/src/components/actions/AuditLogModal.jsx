@@ -2,7 +2,14 @@
 import React, { useState, useEffect } from 'react';
 import Modal from '../ui/Modal';
 import { getActionAuditLogs } from '../../api/actions';
-import { FiActivity, FiUser, FiClock, FiInfo } from 'react-icons/fi';
+import { FiUser, FiClock } from 'react-icons/fi';
+import {
+  AUDIT_EVENT_LABELS,
+  formatDateTimeVN,
+  formatDateTimeUTC,
+  shortenId,
+  translateActor,
+} from '../../i18n/viVN';
 
 export default function AuditLogModal({ isOpen, onClose, actionId }) {
   const [logs, setLogs] = useState([]);
@@ -70,17 +77,17 @@ export default function AuditLogModal({ isOpen, onClose, actionId }) {
           border: `1px solid ${border}`,
         }}
       >
-        {event.replace('_', ' ')}
+        {AUDIT_EVENT_LABELS[event] || event.replaceAll('_', ' ')}
       </span>
     );
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Audit Trail: Action ${actionId}`} maxWidth={650}>
+    <Modal isOpen={isOpen} onClose={onClose} title={`Nhật ký kiểm toán hành động: ${shortenId(actionId)}`} maxWidth={680}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
         {loading && (
           <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-            Loading audit events...
+            Đang tải nhật ký kiểm toán...
           </div>
         )}
 
@@ -92,7 +99,7 @@ export default function AuditLogModal({ isOpen, onClose, actionId }) {
 
         {!loading && !error && logs.length === 0 && (
           <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
-            No audit logs recorded for this action.
+            Chưa có bản ghi kiểm toán nào cho hành động này.
           </div>
         )}
 
@@ -111,27 +118,45 @@ export default function AuditLogModal({ isOpen, onClose, actionId }) {
                   gap: '0.4rem',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     {getEventBadge(log.event)}
                     <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <FiUser size={13} color="var(--primary)" /> {log.actor}
+                      <FiUser size={13} color="var(--primary)" /> {translateActor(log.actor)}
                     </span>
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                    <FiClock size={12} /> {new Date(log.created_at).toLocaleString()}
+                  <span
+                    style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                    title={formatDateTimeUTC(log.created_at)}
+                  >
+                    <FiClock size={12} /> {formatDateTimeVN(log.created_at)}
                   </span>
                 </div>
 
                 {log.reason && (
                   <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                    <strong>Reason:</strong> {log.reason}
+                    <strong>Lý do / Diễn giải:</strong> {log.reason}
                   </div>
                 )}
 
                 {log.metadata && Object.keys(log.metadata).length > 0 && (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', background: 'var(--bg-primary)', padding: '0.4rem 0.6rem', borderRadius: '4px', fontFamily: 'monospace' }}>
-                    {JSON.stringify(log.metadata, null, 2)}
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', background: 'var(--bg-primary)', padding: '0.45rem 0.65rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      {Object.entries(log.metadata).slice(0, 6).map(([k, v]) => (
+                        <span key={k}>
+                          <span style={{ color: 'var(--text-tertiary)' }}>{k}:</span>{' '}
+                          <code>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</code>
+                        </span>
+                      ))}
+                    </div>
+                    <details>
+                      <summary style={{ cursor: 'pointer', color: 'var(--text-tertiary)', fontSize: '0.72rem' }}>
+                        Xem metadata JSON (nâng cao)
+                      </summary>
+                      <pre style={{ margin: '0.35rem 0 0 0', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                        {JSON.stringify(log.metadata, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
               </div>

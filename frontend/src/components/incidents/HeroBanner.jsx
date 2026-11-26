@@ -6,6 +6,13 @@ import InfoTooltip from '../ui/InfoTooltip';
 import { TOOLTIPS } from '../../constants/tooltips';
 import { isKernelOrSystem } from '../../constants/processExclusions';
 import {
+  formatDateTimeVN,
+  translateActivity,
+  translateClassification,
+  translateIncidentStatus,
+  translateSeverity,
+} from '../../i18n/viVN';
+import {
   FiAlertTriangle,
   FiShield,
   FiLock,
@@ -99,13 +106,13 @@ export default function HeroBanner({
             >
               <FiAlertTriangle size={12} />
               {isFalsePositive
-                ? 'FALSE POSITIVE'
+                ? 'BÁO ĐỘNG GIẢ'
                 : isResolved
-                ? 'RESOLVED'
-                : `${incident.severity} THREAT`}
+                ? 'ĐÃ KHẮC PHỤC'
+                : `MỨC ĐỘ ${translateSeverity(incident.severity).label.toUpperCase()}`}
             </span>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-              ID: <strong style={{ color: 'var(--text-secondary)' }}>{incident.id}</strong>
+              Mã sự cố: <strong style={{ color: 'var(--text-secondary)' }}>{incident.id}</strong>
             </span>
           </div>
           <h2 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
@@ -113,9 +120,9 @@ export default function HeroBanner({
           </h2>
           {behavior?.classification && (
             <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              <strong>{behavior.classification}</strong>
-              {behavior.source_ip && <span> · {behavior.source_ip}</span>}
-              {behavior.service && <span> · {behavior.service}</span>}
+              <strong>{translateClassification(behavior.classification)}</strong>
+              {behavior.source_ip && <span> · Nguồn {behavior.source_ip}</span>}
+              {behavior.service && <span> · Dịch vụ {behavior.service}</span>}
               {Number.isInteger(behavior.failed_attempts) && (
                 <span> · {behavior.failed_attempts} bản ghi thất bại</span>
               )}
@@ -175,9 +182,9 @@ export default function HeroBanner({
                       ? '#10b981'
                       : '#f59e0b',
                 }}
-                title={`Ground Truth: ${incident.label} (bởi ${incident.labeledBy || 'N/A'})${incident.labelReason ? `\nLý do: ${incident.labelReason}` : ''}`}
+                title={`Nhãn xác thực: ${incident.label} (bởi ${incident.labeledBy || 'Chưa rõ'})${incident.labelReason ? `\nLý do: ${incident.labelReason}` : ''}`}
               >
-                🏷️ AI Ground Truth: {incident.label.toUpperCase()}
+                🏷️ Nhãn xác thực AI: {incident.label === 'false_positive' ? 'BÁO ĐỘNG GIẢ' : incident.label === 'benign' ? 'LÀNH TÍNH' : incident.label.toUpperCase()}
               </span>
             )}
           </div>
@@ -210,7 +217,7 @@ export default function HeroBanner({
                   onClick={() => onOpenAssist && onOpenAssist()}
                   title="Cô lập máy chủ cần bằng chứng process/socket đã xác minh; sự cố HTTP dùng đề xuất theo bằng chứng."
                 >
-                  AI Response Assist
+                  Trợ lý ứng phó AI
                 </Button>
               ) : isIsolated ? (
                 <Button
@@ -220,7 +227,7 @@ export default function HeroBanner({
                   disabled={actionLoading}
                   onClick={() => onAction && onAction('unisolate')}
                 >
-                  Undo Isolate
+                  Gỡ cô lập máy
                 </Button>
               ) : (
                 <Button
@@ -230,7 +237,7 @@ export default function HeroBanner({
                   disabled={actionLoading}
                   onClick={() => onAction && onAction('isolate')}
                 >
-                  Isolate Host
+                  Cô lập máy
                 </Button>
               )}
 
@@ -242,7 +249,7 @@ export default function HeroBanner({
                   disabled={actionLoading}
                   onClick={() => onAction && onAction('kill_process_tree', { pid: culprit.pid, process_name: culprit.name })}
                 >
-                  Kill Tree ({culprit.name})
+                  Diệt cây tiến trình ({culprit.name})
                 </Button>
               )}
             </>
@@ -256,9 +263,9 @@ export default function HeroBanner({
               const target = culprit?.pid && culprit.process_start_time ? `&pid=${culprit.pid}&started=${culprit.process_start_time}` : '';
               navigate(`/investigate?tab=process${targetAgent ? `&agent=${encodeURIComponent(targetAgent)}` : ''}&incident=${encodeURIComponent(incident.id)}${target}`);
             }}
-            title="Open culprit process in interactive root cause tree"
+            title="Mở tiến trình nghi vấn trong cây nguồn gốc tương tác"
           >
-            🌳 Jump to Process Tree
+            🌳 Xem cây tiến trình
           </Button>
         </div>
       </div>
@@ -277,11 +284,11 @@ export default function HeroBanner({
         }}
       >
         <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
-          📖 Auto-Generated Threat Storyline
+          📖 Tóm tắt diễn biến sự cố
         </div>
         {generateNarrative()}
                   <span style={{ display: 'block' }}>
-                    {incident.detection_activity || 'historical'} · {incident.incident_status || incident.status}
+                    {translateActivity(incident.detection_activity || 'historical')} · {translateIncidentStatus(incident.incident_status || incident.status)}
                     {incident.disposition && ` · ${incident.disposition}`}
                   </span>
       </div>
@@ -297,16 +304,16 @@ export default function HeroBanner({
       >
         <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <FiServer size={12} /> Target Agent
+            <FiServer size={12} /> Máy được quản lý (Agent)
           </div>
           <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--primary)', marginTop: '0.15rem' }}>
-            {incident.agentId || 'Unknown'}
+            {incident.agentId || 'Không rõ'}
           </div>
         </div>
 
         <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <FiActivity size={12} /> Risk Assessment
+            <FiActivity size={12} /> Đánh giá rủi ro
           </div>
           <div style={{ fontSize: '1.1rem', fontWeight: 800, color: severityColor, marginTop: '0.15rem' }}>
             {incident.riskScore} <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontWeight: 500 }}>/ 100</span>
@@ -315,16 +322,16 @@ export default function HeroBanner({
 
         <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <FiShield size={12} /> Host Containment
+            <FiShield size={12} /> Trạng thái cô lập máy
           </div>
           <div style={{ fontSize: '0.85rem', fontWeight: 700, marginTop: '0.25rem' }}>
             {isIsolated ? (
               <span style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                <FiLock size={12} /> ISOLATED
+                <FiLock size={12} /> ĐÃ CÔ LẬP
               </span>
             ) : (
               <span style={{ color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                <FiUnlock size={12} /> NORMAL
+                <FiUnlock size={12} /> BÌNH THƯỜNG
               </span>
             )}
           </div>
@@ -332,10 +339,10 @@ export default function HeroBanner({
 
         <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
           <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <FiClock size={12} /> Detected At
+            <FiClock size={12} /> Phát hiện lúc (GMT+7)
           </div>
           <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {incident.createdAt ? new Date(incident.createdAt).toLocaleTimeString() : 'N/A'}
+            {incident.createdAt ? formatDateTimeVN(incident.createdAt) : 'Chưa rõ'}
           </div>
         </div>
       </div>

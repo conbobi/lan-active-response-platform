@@ -3,10 +3,16 @@ import React, { useState, useEffect } from 'react';
 import { getIncidentTimeline } from '../../api/incidents';
 import Button from '../ui/Button';
 import {
+  ACTION_STATUS_META,
+  formatDateTimeUTC,
+  formatDateTimeVN,
+  shortenId,
+  translateTimelineEventType,
+} from '../../i18n/viVN';
+import {
   FiTerminal,
   FiGlobe,
   FiAlertTriangle,
-  FiCheckCircle,
   FiShield,
   FiChevronDown,
   FiChevronUp,
@@ -102,7 +108,7 @@ export default function StoryTimeline({
     return (
       <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>
         <FiRefreshCw className="animate-spin" size={24} style={{ margin: '0 auto 0.75rem' }} />
-        <p>Synthesizing chronological incident story from telemetry...</p>
+        <p>Đang tổng hợp dòng thời gian sự cố từ dữ liệu giám sát...</p>
       </div>
     );
   }
@@ -120,7 +126,7 @@ export default function StoryTimeline({
         }}
       >
         <FiAlertTriangle size={32} style={{ margin: '0 auto 0.5rem', opacity: 0.5 }} />
-        <p>No timeline events available for this incident yet.</p>
+        <p>Chưa có sự kiện dòng thời gian nào cho sự cố này.</p>
       </div>
     );
   }
@@ -144,7 +150,8 @@ export default function StoryTimeline({
         {timeline.map((item, idx) => {
           const colors = getSeverityColors(item.severity);
           const isExpanded = expandedIndices.has(idx);
-          const eventTime = item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+          const eventTime = item.time ? formatDateTimeVN(item.time) : 'Chưa rõ';
+          const eventTimeUtc = item.time ? formatDateTimeUTC(item.time) : '';
 
           return (
             <div key={idx} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', position: 'relative', zIndex: 2 }}>
@@ -203,7 +210,7 @@ export default function StoryTimeline({
                         color: colors.color,
                       }}
                     >
-                      {item.type.replace('_', ' ')}
+                      {translateTimelineEventType(item.type)}
                     </span>
                     <strong style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
                       {item.title}
@@ -211,7 +218,10 @@ export default function StoryTimeline({
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <span
+                      style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                      title={eventTimeUtc}
+                    >
                       <FiClock size={12} /> {eventTime}
                     </span>
                     {isExpanded ? <FiChevronUp size={16} /> : <FiChevronDown size={16} />}
@@ -234,21 +244,21 @@ export default function StoryTimeline({
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         <div>
                           <strong>PID:</strong> <code style={{ color: 'var(--primary)' }}>{item.details.pid}</code> |{' '}
-                          <strong>Name:</strong> <code>{item.details.name}</code>
+                          <strong>Tên tiến trình:</strong> <code>{item.details.name}</code>
                         </div>
                         {(item.details.exe_path || item.details.path) && (
                           <div>
-                            <strong>Path:</strong> <code>{item.details.exe_path || item.details.path}</code>
+                            <strong>Đường dẫn:</strong> <code>{item.details.exe_path || item.details.path}</code>
                           </div>
                         )}
                         {item.details.cmdline && (
                           <div>
-                            <strong>Commandline:</strong> <code style={{ color: 'var(--warning)' }}>{item.details.cmdline}</code>
+                            <strong>Dòng lệnh:</strong> <code style={{ color: 'var(--warning)' }}>{item.details.cmdline}</code>
                           </div>
                         )}
                         {item.details.parent && (item.details.parent.name || item.details.parent.pid !== undefined) && (
                           <div>
-                            <strong>Parent:</strong> {item.details.parent.name || 'Unknown'} {item.details.parent.pid !== undefined && item.details.parent.pid !== null ? `(PID: ${item.details.parent.pid})` : ''}
+                            <strong>Tiến trình cha:</strong> {item.details.parent.name || 'Không rõ'} {item.details.parent.pid !== undefined && item.details.parent.pid !== null ? `(PID: ${item.details.parent.pid})` : ''}
                           </div>
                         )}
                       </div>
@@ -258,7 +268,7 @@ export default function StoryTimeline({
                     {['network', 'network_connection'].includes(item.type) && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         <div>
-                          <strong>Destination:</strong>{' '}
+                          <strong>Đích kết nối:</strong>{' '}
                           <code style={{ color: 'var(--warning)' }}>
                             {item.details.dst_ip}:{item.details.dst_port}
                           </code>{' '}
@@ -266,7 +276,7 @@ export default function StoryTimeline({
                         </div>
                         {item.details.bytes_sent != null && (
                           <div>
-                            <strong>Traffic:</strong> {item.details.bytes_sent} bytes ({item.details.packets_sent || 0} packets)
+                            <strong>Lưu lượng:</strong> {item.details.bytes_sent} bytes ({item.details.packets_sent || 0} gói tin)
                           </div>
                         )}
                       </div>
@@ -276,8 +286,8 @@ export default function StoryTimeline({
                     {item.type === 'rule_trigger' && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         <div>
-                          <strong>Rule ID:</strong> <code>{item.details.rule}</code> |{' '}
-                          <strong>Score Contribution:</strong>{' '}
+                          <strong>Mã quy tắc:</strong> <code>{item.details.rule}</code> |{' '}
+                          <strong>Điểm đóng góp:</strong>{' '}
                           <span style={{ color: colors.color, fontWeight: 700 }}>{item.details.score == null ? '—' : `+${item.details.score}`}</span>
                         </div>
                         <div style={{ color: 'var(--text-primary)', fontStyle: 'italic', marginTop: '0.2rem' }}>
@@ -290,15 +300,15 @@ export default function StoryTimeline({
                     {item.type === 'action' && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                         <div>
-                          <strong>Action ID:</strong> <code>{item.details.action_id}</code> |{' '}
-                          <strong>Status:</strong>{' '}
-                          <span style={{ color: colors.color, fontWeight: 700, textTransform: 'uppercase' }}>
-                            {item.details.status}
+                          <strong>Mã hành động:</strong> <code>{shortenId(item.details.action_id)}</code> |{' '}
+                          <strong>Trạng thái:</strong>{' '}
+                          <span style={{ color: colors.color, fontWeight: 700 }}>
+                            {ACTION_STATUS_META[item.details.status]?.label || item.details.status}
                           </span>
                         </div>
                         {item.details.snapshot && (
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
-                            Host snapshot captured: {item.details.snapshot.action_type || 'system_state'} pre-action baseline
+                            Đã chụp trạng thái trước hành động: {item.details.snapshot.action_type || 'system_state'}
                           </div>
                         )}
                         {item.details.status === 'applied' && (
@@ -310,7 +320,7 @@ export default function StoryTimeline({
                               iconLeft={<FiRotateCcw size={12} />}
                               onClick={() => onAction && onAction('unisolate')}
                             >
-                              Rollback Action
+                              Hoàn tác hành động
                             </Button>
                           </div>
                         )}
