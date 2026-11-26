@@ -20,6 +20,8 @@ import {
 
 export default function HeroBanner({
   incident,
+  httpIncident = false,
+  onOpenAssist,
   onAction,
   actionLoading,
   isIsolated,
@@ -200,7 +202,17 @@ export default function HeroBanner({
             </span>
           ) : (
             <>
-              {isIsolated ? (
+              {httpIncident && !isIsolated ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  iconLeft={<FiTerminal size={14} />}
+                  onClick={() => onOpenAssist && onOpenAssist()}
+                  title="Cô lập máy chủ cần bằng chứng process/socket đã xác minh; sự cố HTTP dùng đề xuất theo bằng chứng."
+                >
+                  AI Response Assist
+                </Button>
+              ) : isIsolated ? (
                 <Button
                   variant="outline"
                   size="sm"

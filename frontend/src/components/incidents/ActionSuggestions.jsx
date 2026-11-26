@@ -18,6 +18,9 @@ import {
 
 export default function ActionSuggestions({
   incident,
+  httpIncident = false,
+  onOpenAssist,
+  onRefresh,
   onAction,
   actionLoading,
   isIsolated,
@@ -35,7 +38,8 @@ export default function ActionSuggestions({
   // Generate intelligent suggestions based on threat context
   const suggestions = [];
 
-  if (!isIsolated) {
+  // Host isolation needs verified host evidence; an HTTP observation alone is answered in Response Assist.
+  if (!isIsolated && !httpIncident) {
     suggestions.push({
       id: 'isolate_host',
       title: `Cô lập mạng máy trạm (${incident?.agentId || incident?.agent_id || 'Agent'})`,
@@ -64,12 +68,22 @@ export default function ActionSuggestions({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       {/* SECTION 0: AI RESPONSE SUGGESTION PANEL */}
-      <AISuggestionPanel
-        incidentId={incident?.id}
-        onRefresh={() => {
-          if (onAction) onAction('refresh', {});
-        }}
-      />
+      {httpIncident ? (
+        <div style={{ padding: '1rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Sự cố HTTP được xử lý bằng đề xuất theo bằng chứng trong <strong>AI Response Assist</strong>
+            (thu thập bằng chứng, giám sát, rate limit/chặn tạm thời khi điểm thực thi được xác minh).
+          </span>
+          <Button size="sm" variant="primary" onClick={() => onOpenAssist && onOpenAssist()}>
+            Mở AI Response Assist
+          </Button>
+        </div>
+      ) : (
+        <AISuggestionPanel
+          incidentId={incident?.id}
+          onRefresh={() => onRefresh && onRefresh()}
+        />
+      )}
 
       {/* SECTION 1: SMART NEXT-STEP RECOMMENDATIONS */}
       <div>

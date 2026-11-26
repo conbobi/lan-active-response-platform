@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Dict, Optional, Any
-from fastapi import APIRouter, Depends, status, Body, Query
+from fastapi import APIRouter, Depends, status, Body, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
@@ -85,6 +85,7 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{agent_id}/isolate", response_model=AgentOut)
 async def isolate_agent(
+    request: Request,
     agent_id: str,
     payload: Optional[Dict[str, Any]] = Body(default=None),
     db: AsyncSession = Depends(get_db)
@@ -96,7 +97,7 @@ async def isolate_agent(
         agent_id=agent_id,
         action_type="isolate",
         action_params={"reason": reason, "confirmed": (payload or {}).get("confirmed")},
-        actor="analyst"
+        actor=getattr(request.state, "operator", None) or "analyst"
     )
     service = AgentService(db)
     return await service.get_agent(agent_id)
@@ -104,6 +105,7 @@ async def isolate_agent(
 
 @router.post("/{agent_id}/unisolate", response_model=AgentOut)
 async def unisolate_agent(
+    request: Request,
     agent_id: str,
     payload: Optional[Dict[str, Any]] = Body(default=None),
     db: AsyncSession = Depends(get_db)
@@ -115,7 +117,7 @@ async def unisolate_agent(
         agent_id=agent_id,
         action_type="unisolate",
         action_params={"reason": reason},
-        actor="analyst"
+        actor=getattr(request.state, "operator", None) or "analyst"
     )
     service = AgentService(db)
     return await service.get_agent(agent_id)

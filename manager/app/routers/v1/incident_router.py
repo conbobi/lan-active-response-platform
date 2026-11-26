@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, status, Body, HTTPException, Query
+from fastapi import APIRouter, Depends, status, Body, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,11 @@ from app.services.incident.incident_timeline_service import IncidentTimelineServ
 from app.services.ai.ai_triage_service import AITriageService
 
 router = APIRouter(tags=["Incidents"])
+
+
+def authenticated_actor(request: Request, claimed):
+    """Prefer the identity the auth middleware verified over a name supplied in the body."""
+    return getattr(request.state, "operator", None) or str(claimed or "anonymous")[:64]
 
 logger = logging.getLogger(__name__)
 @router.post("/", response_model=IncidentOut, status_code=status.HTTP_201_CREATED)
@@ -137,23 +142,24 @@ async def close_incident(incident_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/{incident_id}/action", response_model=Dict[str, Any])
 async def execute_incident_action(
     incident_id: str,
+    request: Request,
     payload: Dict[str, Any] = Body(..., example={"action_type": "isolate", "params": {}}),
     db: AsyncSession = Depends(get_db)
 ):
     """Execute quick response action directly from an Incident (Isolate, Kill Tree, Block IP)."""
     action_type = payload.get("action_type")
     params = payload.get("params", {})
-    user = payload.get("user", "admin")
+    user = authenticated_actor(request, payload.get("user", "admin"))
 
     service = IncidentService(db)
     return await service.execute_action(incident_id, action_type=action_type, params=params, user=user)
 
 
 @router.post("/{incident_id}/notes", response_model=IncidentNoteOut, status_code=status.HTTP_201_CREATED)
-async def add_incident_note(incident_id: str, dto: IncidentNoteAddDTO, db: AsyncSession = Depends(get_db)):
+async def add_incident_note(incident_id: str, dto: IncidentNoteAddDTO, request: Request, db: AsyncSession = Depends(get_db)):
     """Add a note or audit log entry to an incident."""
     service = IncidentService(db)
-    return await service.add_note(incident_id, content=dto.content, user=dto.user)
+    return await service.add_note(incident_id, content=dto.content, user=authenticated_actor(request, dto.user))
 
 
 @router.get("/{incident_id}/notes", response_model=List[IncidentNoteOut])
@@ -268,15 +274,29 @@ async def suggest_ai_response(
 ):
     """Trigger AI response suggestion generation asynchronously (<2s)."""
     from app.models.incident import Incident
+    from app.core.exceptions import InsufficientEvidenceError, PolicyDeniedError
+    from app.services.response.http_investigation import http_behavior
     incident = await db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
+    # Refuse up front what the background job would silently drop, so the dashboard never polls
+    # for a suggestion that cannot arrive (RESPONSE_ROOT_CAUSE.md).
+    if http_behavior(incident):
+        raise PolicyDeniedError("HTTP incidents use evidence-scoped proposals in AI Response Assist.",
+                                extra={"use": "response_assist"})
+    has_triage = await db.scalar(select(AIAnalysis.id).where(
+        AIAnalysis.incident_id == incident_id, AIAnalysis.analysis_type == "triage").limit(1))
+    if not has_triage:
+        raise InsufficientEvidenceError("Run AI triage for this incident before requesting a response suggestion.")
 
     async def _run_suggest():
         try:
             from app.services.ai.ai_response_service import AIResponseService
-            await AIResponseService().suggest_response(incident_id)
-            logger.info(f"Background AI response suggestion completed for {incident_id}")
+            result = await AIResponseService().suggest_response(incident_id)
+            if result is None or not getattr(result, "suggested_action", None):
+                logger.warning(f"Background AI response suggestion produced no suggestion for {incident_id}")
+            else:
+                logger.info(f"Background AI response suggestion completed for {incident_id}: {result.suggested_action}")
         except Exception as e:
             logger.error(f"Background AI response suggestion failed for {incident_id}: {e}", exc_info=True)
 
@@ -293,11 +313,12 @@ async def suggest_ai_response(
 @router.post("/{incident_id}/ai-analysis/apply-suggestion/", include_in_schema=False)
 async def apply_ai_suggestion(
     incident_id: str,
+    request: Request,
     payload: Dict[str, Any] = Body(default={"analyst": "current_user"}),
     db: AsyncSession = Depends(get_db),
 ):
     """Apply AI response suggestion — delegates to ResponseActionService."""
-    analyst = payload.get("analyst", "current_user")
+    analyst = authenticated_actor(request, payload.get("analyst", "current_user"))
     from app.services.ai.ai_response_service import AIResponseService
     from app.core.exceptions import FlappingCooldownError, AppException
     try:
@@ -313,7 +334,7 @@ async def apply_ai_suggestion(
         raise HTTPException(status_code=429, detail=e.message)
     except AppException as e:
         logger.warning(f"AppException during apply AI suggestion for {incident_id}: {e.message}")
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise  # The global handler keeps outcome_code and extra fields.
     except ValueError as e:
         msg = str(e)
         logger.warning(f"Rejecting AI suggestion for {incident_id}: {msg}")
@@ -326,11 +347,12 @@ async def apply_ai_suggestion(
 @router.post("/{incident_id}/ai-analysis/dismiss-suggestion/", include_in_schema=False)
 async def dismiss_ai_suggestion(
     incident_id: str,
+    request: Request,
     payload: Dict[str, Any] = Body(default={"analyst": "current_user", "reason": ""}),
     db: AsyncSession = Depends(get_db),
 ):
     """Analyst dismisses AI response suggestion with reasoning."""
-    analyst = payload.get("analyst", "current_user")
+    analyst = authenticated_actor(request, payload.get("analyst", "current_user"))
     reason = payload.get("reason", "")
     from app.services.ai.ai_response_service import AIResponseService
     from app.core.exceptions import AppException
@@ -342,8 +364,8 @@ async def dismiss_ai_suggestion(
             "analysis_id": analysis.id,
             "dismiss_reason": analysis.dismiss_reason,
         }
-    except AppException as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except AppException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

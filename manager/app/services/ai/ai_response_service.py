@@ -214,7 +214,8 @@ class AIResponseService:
             raise NotFoundError(f"Incident '{incident_id}' or associated agent ID was not found")
 
         if http_behavior(incident):
-            raise ValueError("Review this HTTP incident in AI Response Assist")
+            from app.core.exceptions import PolicyDeniedError
+            raise PolicyDeniedError("Review this HTTP incident in AI Response Assist", extra={"use": "response_assist"})
 
         # === VALIDATION BLOCK (thêm trước khi dispatch) ===
         suggested = suggestion.suggested_action

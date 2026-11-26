@@ -1,9 +1,16 @@
 class AppException(Exception):
-    """Base exception class for application exceptions."""
-    def __init__(self, message: str = "An unexpected error occurred.", status_code: int = 500):
+    """Base exception class for application exceptions.
+
+    ``outcome`` is an optional response outcome code (see app.core.response_outcome) and ``extra``
+    carries additional machine-readable fields for the client, e.g. ``{"use": "response_assist"}``.
+    """
+    def __init__(self, message: str = "An unexpected error occurred.", status_code: int = 500,
+                 outcome: str | None = None, extra: dict | None = None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.outcome = outcome
+        self.extra = extra or {}
 
 
 class NotFoundError(AppException):
@@ -40,8 +47,19 @@ class LockAcquisitionError(AppException):
     def __init__(self, lock_key: str):
         super().__init__(message=f"Failed to acquire lock for key '{lock_key}'.", status_code=503)
 class BadRequestError(AppException):
-    def __init__(self, message: str = "Bad request."):
-        super().__init__(message=message, status_code=400)
+    def __init__(self, message: str = "Bad request.", outcome: str | None = None):
+        super().__init__(message=message, status_code=400, outcome=outcome)
+
+
+class PolicyDeniedError(AppException):
+    """The request is well formed and authorized but response policy refuses it on this path."""
+    def __init__(self, message: str, extra: dict | None = None):
+        super().__init__(message=message, status_code=409, outcome="POLICY_DENIED", extra=extra)
+
+
+class InsufficientEvidenceError(AppException):
+    def __init__(self, message: str, extra: dict | None = None):
+        super().__init__(message=message, status_code=409, outcome="INSUFFICIENT_EVIDENCE", extra=extra)
 
 
 class FlappingCooldownError(AppException):

@@ -2,6 +2,28 @@ import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import api from '../../api/api';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
+import OperatorTokenPrompt from '../common/OperatorTokenPrompt';
+
+// One message per backend outcome_code (app/core/response_outcome.py); never a generic "failed".
+const OUTCOME_TEXT = {
+  AUTHORIZATION_FAILED: 'Không có quyền: cần operator token hợp lệ cho Agent này (thao tác ghi cần vai trò admin).',
+  INSUFFICIENT_EVIDENCE: 'Chưa đủ bằng chứng tương quan cho hành động này.',
+  POLICY_DENIED: 'Chính sách phản ứng từ chối hành động này với bằng chứng hiện tại.',
+  APPROVAL_REQUIRED: 'Hành động cần được phê duyệt trước khi thực thi.',
+  AGENT_OFFLINE: 'Agent đã xác thực đang offline; không thể gửi lệnh thu thập.',
+  EXECUTOR_UNAVAILABLE: 'Chưa có điểm thực thi (executor) được cấu hình cho hành động này.',
+  VALIDATION_ERROR: 'Yêu cầu không hợp lệ.',
+  CONFLICT: 'Trạng thái hành động đã thay đổi; tải lại để xem trạng thái mới.',
+  NOT_FOUND: 'Không tìm thấy sự cố hoặc hành động trong phạm vi được cấp.',
+  INTERNAL_ERROR: 'Lỗi nội bộ của Manager.',
+  NETWORK_ERROR: 'Không kết nối được tới Manager.',
+};
+
+const describeError = (e) => ({
+  outcome: e?.outcome || 'INTERNAL_ERROR',
+  message: e?.message || '',
+  requestId: e?.requestId,
+});
 
 export default function ResponseAssist({ incidentId }) {
   const [data, setData] = useState(null);
@@ -21,7 +43,7 @@ export default function ResponseAssist({ incidentId }) {
         setError('');
       }
     } catch (e) {
-      if (!signal?.aborted) setError(e.message);
+      if (!signal?.aborted) setError(describeError(e));
     }
   }, [path]);
 
@@ -54,7 +76,7 @@ export default function ResponseAssist({ incidentId }) {
         await api.post(path, action ? { action_type: action.action_type } : {});
         await load();
       } catch (e) {
-        setError(e.message);
+        setError(describeError(e));
       } finally {
         setBusy(false);
       }
@@ -71,7 +93,7 @@ export default function ResponseAssist({ incidentId }) {
         setAuditActionId(action.action_id);
         setAuditLogs(res.audit || []);
       } catch (e) {
-        setError(e.message);
+        setError(describeError(e));
       } finally {
         setBusy(false);
       }
@@ -92,7 +114,7 @@ export default function ResponseAssist({ incidentId }) {
       await api.post(endpoint, {});
       await load();
     } catch (e) {
-      setError(e.message);
+      setError(describeError(e));
     } finally {
       setBusy(false);
     }
@@ -155,6 +177,10 @@ export default function ResponseAssist({ incidentId }) {
         </div>
       </div>
 
+      {error?.outcome === 'AUTHORIZATION_FAILED' && (
+        <OperatorTokenPrompt reason={error.message} onSaved={() => { setError(''); load(); }} />
+      )}
+
       {error && (
         <div style={{
           padding: '0.65rem 0.9rem',
@@ -164,7 +190,9 @@ export default function ResponseAssist({ incidentId }) {
           color: '#ef4444',
           fontSize: '0.82rem'
         }}>
-          ⚠️ {error}
+          <strong>[{error.outcome}]</strong> {OUTCOME_TEXT[error.outcome] || ''}
+          {error.message && <div style={{ marginTop: '0.25rem', opacity: 0.85 }}>Manager: {error.message}</div>}
+          {error.requestId && <div style={{ marginTop: '0.15rem', fontSize: '0.72rem', opacity: 0.7 }}>request_id: {error.requestId}</div>}
         </div>
       )}
 

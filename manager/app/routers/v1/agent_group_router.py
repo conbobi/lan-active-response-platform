@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
@@ -188,6 +188,7 @@ async def list_agent_groups_for_agent(
 
 @router.post("/groups/{group_id}/actions", response_model=GroupBatchActionResponse, status_code=status.HTTP_201_CREATED)
 async def execute_batch_group_action(
+    request: Request,
     group_id: str,
     req: GroupBatchActionRequest,
     db: AsyncSession = Depends(get_db)
@@ -201,13 +202,14 @@ async def execute_batch_group_action(
         group_id=group_id,
         action_type=req.action_type,
         action_params=req.action_params,
-        actor="analyst",
+        actor=getattr(request.state, "operator", None) or "analyst",
         auto_rollback_seconds=req.auto_rollback_seconds
     )
 
 
 @router.post("/groups/{group_id}/undo-all", response_model=UndoBatchResponse)
 async def undo_all_group_actions(
+    request: Request,
     group_id: str,
     req: Optional[UndoBatchRequest] = None,
     db: AsyncSession = Depends(get_db)
@@ -221,5 +223,5 @@ async def undo_all_group_actions(
     return await service.rollback_group_actions(
         group_id=group_id,
         reason=reason,
-        actor="analyst"
+        actor=getattr(request.state, "operator", None) or "analyst"
     )

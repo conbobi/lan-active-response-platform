@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import get_db
 from app.core.network_security import verify_operator_or_admin, is_enrolled
+from app.core import response_outcome as oc
+from app.core.response_outcome import OutcomeHTTPException
 from app.models.command import Command
 from app.models.incident import Incident
 from app.models.response_action import ResponseAction
@@ -34,7 +36,7 @@ class ProposalRequest(EmptyRequest):
 def operator(token, agent=None, write=False):
     identity, role = verify_operator_or_admin(token, agent, write=write)
     if role is None and identity != "legacy_admin":
-        raise HTTPException(401, "Configured operator credentials required")
+        raise OutcomeHTTPException(401, "Configured operator credentials required", oc.AUTHORIZATION_FAILED)
     return identity
 
 
@@ -43,13 +45,18 @@ async def scoped_incident(db, key, token, lock=False):
     query = select(Incident).where(Incident.id == key).execution_options(populate_existing=True)
     incident = await db.scalar(query.with_for_update() if lock else query)
     if not incident or not incident.agent_id:
-        raise HTTPException(404, "Incident unavailable")
+        raise OutcomeHTTPException(404, "Incident unavailable", oc.NOT_FOUND)
     operator(token, incident.agent_id)
     return incident
 
 
+OUTCOME_BY_STATUS = {"pending_approval": oc.APPROVAL_REQUIRED, "not_recommended": oc.POLICY_DENIED,
+                     "failed": oc.INTERNAL_ERROR, "rollback_failed": oc.INTERNAL_ERROR}
+
+
 def view(action):
     return {**action.action_params, "status": action.status, "result": action.snapshot or {},
+            "outcome_code": OUTCOME_BY_STATUS.get(action.status, oc.SUCCESS),
             "rollback_available": action.action_type == WATCH and action.status in {"dispatched", "monitoring"} or action.action_type in TRAFFIC and action.status in {"dispatched", "verifying", "succeeded", "partial", "rollback_failed"}}
 
 
@@ -80,7 +87,7 @@ async def propose(incident_id: str, body: ProposalRequest, authorization: str | 
                           if p["action_type"] == body.action_type), None)
         proposal = match_proposal(investigation, candidate["action_id"]) if candidate else None
     if not proposal:
-        raise HTTPException(409, "Correlated source evidence required")
+        raise OutcomeHTTPException(409, "Correlated source evidence required for this action", oc.INSUFFICIENT_EVIDENCE)
     previous = await db.get(ResponseAction, proposal.action_id)
     if previous:
         return view(previous)
@@ -90,7 +97,7 @@ async def propose(incident_id: str, body: ProposalRequest, authorization: str | 
     reviewed, _ = await investigate(db, incident)
     current = match_proposal(reviewed, proposal.action_id)
     if not current or current != proposal:
-        raise HTTPException(409, "Evidence changed during review")
+        raise OutcomeHTTPException(409, "Evidence changed during review; investigate again", oc.INSUFFICIENT_EVIDENCE)
     if origin == "policy_fallback" and current.action_type in WAF_TYPES:
         current = CollectionProposal.model_validate(investigation["recommended_responses"][0])
     previous = await db.get(ResponseAction, current.action_id)
@@ -121,7 +128,7 @@ async def scoped_action(db, key, token, *, write=False, lock=False):
     query = select(ResponseAction).where(ResponseAction.id == key, ResponseAction.action_type.in_(ASSIST_TYPES))
     row = await db.scalar(query.with_for_update() if lock else query)
     if not row:
-        raise HTTPException(404, "Action unavailable")
+        raise OutcomeHTTPException(404, "Action unavailable", oc.NOT_FOUND)
     return row, operator(token, row.agent_id, write)
 
 
@@ -144,7 +151,7 @@ async def transition(action_id: str, operation: Literal["approve", "reject", "ex
         if action.status == "rolled_back":
             return view(action)
         if not view(action)["rollback_available"]:
-            raise HTTPException(409, "No reversible effect for this action")
+            raise OutcomeHTTPException(409, "No reversible effect for this action", oc.POLICY_DENIED)
         await reconcile(db, action, undo_actor=actor)
         await reconcile_watch(db, action, stop_actor=actor)
         return view(action)
@@ -153,29 +160,32 @@ async def transition(action_id: str, operation: Literal["approve", "reject", "ex
         if action.status == target:
             return view(action)
         if action.status != "pending_approval":
-            raise HTTPException(409, "Action is not awaiting approval")
+            raise OutcomeHTTPException(409, "Action is not awaiting approval", oc.CONFLICT)
     else:
         if action.status in {"dispatched", "executing", "succeeded", "partial", "failed", "verifying", "monitoring"}:
             return view(action)
         if action.status != "approved":
-            raise HTTPException(409, "Approved action required")
+            raise OutcomeHTTPException(409, "Approved action required", oc.APPROVAL_REQUIRED)
         target = "dispatched"
     if operation != "reject":
         incident = await scoped_incident(db, action.incident_id, authorization)
         investigation, _ = await investigate(db, incident)
         current = match_proposal(investigation, action.id)
+        if current is None:
+            raise OutcomeHTTPException(409, "Current incident evidence no longer supports this proposal",
+                                       oc.INSUFFICIENT_EVIDENCE)
         if decision(action.action_type, current) not in {"ALLOW_AUTOMATIC", "REQUIRE_APPROVAL"} or current.action_id != action.id:
-            raise HTTPException(409, "Current incident evidence does not match this proposal")
+            raise OutcomeHTTPException(409, "Current incident evidence does not match this proposal", oc.POLICY_DENIED)
     claim = await db.execute(update(ResponseAction).where(ResponseAction.id == action.id,
                              ResponseAction.status == action.status).values(status=target))
     if claim.rowcount != 1:
-        raise HTTPException(409, "Action changed concurrently")
+        raise OutcomeHTTPException(409, "Action changed concurrently", oc.CONFLICT)
     if operation == "execute" and action.action_type in (*WAF_TYPES, WATCH):
         stamp = network_service.now().timestamp()
         action.snapshot = {"start": stamp, "deadline": stamp + (current.proposed_ttl_seconds or 180)}
     elif operation == "execute" and action.action_type == COLLECT:
         if not is_enrolled(action.agent_id) or action.agent_id not in connection_manager.authenticated_connections:
-            raise HTTPException(409, "Authenticated Agent is offline")
+            raise OutcomeHTTPException(409, "Authenticated Agent is offline", oc.AGENT_OFFLINE)
         start = monotonic()
         records = await related_records(db, incident, investigation)
         queued = await network_service.queue_command(db, action.agent_id, actor)

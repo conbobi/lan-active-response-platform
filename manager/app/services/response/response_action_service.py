@@ -19,6 +19,7 @@ from app.services.common.setting_service import SettingService
 from app.core.exceptions import (
     NotFoundError,
     BadRequestError,
+    PolicyDeniedError,
     FlappingCooldownError
 )
 
@@ -64,7 +65,9 @@ class ResponseActionService:
             from app.services.response.http_investigation import http_behavior
             incident = await self.session.get(Incident, incident_id)
             if incident and http_behavior(incident):
-                raise BadRequestError("Use evidence-scoped response proposals for HTTP incidents")
+                raise PolicyDeniedError(
+                    "HTTP incidents use evidence-scoped proposals in AI Response Assist; host containment "
+                    "requires verified process or socket evidence.", extra={"use": "response_assist"})
         if is_reserved_action(action_type):
             raise BadRequestError("Use the authenticated network action endpoint")
         action_params = dict(action_params or {})

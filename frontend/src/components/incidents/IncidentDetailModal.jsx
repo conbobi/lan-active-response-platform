@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '../ui/Modal';
 import FilterTabs from '../ui/FilterTabs';
@@ -13,6 +13,7 @@ import { executeIncidentAction, updateIncidentStatus, getIncident, closeIncident
 import { useAgents } from '../../hooks/useAgents';
 
 import ResponseAssist from './ResponseAssist';
+import OperatorTokenPrompt from '../common/OperatorTokenPrompt';
 import AIAnalysisTab from './AIAnalysisTab';
 
 const STORYBOARD_TABS = [
@@ -46,6 +47,9 @@ export default function IncidentDetailModal({
   onRefresh,
 }) {
   const [tab, setTab] = useState('story');
+  const tabTouched = useRef(false);
+  const [tokenReason, setTokenReason] = useState('');
+  const selectTab = (value) => { tabTouched.current = true; setTab(value); };
   const [detailedIncident, setDetailedIncident] = useState(incident);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionToast, setActionToast] = useState(null);
@@ -57,6 +61,23 @@ export default function IncidentDetailModal({
   const [isSubmittingClose, setIsSubmittingClose] = useState(false);
 
   const { agents, refreshAgents } = useAgents();
+
+  // HTTP incidents are answered by evidence-scoped proposals in AI Response Assist; the host
+  // containment and legacy suggestion paths refuse them (RESPONSE_ROOT_CAUSE.md).
+  const httpIncident = detailedIncident?.detection_evidence?.behavior?.evidence_type === 'http';
+  useEffect(() => {
+    if (httpIncident && !tabTouched.current) setTab('assist');
+  }, [httpIncident]);
+
+  const refreshIncident = async () => {
+    if (!detailedIncident?.id) return;
+    try {
+      setDetailedIncident(await getIncident(detailedIncident.id));
+    } catch {
+      // Keep the current view when the refresh fails.
+    }
+    if (onRefresh) onRefresh();
+  };
 
   // Find agent to check isolation state
   const targetAgent = agents.find((a) => a.id === detailedIncident?.agentId);
@@ -99,9 +120,11 @@ export default function IncidentDetailModal({
       setDetailedIncident(updated);
     } catch (err) {
       console.error(`Action error ${actionType}:`, err);
-      const errMsg = err.message || `Lỗi khi thực hiện ${actionType}`;
+      const errMsg = `${err.outcome ? `[${err.outcome}] ` : ''}${err.message || `Lỗi khi thực hiện ${actionType}`}`;
       toast.error(errMsg);
       showToast(errMsg, 'error');
+      if (err.use === 'response_assist') selectTab('assist');
+      if (err.outcome === 'AUTHORIZATION_FAILED') setTokenReason(err.message);
     } finally {
       setActionLoading(false);
     }
@@ -122,6 +145,7 @@ export default function IncidentDetailModal({
       const errMsg = `Không thể cập nhật trạng thái: ${err.message}`;
       toast.error(errMsg);
       showToast(errMsg, 'error');
+      if (err.outcome === 'AUTHORIZATION_FAILED') setTokenReason(err.message);
     } finally {
       setActionLoading(false);
     }
@@ -194,9 +218,15 @@ export default function IncidentDetailModal({
           </div>
         )}
 
+        {tokenReason && (
+          <OperatorTokenPrompt reason={tokenReason} onSaved={() => setTokenReason('')} />
+        )}
+
         {/* 1. HERO NARRATIVE BANNER */}
         <HeroBanner
           incident={detailedIncident}
+          httpIncident={httpIncident}
+          onOpenAssist={() => selectTab('assist')}
           onAction={handleAction}
           actionLoading={actionLoading}
           isIsolated={isIsolated}
@@ -207,7 +237,7 @@ export default function IncidentDetailModal({
           <FilterTabs
             tabs={STORYBOARD_TABS}
             active={tab}
-            onChange={setTab}
+            onChange={selectTab}
           />
         </div>
 
@@ -241,6 +271,9 @@ export default function IncidentDetailModal({
           {tab === 'actions' && (
             <ActionSuggestions
               incident={detailedIncident}
+              httpIncident={httpIncident}
+              onOpenAssist={() => selectTab('assist')}
+              onRefresh={refreshIncident}
               onAction={handleAction}
               actionLoading={actionLoading}
               isIsolated={isIsolated}
@@ -256,7 +289,7 @@ export default function IncidentDetailModal({
           {tab === 'ai' && (
             <AIAnalysisTab
               incidentId={detailedIncident.id}
-              httpIncident={detailedIncident.detection_evidence?.behavior?.evidence_type === 'http'}
+              httpIncident={httpIncident}
             />
           )}
         </div>

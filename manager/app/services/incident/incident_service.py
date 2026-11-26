@@ -20,7 +20,7 @@ from app.repositories.incident_repository import IncidentRepository
 from app.repositories.command_repository import CommandRepository
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 from app.schemas.enums import IncidentSeverity, IncidentStatus, CommandStatus
-from app.core.exceptions import NotFoundError, BadRequestError
+from app.core.exceptions import NotFoundError, BadRequestError, InsufficientEvidenceError, PolicyDeniedError
 from app.core.agent_health import as_utc
 from app.services.core.base import AbstractService
 from app.services.core.command_dispatcher import command_dispatcher
@@ -684,7 +684,7 @@ class IncidentService(AbstractService[IncidentRepository]):
         elif action_type == "kill_process_tree":
             process = (inc.detection_evidence or {}).get("process")
             if inc.process_activity != "running" or not process or params.get("pid") != process["pid"]:
-                raise BadRequestError("The incident has no verified process identity for this PID")
+                raise InsufficientEvidenceError("The incident has no verified process identity for this PID")
             from app.services.response.response_action_service import ResponseActionService
             act = await ResponseActionService(self.session).create_and_apply_action(
                 agent_id=agent_id, action_type=action_type, incident_id=incident_id, actor=user,
@@ -697,7 +697,8 @@ class IncidentService(AbstractService[IncidentRepository]):
             result_msg = f"Queued process termination for PID {process['pid']} (Action: {act.id})."
 
         elif action_type == "block_ip":
-            raise BadRequestError("Use the Agent firewall controls to apply an IP rule.")
+            raise PolicyDeniedError("Use the Agent firewall controls or AI Response Assist to apply an IP rule.",
+                                    extra={"use": "response_assist"})
 
         else:
             raise BadRequestError(f"Unknown action_type '{action_type}'.")

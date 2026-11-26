@@ -36,7 +36,15 @@ api.interceptors.response.use(
         const message = Array.isArray(detail)
             ? detail.map(item => item.msg).filter(Boolean).join(' · ')
             : detail || err.response?.data?.error || err.message || 'Something went wrong';
-        return Promise.reject(new Error(message));
+        const error = new Error(message);
+        // Keep the machine-readable outcome so callers can tell authorization, policy, evidence
+        // and Agent availability failures apart (RESPONSE_ROOT_CAUSE.md).
+        error.status = err.response?.status;
+        error.outcome = err.response?.data?.outcome_code
+            || (err.response ? undefined : 'NETWORK_ERROR');
+        error.use = err.response?.data?.use;
+        error.requestId = err.response?.data?.request_id;
+        return Promise.reject(error);
     }
 );
 

@@ -31,6 +31,7 @@ from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
 from app.models.web_access_log import WebAccessLog
 from app.models.network_snapshot import NetworkSnapshot
+from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase
 
 __all__ = [
     "Base",
@@ -68,4 +69,6 @@ __all__ = [
     "RuleCandidate",
     "RuleVersion",
     "WebAccessLog",
+    "AIAnalysisCache",
+    "IncidentPatternCase",
 ]
