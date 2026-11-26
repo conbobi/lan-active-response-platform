@@ -53,7 +53,7 @@ async def get_ai_metrics(
 
         all_rules = (await db.execute(select(RuleCandidate))).scalars().all()
         by_status = {name: sum(1 for r in all_rules if r.status == name)
-                     for name in ("pending", "validated", "rejected", "active", "disabled")}
+                     for name in ("pending", "validated", "monitoring", "rejected", "active", "disabled")}
         by_source: Dict[str, int] = {}
         for r in all_rules:
             by_source[r.source or "unknown"] = by_source.get(r.source or "unknown", 0) + 1

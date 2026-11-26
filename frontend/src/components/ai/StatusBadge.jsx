@@ -37,6 +37,15 @@ const statusConfig = {
     border: 'rgba(251, 113, 133, 0.3)',
     dotColor: '#fb7185'
   },
+  monitoring: {
+    label: 'Đang giám sát',
+    classes: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+    dot: 'bg-amber-400',
+    color: '#fbbf24',
+    bg: 'rgba(251, 191, 36, 0.12)',
+    border: 'rgba(251, 191, 36, 0.3)',
+    dotColor: '#fbbf24'
+  },
   active: {
     label: 'Đang chạy',
     classes: 'bg-teal-500/15 text-teal-300 border-teal-500/40 font-semibold',

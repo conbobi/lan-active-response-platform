@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rule_candidate import RuleCandidate
+from app.models.rule_monitor_hit import RuleMonitorHit
 from app.models.agent import Agent
 from app.services.agent.activity import process_identity, socket_key
 from app.core.agent_health import as_utc
@@ -180,13 +181,17 @@ class RuleEngine:
 
         rules = await self._get_active_rules(session)
         matches: List[RuleMatch] = []
+        monitored: List[RuleMatch] = []
         for rule in rules:
             try:
                 rule_matches = self._evaluate_rule(rule, telemetry)
-                matches.extend(rule_matches)
+                (monitored if rule.get("mode") == "monitoring" else matches).extend(rule_matches)
             except Exception as e:
                 logger.error(f"rule_engine: rule '{rule.get('rule_name')}' eval failed: {e}")
                 continue
+        if monitored:
+            # Monitoring mode: record the match for analyst review, never raise an incident.
+            await self._record_monitor_hits(monitored, agent_id, session)
 
         # Safe-process suppression is applied inside sigma_runtime.matching_events (shared with the validator).
 
@@ -288,7 +293,7 @@ class RuleEngine:
             if now - self._cache_loaded_at < self.CACHE_TTL_SEC:
                 return self._cached_rules
 
-            stmt = select(RuleCandidate).where(RuleCandidate.status == "active")
+            stmt = select(RuleCandidate).where(RuleCandidate.status.in_(("active", "monitoring")))
             result = await session.execute(stmt)
             rules_db = result.scalars().all()
 
@@ -319,6 +324,7 @@ class RuleEngine:
                         "detection": rule_dict.get("detection", {}),
                         "logsource": rule_dict.get("logsource", {}),
                         "sigma": rule_dict,
+                        "mode": r.status,
                     })
                 except yaml.YAMLError as e:
                     logger.warning(f"rule_engine: invalid YAML for rule {r.id}: {e}")
@@ -491,6 +497,38 @@ class RuleEngine:
         if key:
             saved["network"] = dict(zip(("protocol", "src_ip", "src_port", "dst_ip", "dst_port"), key))
         return saved
+
+    async def _record_monitor_hits(self, monitored: List[RuleMatch], agent_id: str, session: AsyncSession) -> int:
+        """Store each distinct process instance a monitoring rule matched (deduplicated per rule)."""
+        added = 0
+        seen = set()
+        for match in monitored:
+            saved = self._historical_match(match)
+            evidence_id = saved.get("evidence_id")
+            if not evidence_id:
+                continue
+            try:
+                rule_id = uuid.UUID(str(match.rule_id))
+            except ValueError:
+                continue
+            if (rule_id, evidence_id) in seen:
+                continue
+            seen.add((rule_id, evidence_id))
+            exists = await session.scalar(select(RuleMonitorHit.id).where(
+                RuleMonitorHit.rule_id == rule_id, RuleMonitorHit.evidence_id == evidence_id))
+            if exists:
+                continue
+            process = dict(saved.get("process") or {})
+            if saved.get("parent"):
+                process["parent"] = saved["parent"]
+            process["matched_fields"] = saved.get("matched_fields")
+            session.add(RuleMonitorHit(rule_id=rule_id, agent_id=str(agent_id), evidence_id=evidence_id,
+                                       process=process))
+            added += 1
+        if added:
+            await session.flush()
+            logger.info(f"rule_engine: {added} monitoring hit(s) recorded for agent={agent_id}")
+        return added
 
     @staticmethod
     def _last_detection(incident, now):

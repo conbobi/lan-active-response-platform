@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
@@ -12,6 +13,8 @@ from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
 from app.services.ai.harvest_service import GenerationError, harvest_service
 from app.services.ai.validation_service import validation_service
+from app.services.ai import rule_assistant
+from app.models.rule_monitor_hit import RuleMonitorHit
 
 logger = logging.getLogger("larp.api.rules")
 router = APIRouter()
@@ -48,6 +51,28 @@ class UpdateRuleRequest(BaseModel):
     severity: Optional[str] = None
     notes: Optional[str] = None
     analyst_id: Optional[str] = "soc_analyst"
+
+
+class AssistantAnswer(BaseModel):
+    slot: str
+    value: Any
+    replace: Optional[List[str]] = None
+
+
+class AssistantRequest(BaseModel):
+    message: Optional[str] = Field(None, max_length=2000, description="Analyst's natural-language request")
+    context: Optional[str] = Field("", max_length=8000, description="Earlier analyst messages, for grounding")
+    intent: Optional[Dict[str, Any]] = None
+    answer: Optional[AssistantAnswer] = None
+
+
+class AssistantCreateRequest(BaseModel):
+    intent: Dict[str, Any]
+    description: Optional[str] = Field("", max_length=8000)
+    model_used: bool = False
+
+
+MONITOR_MIN_HOURS = float(os.getenv("RULE_MONITOR_MIN_HOURS", "24"))
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────
@@ -102,6 +127,112 @@ async def harvest_rule(
     except Exception as e:
         logger.error(f"Error in /harvest: {e}", exc_info=True)
         return {"error": f"Failed to harvest rule: {str(e)}"}
+
+
+@router.post("/assistant")
+async def rule_assistant_turn(body: AssistantRequest, db: AsyncSession = Depends(get_db)):
+    """One conversation turn: the model fills a grounded intent; missing pieces become questions."""
+    intent, _ = rule_assistant.sanitize(body.intent or {})
+    notices: List[str] = []
+    error = None
+    model_used = False
+    if body.answer is not None:
+        try:
+            intent = rule_assistant.apply_answer(intent, body.answer.slot, body.answer.value, body.answer.replace)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    elif body.message and body.message.strip():
+        try:
+            intent, notices = await rule_assistant.extract(body.message, intent, context=body.context or "")
+            model_used = True
+        except rule_assistant.GenerationError as exc:
+            error = f"AI không phản hồi được ({exc}). Bạn có thể điền trực tiếp các ô bên dưới."
+    observed = await rule_assistant.observed_options(db)
+    asks = rule_assistant.questions(intent, observed)
+    sigma_yaml = None
+    if not asks:
+        try:
+            sigma_yaml, _ = rule_assistant.compile_rule(intent, body.context or body.message or "")
+        except ValueError as exc:
+            asks = [{"slot": "child", "text": f"Chưa tạo được rule: {exc}", "options": [], "allow_text": True}]
+    return {"intent": intent, "questions": asks, "ready": not asks, "sigma_yaml": sigma_yaml,
+            "notices": notices, "model_used": model_used, "model": rule_assistant.DEFAULT_MODEL, "error": error}
+
+
+@router.post("/assistant/create")
+async def rule_assistant_create(request: Request, body: AssistantCreateRequest, db: AsyncSession = Depends(get_db)):
+    """Compile the confirmed intent, validate it, dry-run it on recent telemetry and start monitoring."""
+    intent, _ = rule_assistant.sanitize(body.intent)
+    try:
+        rule_yaml, rule = rule_assistant.compile_rule(intent, body.description or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    operator = request.state.operator or "soc_analyst"
+    now = datetime.now(timezone.utc)
+    candidate = RuleCandidate(
+        id=uuid.uuid4(), rule_yaml=rule_yaml, rule_name=rule["title"][:255], source="ai_assistant",
+        status="pending", severity=rule["level"], created_at=now,
+        mitre_techniques=[t.split(".", 1)[1].upper() for t in rule.get("tags", [])],
+        created_by=operator, model_generated=rule_assistant.DEFAULT_MODEL if body.model_used else None,
+        harvest_prompt=body.description or None,
+        notes="Tạo từ Rule Assistant: AI trích ý định, rule do bộ biên dịch cố định sinh ra.")
+    db.add(candidate)
+    db.add(RuleVersion(rule_candidate_id=candidate.id, version_number=1, yaml_content=rule_yaml,
+                       change_reason="Rule Assistant", created_at=now, created_by=operator))
+    validation = await validation_service.validate_rule(rule_yaml=rule_yaml, db_session=db)
+    validation["engine_supported"] = True
+    preview = await rule_assistant.preview_recent(rule, db)
+    candidate.validation_result = {**validation, "recent_telemetry": preview}
+    candidate.fpr, candidate.precision, candidate.recall = (validation.get("fpr"), validation.get("precision"),
+                                                            validation.get("recall"))
+    candidate.false_positive_samples = validation.get("fp_samples", [])
+    candidate.validated_at = now
+    # Monitoring mode: the engine evaluates it on live telemetry and records hits; no incident is raised.
+    candidate.status = "monitoring"
+    await db.commit()
+    from app.services.rule_engine import rule_engine
+    rule_engine.invalidate_cache()
+    return {"rule_id": str(candidate.id), "rule_name": candidate.rule_name, "status": candidate.status,
+            "rule_yaml": rule_yaml, "validation_result": validation, "recent_telemetry": preview,
+            "promotion": promotion_gate(candidate)}
+
+
+def promotion_gate(candidate: RuleCandidate, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Can an analyst switch this rule to active (incident-raising)?"""
+    result = candidate.validation_result or {}
+    verdict = result.get("verdict")
+    supported, reason = engine_support(candidate.rule_yaml)
+    if not supported:
+        return {"allowed": False, "reason": f"Detection Engine không hỗ trợ rule này: {reason}"}
+    if result.get("passed"):
+        return {"allowed": True, "reason": "Kiểm định trên dữ liệu có nhãn đạt."}
+    if verdict == "INCONCLUSIVE" and candidate.status == "monitoring" and candidate.validated_at:
+        started = candidate.validated_at if candidate.validated_at.tzinfo else candidate.validated_at.replace(tzinfo=timezone.utc)
+        hours = ((now or datetime.now(timezone.utc)) - started).total_seconds() / 3600
+        if hours >= MONITOR_MIN_HOURS:
+            return {"allowed": True, "reason": f"Chưa có dữ liệu có nhãn phù hợp; đã giám sát {hours:.0f} giờ trên telemetry thật."}
+        return {"allowed": False, "reason": f"Chưa có dữ liệu có nhãn phù hợp: cần giám sát ít nhất {MONITOR_MIN_HOURS:.0f} giờ "
+                                            f"(còn {MONITOR_MIN_HOURS - hours:.1f} giờ) và xem lại các lần khớp."}
+    return {"allowed": False, "reason": f"Kiểm định không đạt: {result.get('reason') or 'chưa kiểm định'}"}
+
+
+@router.get("/{rule_id}/monitor-hits")
+async def rule_monitor_hits(rule_id: str, limit: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db)):
+    try:
+        target = uuid.UUID(rule_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Rule not found") from exc
+    candidate = await db.get(RuleCandidate, target)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    total = await db.scalar(select(func.count()).select_from(RuleMonitorHit).where(RuleMonitorHit.rule_id == target))
+    rows = (await db.scalars(select(RuleMonitorHit).where(RuleMonitorHit.rule_id == target)
+                             .order_by(desc(RuleMonitorHit.observed_at)).limit(limit))).all()
+    return {"rule_id": rule_id, "status": candidate.status, "total": total or 0,
+            "promotion": promotion_gate(candidate),
+            "items": [{"agent_id": h.agent_id, "evidence_id": h.evidence_id,
+                       "observed_at": h.observed_at.isoformat() if h.observed_at else None,
+                       "process": h.process} for h in rows]}
 
 
 @router.put("/{rule_id}")
@@ -298,15 +429,14 @@ async def activate_rule(
         if not candidate:
             return {"error": f"Rule candidate '{rule_id}' not found"}
 
-        if candidate.status != "validated":
+        if candidate.status not in ("validated", "monitoring"):
             return {
-                "error": f"Không thể kích hoạt rule ở trạng thái '{candidate.status}'. Chỉ rule đã kiểm định đạt mới được kích hoạt."
+                "error": f"Không thể kích hoạt rule ở trạng thái '{candidate.status}'. Chỉ rule đã kiểm định đạt "
+                         "hoặc đang giám sát mới được kích hoạt."
             }
-        if not (candidate.validation_result or {}).get("passed"):
-            return {"error": "Rule chưa có kết quả kiểm định đạt; hãy kiểm định lại trước khi kích hoạt."}
-        supported, support_reason = engine_support(candidate.rule_yaml)
-        if not supported:
-            return {"error": f"Detection Engine không hỗ trợ rule này: {support_reason}"}
+        gate = promotion_gate(candidate)
+        if not gate["allowed"]:
+            return {"error": gate["reason"]}
 
         candidate.status = "active"
         candidate.activated_at = datetime.now(timezone.utc)

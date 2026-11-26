@@ -20,6 +20,7 @@ import {
 import api from '../api/api';
 import { harvestRule } from '../api/rules';
 import ValidationResultPanel from '../components/ai/ValidationResultPanel';
+import RuleAssistant from '../components/ai/RuleAssistant';
 import './AIHarvestPlayground.css';
 
 const SAMPLE_CTI_REPORTS = [
@@ -59,6 +60,7 @@ The web server subsequently executes the uploaded file or invokes bash/sh to exe
 export default function AIHarvestPlayground() {
   const navigate = useNavigate();
 
+  const [mode, setMode] = useState('assistant');
   const [ctiText, setCtiText] = useState('');
   const [analystId, setAnalystId] = useState('soc_analyst');
   const [generating, setGenerating] = useState(false);
@@ -229,7 +231,19 @@ export default function AIHarvestPlayground() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: '0.5rem', margin: '0 0 1rem' }}>
+        {[['assistant', 'Trợ lý tạo rule (ngôn ngữ tự nhiên)'], ['cti', 'Sigma từ báo cáo CTI (nâng cao)']].map(([key, label]) => (
+          <button key={key} onClick={() => setMode(key)} className="harvest-btn-secondary"
+                  style={mode === key ? { borderColor: '#58a6ff', color: '#ffffff', background: '#1f6feb33' } : undefined}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'assistant' && <RuleAssistant />}
+
       {/* ── MAIN 2-COLUMN PLAYGROUND ────────────────────────────────────── */}
+      {mode === 'cti' && (
       <div className="harvest-grid">
         {/* Left Column: CTI Input */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -446,6 +460,7 @@ export default function AIHarvestPlayground() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

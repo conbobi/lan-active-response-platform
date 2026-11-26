@@ -40,9 +40,9 @@ import './AIDashboard.fallback.css';
 
 const STATUS_TEXT = {
   pending: 'Chờ kiểm định', validating: 'Đang kiểm định', validated: 'Đã kiểm định',
-  active: 'Đang chạy', rejected: 'Bị từ chối', disabled: 'Đã tắt',
+  monitoring: 'Đang giám sát', active: 'Đang chạy', rejected: 'Bị từ chối', disabled: 'Đã tắt',
 };
-const SOURCE_TEXT = { all: 'Tất cả', ai_harvest: 'AI', template_fallback: 'Mẫu dự phòng', human: 'Thủ công' };
+const SOURCE_TEXT = { all: 'Tất cả', ai_harvest: 'AI', template_fallback: 'Mẫu dự phòng', ai_assistant: 'Trợ lý AI', human: 'Thủ công' };
 
 export default function AIDashboard() {
   const navigate = useNavigate();
@@ -468,7 +468,7 @@ export default function AIDashboard() {
             {/* Status Tabs */}
             <div className="flex items-center gap-1 ai-filter-group">
               <span className="text-gray-500 font-medium mr-1">Trạng thái:</span>
-              {['all', 'pending', 'validated', 'active', 'rejected', 'disabled'].map((st) => (
+              {['all', 'pending', 'validated', 'monitoring', 'active', 'rejected', 'disabled'].map((st) => (
                 <button
                   key={st}
                   onClick={() => setStatusFilter(st)}
@@ -633,7 +633,17 @@ export default function AIDashboard() {
                           </button>
                         </>
                       )}
-                      {rule.status === 'active' && (
+                      {rule.status === 'monitoring' && (
+                        <button
+                          onClick={() => handleActivate(rule.id)}
+                          disabled={actionLoading[rule.id] === 'activating'}
+                          className="ai-action-btn ai-action-btn-activate px-2.5 py-1 text-[11px] font-semibold rounded bg-emerald-600/80 hover:bg-emerald-600 text-white transition whitespace-nowrap"
+                          title="Chuyển từ giám sát sang tạo incident (cần kiểm định đạt hoặc đủ thời gian giám sát)"
+                        >
+                          Bật chính thức
+                        </button>
+                      )}
+                      {(rule.status === 'active' || rule.status === 'monitoring') && (
                         <button
                           onClick={() => handleDisable(rule.id)}
                           disabled={actionLoading[rule.id] === 'disabling'}

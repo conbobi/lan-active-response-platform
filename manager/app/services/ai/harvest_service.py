@@ -3,7 +3,6 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List
-import httpx
 import yaml
 
 from app.services.ai.harvest_context import expected_product, process_context, validate_selection, web_shell_context
@@ -12,6 +11,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
 from app.services.ai.ai_client import DEFAULT_MODEL, OLLAMA_URL
+from app.services.ai.ollama_json import GenerationError, raw_generate
 
 DEFAULT_HARVEST_MODEL = os.getenv("HARVEST_MODEL") or DEFAULT_MODEL
 
@@ -69,8 +69,6 @@ WEB_SHELL_PROMPT = (
 )
 
 
-class GenerationError(ValueError):
-    """No usable model-generated candidate was produced."""
 
 
 class HarvestService:
@@ -150,10 +148,7 @@ class HarvestService:
     async def _call_llm_for_sigma(self, text: str, feedback: str | None = None) -> str:
         """One bounded Ollama generation constrained to the supported Sigma subset.
 
-        The harvest model (Foundation-Sec-8B-Reasoning) always reasons before answering and its
-        template has no switch to disable that, so /api/chat spent the whole token budget on
-        hidden reasoning and returned empty content. The prompt is sent raw in the model's chat
-        format with an empty reasoning block, so the token budget goes to the JSON answer.
+        See ollama_json for why the prompt is sent raw with an empty reasoning block.
         """
         try:
             process_context(text)
@@ -166,32 +161,9 @@ class HarvestService:
         if feedback:
             task += (f"\nYour previous answer was rejected: {feedback}\n"
                      "Write a corrected rule: drop every value named above and keep only values that satisfy the rules.")
-        prompt = (f"<|system|>\n{system}\n<|user|>\nReport:\n{text.strip()[:4000]}\n\n{task}\n"
-                  "<|assistant|>\n<think>\n\n</think>\n")
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "raw": True,
-            "format": sigma_output_schema(platform),
-            "stream": False,
-            "keep_alive": "5m",
-            "options": {"temperature": 0.3 if feedback else 0.1, "num_predict": 512, "top_p": 0.9},
-        }
-        timeout = httpx.Timeout(float(os.getenv("HARVEST_TIMEOUT_SECONDS", "120")), connect=5.0)
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(f"{self.ollama_url}/api/generate", json=payload)
-                resp.raise_for_status()
-                body = resp.json()
-        except httpx.TimeoutException as exc:
-            raise GenerationError("Ollama generation timed out") from exc
-        except (httpx.HTTPError, ValueError) as exc:
-            raise GenerationError(f"Ollama generation failed: {exc}") from exc
-        if not isinstance(body, dict) or not isinstance(body.get("response"), str):
-            raise GenerationError("Ollama returned no generated text")
-        if body.get("done_reason") == "length":
-            raise GenerationError("Model output was truncated at the token limit")
-        return body["response"]
+        return await raw_generate(self.ollama_url, self.model, system,
+                                  f"Report:\n{text.strip()[:4000]}\n\n{task}", sigma_output_schema(platform),
+                                  temperature=0.3 if feedback else 0.1)
 
     def _extract_and_validate_yaml(self, raw_text, cti_text):
         if not isinstance(raw_text, str) or not raw_text.strip() or "```" in raw_text:

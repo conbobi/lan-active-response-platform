@@ -131,7 +131,7 @@ OWN_AUTHORIZATION = [re.compile(p) for p in (
 # Only these candidate mutations grant write access to scoped SOC operators.
 _AI_RULES = r"/api/(?:v1/)?rules"
 RULE_WRITES = {
-    "POST": re.compile(rf"{_AI_RULES}/(?:harvest|{_ID}/(?:validate|activate|reject|disable))/?"),
+    "POST": re.compile(rf"{_AI_RULES}/(?:harvest|assistant(?:/create)?|{_ID}/(?:validate|activate|reject|disable))/?"),
     "PUT": re.compile(rf"{_AI_RULES}/{_ID}/?"),
 }
 # Incident workflow calls any configured operator (analyst or admin) may make. They change incident

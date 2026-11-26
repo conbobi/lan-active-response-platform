@@ -22,6 +22,7 @@ import StatusBadge from '../components/ai/StatusBadge';
 import SourceBadge from '../components/ai/SourceBadge';
 import MITRETags from '../components/ai/MITRETags';
 import ValidationResultPanel from '../components/ai/ValidationResultPanel';
+import MonitorHitsPanel from '../components/ai/MonitorHitsPanel';
 import './RuleDetail.css';
 
 // Shared client: sends the signed-in JWT. Returns the backend's {error} shape on failure so the
@@ -233,7 +234,7 @@ export default function RuleDetail() {
             </button>
           )}
 
-          {rule.status === 'validated' && (
+          {(rule.status === 'validated' || rule.status === 'monitoring') && (
             <>
               <button
                 onClick={handleActivate}
@@ -254,7 +255,7 @@ export default function RuleDetail() {
             </>
           )}
 
-          {rule.status === 'active' && (
+          {(rule.status === 'active' || rule.status === 'monitoring') && (
             <button
               onClick={handleDisable}
               disabled={actionLoading}
@@ -409,6 +410,9 @@ export default function RuleDetail() {
       {/* TAB 2: VALIDATION RESULTS */}
       {activeTab === 'validation' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', width: '100%' }}>
+          {(rule.status === 'monitoring' || rule.source === 'ai_assistant') && (
+            <MonitorHitsPanel ruleId={id} refreshKey={rule.status} />
+          )}
           <ValidationResultPanel result={rule.validation_result} />
         </div>
       )}
