@@ -1,21 +1,76 @@
-import logging
 import os
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, List
 import httpx
 import yaml
 
+from app.services.ai.harvest_context import expected_product, process_context, validate_selection, web_shell_context
+from app.services.detection import sigma_runtime
 from app.core.database import AsyncSessionLocal
 from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
 from app.services.ai.ai_client import DEFAULT_MODEL, OLLAMA_URL
 
-logger = logging.getLogger("larp.ai.harvest")
-
 DEFAULT_HARVEST_MODEL = os.getenv("HARVEST_MODEL") or DEFAULT_MODEL
-FALLBACK_MODEL = DEFAULT_MODEL
+
+
+# Selection keys the model may emit: exactly the process fields and modifiers the runtime executes.
+SELECTION_FIELDS = ("ParentImage", "ParentCommandLine", "Image", "CommandLine")
+SELECTION_MODIFIERS = ("contains", "endswith", "startswith")
+MAX_ATTEMPTS = max(1, min(3, int(os.getenv("HARVEST_MAX_ATTEMPTS", "2"))))
+
+
+def sigma_output_schema(platform):
+    """Constrain model output to the runtime-supported Sigma subset; observables come from the CTI."""
+    def mapping(properties, required=None):
+        return {"type": "object", "properties": properties, "required": required or list(properties),
+                "additionalProperties": False}
+
+    string = {"type": "string", "minLength": 1}
+    value = {"anyOf": [string, {"type": "array", "items": string, "minItems": 1, "maxItems": 8}]}
+    keys = [f"{f}|{m}" for f in SELECTION_FIELDS for m in SELECTION_MODIFIERS]
+    selection = {"type": "object", "properties": {k: value for k in keys}, "additionalProperties": False,
+                 "minProperties": 1}
+    return mapping({
+        "title": string,
+        "logsource": mapping({"product": {"enum": [platform] if platform else ["linux", "windows"]},
+                              "category": {"const": "process_creation"}}),
+        "detection": mapping({"selection": selection, "condition": {"const": "selection"}}),
+        "level": {"enum": ["low", "medium", "high", "critical"]},
+        "tags": {"type": "array", "minItems": 1, "maxItems": 4,
+                 "items": {"type": "string", "pattern": "^attack\\.t[0-9]{4}(\\.[0-9]{3})?$"}},
+    })
+
+
+SYSTEM_PROMPT = (
+    "You write Sigma detection rules as one JSON object. No Markdown, no prose.\n"
+    "Fields in detection.selection are ANDed; a list value means any of its values (OR). "
+    "Values are literal strings matched with the field modifier; no wildcards.\n"
+    "Use only concrete process observables named in the report: executable paths, script names, command fragments. "
+    "Never use narrative words such as adversaries, attackers, exploit, malicious or suspicious as values.\n"
+    "Image and ParentImage are executable paths without arguments (match them with endswith, e.g. /nginx, /bash); "
+    "script names and arguments belong in CommandLine or ParentCommandLine with contains.\n"
+    "Tags are MITRE ATT&CK ids such as attack.t1059.004.\n"
+    "Example (a different scenario, for format and field use only):\n"
+    "Report: The PostgreSQL server (/usr/lib/postgresql/16/bin/postgres) was abused with COPY FROM PROGRAM; "
+    "the database process started /bin/sh -c and ran curl and wget to fetch a payload.\n"
+    '{"title":"PostgreSQL Server Spawning Shell Downloader","logsource":{"product":"linux","category":"process_creation"},'
+    '"detection":{"selection":{"ParentImage|endswith":"/postgres","Image|endswith":["/sh","/bash","/dash"],'
+    '"CommandLine|contains":["curl ","wget "]},"condition":"selection"},"level":"high","tags":["attack.t1059.004"]}'
+)
+WEB_SHELL_PROMPT = (
+    "\nFor a web server or web application spawning a shell, one selection must require all three: "
+    "the web service parent (its executable in ParentImage|endswith, or the web application script or server name in "
+    "ParentCommandLine|contains; never a bare interpreter such as python3), the Unix child shell in Image|endswith, "
+    "and the command line evidence the report describes (reconnaissance commands, download tools or shell chaining) "
+    "in CommandLine|contains. Tag attack.t1059.004."
+)
+
+
+class GenerationError(ValueError):
+    """No usable model-generated candidate was produced."""
 
 
 class HarvestService:
@@ -37,23 +92,19 @@ class HarvestService:
     ) -> RuleCandidate:
         """
         Harvest Sigma rule from CTI report.
-        Calls Ollama, validates syntax, retries once on failure,
+        Calls Ollama, validates the result,
         and saves candidate in DB with status='pending'.
         """
-        raw_output = await self._call_llm_for_sigma(cti_text)
-        yaml_content, parsed_dict = self._extract_and_validate_yaml(raw_output)
-
-        used_fallback = parsed_dict is None
-        if parsed_dict is None:
-            # Fallback directly to template generation to prevent Cloudflare 100s timeout
-            logger.info("Harvest LLM output was invalid or timed out. Generating deterministic fallback Sigma rule...")
-            yaml_content, parsed_dict = self._generate_fallback_yaml(cti_text)
-
-        # Extract metadata
-        rule_name = str(parsed_dict.get("title", f"AI Harvested Rule - {datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}"))
-        severity = str(parsed_dict.get("level", "medium")).lower()
-        if severity not in ["low", "medium", "high", "critical"]:
-            severity = "medium"
+        feedback = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            raw_output = await self._call_llm_for_sigma(cti_text, feedback)
+            try:
+                yaml_content, parsed_dict = self._extract_and_validate_yaml(raw_output, cti_text)
+                break
+            except GenerationError as exc:
+                if attempt == MAX_ATTEMPTS:
+                    raise GenerationError(f"{exc} (after {attempt} model attempt(s))") from exc
+                feedback = str(exc)
 
         mitre_techniques = self._extract_mitre_techniques(parsed_dict.get("tags", []))
 
@@ -61,18 +112,16 @@ class HarvestService:
         candidate = RuleCandidate(
             id=uuid.uuid4(),
             rule_yaml=yaml_content,
-            rule_name=rule_name,
-            # A keyword template is not model output; label it so the UI and KPIs never count it as AI.
-            source="template_fallback" if used_fallback else "ai_harvest",
+            rule_name=parsed_dict["title"],
+            source="ai_harvest",
             status="pending",
-            severity=severity,
+            severity=parsed_dict["level"],
             mitre_techniques=mitre_techniques,
             created_at=datetime.now(timezone.utc),
             created_by=analyst_id or "soc_analyst",
-            model_generated=None if used_fallback else self.model,
+            model_generated=self.model,
             harvest_prompt=cti_text,
-            notes=("Mẫu từ khóa dự phòng: model không trả Sigma hợp lệ hoặc quá thời gian."
-                   if used_fallback else f"Sinh bởi {self.model} từ báo cáo CTI.")
+            notes=f"Sinh bởi {self.model} từ báo cáo CTI (lần thử {attempt}/{MAX_ATTEMPTS})."
         )
 
         version = RuleVersion(
@@ -98,98 +147,76 @@ class HarvestService:
 
         return candidate
 
-    async def _call_llm_for_sigma(self, text: str) -> str:
-        """Call Ollama /api/chat with the configured model and a short timeout."""
-        system_prompt = (
-            "You are a Senior Cyber Threat Detection Engineer. "
-            "Generate a valid Sigma detection rule in YAML format based on the threat intelligence report.\n"
-            "CRITICAL FORMAT RULES:\n"
-            "- Output ONLY valid YAML starting with 'title:'.\n"
-            "- Do not include introductory conversation, preamble, or markdown explanations.\n"
-            "- Required fields: title, id, status, description, tags, logsource, detection, level.\n"
-            "- Under detection, define 'selection' and 'condition: selection'."
-        )
+    async def _call_llm_for_sigma(self, text: str, feedback: str | None = None) -> str:
+        """One bounded Ollama generation constrained to the supported Sigma subset.
 
+        The harvest model (Foundation-Sec-8B-Reasoning) always reasons before answering and its
+        template has no switch to disable that, so /api/chat spent the whole token budget on
+        hidden reasoning and returned empty content. The prompt is sent raw in the model's chat
+        format with an empty reasoning block, so the token budget goes to the JSON answer.
+        """
+        try:
+            process_context(text)
+            platform = expected_product(text)
+        except ValueError as exc:
+            raise GenerationError(str(exc)) from exc
+        system = SYSTEM_PROMPT + (WEB_SHELL_PROMPT if platform == "linux" and web_shell_context(text) else "")
+        task = (f"Write the Sigma rule for product {platform}, category process_creation."
+                if platform else "Write the Sigma rule; set logsource.product from the report (linux or windows).")
+        if feedback:
+            task += (f"\nYour previous answer was rejected: {feedback}\n"
+                     "Write a corrected rule: drop every value named above and keep only values that satisfy the rules.")
+        prompt = (f"<|system|>\n{system}\n<|user|>\nReport:\n{text.strip()[:4000]}\n\n{task}\n"
+                  "<|assistant|>\n<think>\n\n</think>\n")
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Extract IOCs and generate a Sigma rule in YAML for:\n\n{text}"}
-            ],
+            "prompt": prompt,
+            "raw": True,
+            "format": sigma_output_schema(platform),
             "stream": False,
-            "keep_alive": "24h",
-            "options": {
-                "temperature": 0.1,
-                "num_predict": 350,
-                "top_p": 0.9,
-                "stop": ["```\n\n", "---", "\n\n\n\n"]
-            }
+            "keep_alive": "5m",
+            "options": {"temperature": 0.3 if feedback else 0.1, "num_predict": 512, "top_p": 0.9},
         }
-
-        # Keep timeout strictly under 45s so the entire HTTP request never exceeds 50s
-        timeout = httpx.Timeout(45.0, connect=5.0)
+        timeout = httpx.Timeout(float(os.getenv("HARVEST_TIMEOUT_SECONDS", "120")), connect=5.0)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)
-                if resp.status_code == 404 and self.model != FALLBACK_MODEL:
-                    logger.warning(f"Model {self.model} returned 404. Falling back to {FALLBACK_MODEL}")
-                    payload["model"] = FALLBACK_MODEL
-                    resp = await client.post(f"{self.ollama_url}/api/chat", json=payload)
+                resp = await client.post(f"{self.ollama_url}/api/generate", json=payload)
                 resp.raise_for_status()
-                data = resp.json()
-                return data.get("message", {}).get("content", "")
-        except Exception as e:
-            logger.warning(f"Ollama call for harvest completed or timed out: {e}")
-            return ""
+                body = resp.json()
+        except httpx.TimeoutException as exc:
+            raise GenerationError("Ollama generation timed out") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise GenerationError(f"Ollama generation failed: {exc}") from exc
+        if not isinstance(body, dict) or not isinstance(body.get("response"), str):
+            raise GenerationError("Ollama returned no generated text")
+        if body.get("done_reason") == "length":
+            raise GenerationError("Model output was truncated at the token limit")
+        return body["response"]
 
-    def _extract_and_validate_yaml(self, raw_text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-        """
-        Extract YAML block from LLM output, parse with PyYAML,
-        and ensure required Sigma keys exist (title, logsource, detection).
-        """
-        if not raw_text or not raw_text.strip():
-            return "", None
-
-        # Strip reasoning <think>...</think>
-        clean = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-        # If open <think> was cut off without closing tag
-        if "<think>" in clean and "</think>" not in clean:
-            clean = re.sub(r"<think>.*$", "", clean, flags=re.DOTALL).strip()
-
-        # Check for code fence ```yaml ... ``` or ``` ... ```
-        fence_match = re.search(r"```(?:yaml)?\s*\n(.*?)(?:```|$)", clean, re.DOTALL | re.IGNORECASE)
-        candidate_yaml = fence_match.group(1).strip() if fence_match else clean
-
-        # Also strip any leading ```yaml or trailing ```
-        candidate_yaml = re.sub(r"^```(?:yaml)?\s*\n?", "", candidate_yaml, flags=re.IGNORECASE).strip()
-        candidate_yaml = re.sub(r"\n?```\s*$", "", candidate_yaml).strip()
-
+    def _extract_and_validate_yaml(self, raw_text, cti_text):
+        if not isinstance(raw_text, str) or not raw_text.strip() or "```" in raw_text:
+            raise GenerationError("Expected raw Sigma YAML; received empty output or Markdown")
         try:
-            parsed = yaml.safe_load(candidate_yaml)
-            if not isinstance(parsed, dict):
-                return candidate_yaml, None
-
-            # Verify detection block is present (the core requirement)
-            if "detection" in parsed:
-                # Ensure minimum keys exist
-                if "title" not in parsed:
-                    parsed["title"] = "AI Harvested Threat Detection"
-                if "logsource" not in parsed:
-                    parsed["logsource"] = {"category": "process_creation", "product": "windows"}
-                if "level" not in parsed:
-                    parsed["level"] = "medium"
-                if "id" not in parsed:
-                    parsed["id"] = str(uuid.uuid4())
-                if "status" not in parsed:
-                    parsed["status"] = "experimental"
-
-                dumped = yaml.dump(parsed, sort_keys=False, default_flow_style=False)
-                return dumped, parsed
-
-            return candidate_yaml, None
-        except Exception as e:
-            logger.warning(f"Failed to parse YAML from harvest output: {e}")
-            return candidate_yaml, None
+            rule = yaml.safe_load(raw_text)
+            if not isinstance(rule, dict) or not isinstance(rule.get("title"), str) or not rule["title"].strip():
+                raise ValueError("Missing Sigma title")
+            source = rule.get("logsource")
+            if not isinstance(source, dict) or source.get("product") not in ("windows", "linux") or source.get("category") != "process_creation":
+                raise ValueError("Expected an explicit Linux or Windows process_creation logsource")
+            if rule.get("level") not in ("informational", "low", "medium", "high", "critical"):
+                raise ValueError("Missing or invalid Sigma level")
+            tags = rule.get("tags")
+            if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+                raise ValueError("Expected Sigma tags list")
+            if not any(re.fullmatch(r"attack\.t\d{4}(?:\.\d{3})?", t, re.I) for t in tags):
+                raise ValueError("Expected at least one MITRE technique tag")
+            supported, reason = sigma_runtime.check_support(rule)
+            if not supported or rule["detection"].get("condition") != "selection":
+                raise ValueError(reason if not supported else "Expected explicit condition: selection")
+            validate_selection(rule, cti_text)
+        except (yaml.YAMLError, TypeError, ValueError, re.error, AttributeError) as exc:
+            raise GenerationError(f"Invalid generated Sigma: {exc}") from exc
+        return yaml.safe_dump(rule, sort_keys=False), rule
 
     def _extract_mitre_techniques(self, tags: Any) -> List[str]:
         """Extract MITRE technique IDs from Sigma tags list."""
@@ -207,71 +234,6 @@ class HarvestService:
                 techniques.append(m.group(1).upper())
 
         return list(dict.fromkeys(techniques))  # Deduplicate
-
-    def _generate_fallback_yaml(self, cti_text: str) -> Tuple[str, Dict[str, Any]]:
-        """
-        Generate a structured, deterministic baseline Sigma rule if LLM generation timed out or failed.
-        Extracts known threat patterns, adversary tools, commands, and MITRE techniques.
-        """
-        text_lower = cti_text.lower()
-        extracted_ioc: List[str] = []
-        tags: List[str] = []
-
-        if "powershell" in text_lower:
-            tags.append("attack.t1059.001")
-            extracted_ioc.extend(["powershell", "DownloadString", "Bypass"])
-        if "shadow" in text_lower or "vssadmin" in text_lower or "shadowcopy" in text_lower:
-            tags.append("attack.t1490")
-            extracted_ioc.extend(["vssadmin", "delete shadows", "shadowcopy"])
-        if "mimikatz" in text_lower or "lsass" in text_lower or "sekurlsa" in text_lower:
-            tags.append("attack.t1003.001")
-            extracted_ioc.extend(["mimikatz", "sekurlsa", "privilege::debug"])
-        if "bash" in text_lower or "sh" in text_lower or "/bin/" in text_lower:
-            tags.append("attack.t1059.004")
-            extracted_ioc.extend(["/bin/bash", "/bin/sh"])
-        if "curl" in text_lower or "wget" in text_lower or "download" in text_lower:
-            tags.append("attack.t1105")
-            extracted_ioc.extend(["curl", "wget"])
-        if not tags:
-            tags.append("attack.t1059")
-
-        # Extract words from CTI text
-        clean_words = [w.strip(".,;:\"'()[]{}") for w in cti_text.split() if len(w) > 4 and w.isalnum()]
-        for w in clean_words[:5]:
-            if w.lower() not in [x.lower() for x in extracted_ioc]:
-                extracted_ioc.append(w)
-
-        if not extracted_ioc:
-            extracted_ioc = ["suspicious_process"]
-
-        # Derive a clean title
-        first_line = cti_text.strip().split("\n")[0][:60]
-        title = f"Detect {first_line.rstrip('.')}"
-
-        rule_dict: Dict[str, Any] = {
-            "title": title,
-            "id": str(uuid.uuid4()),
-            "status": "experimental",
-            "description": f"Sigma detection rule harvested from threat report: {cti_text[:120]}...",
-            "references": [
-                "https://attack.mitre.org"
-            ],
-            "tags": tags,
-            "logsource": {
-                "category": "process_creation",
-                "product": "windows"
-            },
-            "detection": {
-                "selection": {
-                    "CommandLine|contains": extracted_ioc[:6]
-                },
-                "condition": "selection"
-            },
-            "level": "high" if any(t in ["attack.t1003.001", "attack.t1490"] for t in tags) else "medium"
-        }
-
-        yaml_content = yaml.dump(rule_dict, sort_keys=False, default_flow_style=False)
-        return yaml_content, rule_dict
 
 
 harvest_service = HarvestService()

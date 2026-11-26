@@ -36,6 +36,15 @@ export default function ValidationResultPanel({ result }) {
   const isPassed = passed || verdict === 'PASSED';
   const dataset = result.dataset;
 
+  const datasetSummary = dataset && (
+    <div>
+      {dataset.datasets?.map(d => d.name).join(', ')} · {dataset.attack} attack / {dataset.benign} benign
+      {Object.entries(dataset.by_source || {}).map(([source, counts]) => (
+        <span key={source}> · {source} ({counts.attack + counts.benign})</span>
+      ))}
+    </div>
+  );
+
   // No statistics to show: never render missing metrics as 0%.
   if (!result.confusion || fpr == null || verdict === 'INCONCLUSIVE' || verdict === 'UNSUPPORTED_BY_ENGINE') {
     const title = verdict === 'UNSUPPORTED_BY_ENGINE' ? 'Detection Engine không hỗ trợ rule này'
@@ -45,11 +54,7 @@ export default function ValidationResultPanel({ result }) {
                                   background: 'rgba(245, 158, 11, 0.08)', color: '#fcd34d' }}>
         <strong>{title}</strong>
         {reason && <div style={{ marginTop: '0.35rem', color: '#e5e7eb' }}>{reason}</div>}
-        {dataset?.total != null && (
-          <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#9ca3af' }}>
-            Tập kiểm định: {dataset.attack} mẫu tấn công, {dataset.benign} mẫu benign
-          </div>
-        )}
+        {datasetSummary}
       </div>
     );
   }
@@ -58,8 +63,8 @@ export default function ValidationResultPanel({ result }) {
   const fprClass = fpr < 0.05 ? 'good' : fpr <= 0.10 ? 'warn' : 'bad';
   const fprColor = fpr < 0.05 ? '#34d399' : fpr <= 0.10 ? '#fbbf24' : '#f87171';
 
-  const precisionClass = precision >= 0.95 ? 'good' : precision >= 0.85 ? 'warn' : 'bad';
-  const precisionColor = precision >= 0.95 ? '#34d399' : precision >= 0.85 ? '#fbbf24' : '#f87171';
+  const precisionClass = precision == null ? 'bad' : precision >= 0.95 ? 'good' : precision >= 0.85 ? 'warn' : 'bad';
+  const precisionColor = precision == null ? '#f87171' : precision >= 0.95 ? '#34d399' : precision >= 0.85 ? '#fbbf24' : '#f87171';
 
   return (
     <div className="val-panel-root" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', width: '100%' }}>
@@ -111,6 +116,7 @@ export default function ValidationResultPanel({ result }) {
         </div>
       </div>
 
+      {datasetSummary}
       {/* 2. Key Metrics Grid */}
       <div
         className="val-kpi-grid"
@@ -163,7 +169,7 @@ export default function ValidationResultPanel({ result }) {
             Precision
           </div>
           <div style={{ fontSize: '1.5rem', fontWeight: 800, fontFamily: 'monospace', color: precisionColor }}>
-            {(precision * 100).toFixed(2)}%
+            {precision == null ? 'Không xác định' : `${(precision * 100).toFixed(2)}%`}
           </div>
           <div style={{ fontSize: '0.6875rem', color: '#8b949e' }}>
             Threshold: &ge; {(thresholds.precision * 100).toFixed(1)}%
@@ -187,7 +193,7 @@ export default function ValidationResultPanel({ result }) {
             Recall (Sensitivity)
           </div>
           <div style={{ fontSize: '1.5rem', fontWeight: 800, fontFamily: 'monospace', color: '#60a5fa' }}>
-            {(recall * 100).toFixed(2)}%
+            {recall == null ? 'Không xác định' : `${(recall * 100).toFixed(2)}%`}
           </div>
           <div style={{ fontSize: '0.6875rem', color: '#8b949e' }}>
             Malicious attack hit rate
@@ -211,7 +217,7 @@ export default function ValidationResultPanel({ result }) {
             F1 Score
           </div>
           <div style={{ fontSize: '1.5rem', fontWeight: 800, fontFamily: 'monospace', color: '#c084fc' }}>
-            {(f1 * 100).toFixed(2)}%
+            {f1 == null ? 'Không xác định' : `${(f1 * 100).toFixed(2)}%`}
           </div>
           <div style={{ fontSize: '0.6875rem', color: '#8b949e' }}>
             Harmonic balance

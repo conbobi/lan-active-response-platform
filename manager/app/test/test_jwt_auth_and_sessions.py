@@ -450,12 +450,12 @@ def test_cli_admin_bootstrap_password_reset_and_alembic_migration(tmp_path, monk
 @pytest.mark.parametrize("prefix", ["/api/v1/rules", "/api/rules"])
 async def test_ai_rules_jwt_permissions(jwt_lab, monkeypatch, prefix):
     from app.services.ai import harvest_service as harvest_module
-    from test_ai_soc_studio import SUPPORTED
+    from test_sigma_web_shell_e2e import WEB_SHELL_RULE
 
     client, factory = jwt_lab
 
-    async def model(cti_text):
-        return SUPPORTED
+    async def model(cti_text, feedback=None):
+        return WEB_SHELL_RULE
 
     monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
     monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", model)

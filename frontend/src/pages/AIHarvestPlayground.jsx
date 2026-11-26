@@ -152,7 +152,7 @@ export default function AIHarvestPlayground() {
         if (data.validation_result?.passed) {
           toast.success('Agent B: Rule PASSED statistical validation!');
         } else {
-          toast.error('Agent B: Rule FAILED validation (high FPR or low Precision)');
+          toast.error(data.validation_result?.reason || 'Validation did not pass');
         }
       }
     } catch (err) {

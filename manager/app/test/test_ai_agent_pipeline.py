@@ -153,7 +153,7 @@ level: low
 
 
 def test_harvest_service_yaml_extraction():
-    """Test HarvestService YAML extractor handles Markdown code fences and tags."""
+    """Harvest must reject Markdown, even when it embeds a valid rule."""
     harvest_svc = HarvestService()
 
     llm_markdown_output = """
@@ -185,15 +185,8 @@ level: high
 Hope this helps!
 """
 
-    yaml_str, parsed = harvest_svc._extract_and_validate_yaml(llm_markdown_output)
-    assert parsed is not None
-    assert parsed["title"] == "Suspicious PowerShell Download"
-    assert parsed["level"] == "high"
-
-    techniques = harvest_svc._extract_mitre_techniques(parsed.get("tags", []))
-    assert "T1059.001" in techniques
-    assert "T1105" in techniques
-
+    with pytest.raises(ValueError, match="Markdown"):
+        harvest_svc._extract_and_validate_yaml(llm_markdown_output, "PowerShell download")
 
 
 # Triage uses independently validated telemetry references and a bounded job queue.

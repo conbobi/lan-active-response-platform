@@ -5,6 +5,7 @@ Telemetry for the runtime step is built from dataset records (marked synthetic o
 the model is stubbed so the test is deterministic.
 """
 import json
+import os
 import uuid
 
 import pytest
@@ -112,6 +113,17 @@ async def test_labelled_metrics_separate_targeted_and_broad_rules():
 
 
 @pytest.mark.asyncio
+async def test_valid_rule_missing_every_relevant_attack_fails_with_recall_zero():
+    # Shape of a real model answer: web servers that the lab does not run, so the 9 lab attacks are missed.
+    rule = WEB_SHELL_RULE.replace("ParentCommandLine|contains: vulnerable_web/app.py",
+                                  "ParentImage|endswith: [/nginx, /apache2, /httpd]")
+    result = await validation_module.ValidationService().validate_rule(rule, cti_text="Web Server Spawning Shell (T1059.004)")
+    assert result["verdict"] == "FAILED" and "Recall 0%" in result["reason"]
+    assert result["confusion"] == {"tp": 0, "fp": 0, "fn": 9, "tn": 36}
+    assert result["recall"] == 0.0 and result["precision"] is None and result["dataset"]["datasets"][0]["name"] == LINUX_DATASET
+
+
+@pytest.mark.asyncio
 async def test_too_little_labelled_data_is_inconclusive(monkeypatch):
     monkeypatch.setattr(validation_module, "MIN_ATTACK", 50)
     result = await validation_module.ValidationService().validate_rule(WEB_SHELL_RULE)
@@ -123,8 +135,8 @@ async def test_too_little_labelled_data_is_inconclusive(monkeypatch):
 async def test_generate_save_validate_activate_detect(lab, monkeypatch):
     client, factory = lab
 
-    async def model(text):  # Agent A output, stubbed: same shape the harvest model is asked for
-        return f"```yaml\n{WEB_SHELL_RULE}```"
+    async def model(text, feedback=None):  # Agent A output, stubbed: same shape the harvest model is asked for
+        return WEB_SHELL_RULE
     monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", model)
     monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
 
@@ -164,9 +176,103 @@ async def test_generate_save_validate_activate_detect(lab, monkeypatch):
     async with factory() as db:
         incident = (await db.scalars(select(Incident).where(Incident.id == incidents[0].id))).one()
         stored_rule = await db.get(RuleCandidate, uuid.UUID(rule_id))
+    assert stored_rule.approved_by == "admin"
     evidence = incident.detection_evidence
     assert evidence["rule_id"] == rule_id and stored_rule.status == "active"
     assert evidence["process"]["pid"] == 80001 and evidence["process"]["cmdline"].endswith(";id")
     assert evidence["evidence_id"].startswith("proc_")
     assert evidence["parent"]["pid"] == web["pid"] and "vulnerable_web/app.py" in evidence["parent"]["cmdline"]
     assert "Web Server Spawning Shell" in incident.title
+
+WEB_CTI = (
+    "Adversaries exploit web application vulnerabilities (RCE, command injection) on web servers "
+    "(python3 app.py, nginx, apache2, gunicorn, uwsgi) to spawn interactive shells "
+    "(/bin/sh, /bin/bash, /bin/dash, zsh). The resulting child shell executes reconnaissance "
+    "commands like whoami, id, or curl to retrieve second-stage payloads."
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", [
+    "", "```yaml\n" + WEB_SHELL_RULE + "```", WEB_SHELL_RULE.replace("linux", "windows"),
+    BROAD_RULE, WEB_SHELL_RULE.replace("vulnerable_web/app.py", "python3"),
+    WEB_SHELL_RULE.replace("vulnerable_web/app.py", "Adversaries"),
+    WEB_SHELL_RULE.replace("condition: selection", "condition: selection or filter"),
+])
+async def test_generation_failure_saves_nothing(lab, monkeypatch, output):
+    client, factory = lab
+
+    async def model(text, feedback=None):
+        return output
+
+    monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", model)
+    monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
+    response = client.post(RULES + "/harvest", headers=ADMIN, json={"cti_text": WEB_CTI})
+    assert response.status_code == 502 and "generation failed" in response.json()["detail"]
+    assert client.get(RULES).json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_generation_retries_are_bounded_and_carry_the_rejection(lab, monkeypatch):
+    client, factory = lab
+    calls = []
+    bad = WEB_SHELL_RULE.replace("ParentCommandLine|contains: vulnerable_web/app.py",
+                                 "ParentImage|endswith: python3 app.py")
+
+    async def model(text, feedback=None):
+        calls.append(feedback)
+        return bad if len(calls) == 1 else WEB_SHELL_RULE
+
+    monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", model)
+    monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
+    assert client.post(RULES + "/harvest", headers=ADMIN, json={"cti_text": WEB_CTI}).status_code == 200
+    assert calls[0] is None and "ParentImage" in calls[1] and len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr(harvest_module, "MAX_ATTEMPTS", 2)
+
+    async def always_bad(text, feedback=None):
+        calls.append(feedback)
+        return bad
+    monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", always_bad)
+    response = client.post(RULES + "/harvest", headers=ADMIN, json={"cti_text": WEB_CTI})
+    assert response.status_code == 502 and "after 2 model attempt" in response.json()["detail"]
+    assert len(calls) == 2 and client.get(RULES).json()["total"] == 1
+
+
+@pytest.mark.skipif(os.getenv("LARP_REAL_HARVEST") != "1", reason="requires local Ollama")
+@pytest.mark.parametrize("cti", [WEB_CTI, "Web Server Spawning Shell (T1059.004)"])
+def test_real_ollama_generate_save_validate(lab, monkeypatch, cti):
+    """Real model, no stub: LARP_REAL_HARVEST=1 OLLAMA_URL=http://localhost:11434 pytest -k real_ollama -s"""
+    client, factory = lab
+    monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
+    response = client.post(RULES + "/harvest", headers=ADMIN, json={"cti_text": cti})
+    assert response.status_code == 200, response.text
+    candidate = response.json()
+    assert candidate["status"] == "pending" and candidate["source"] == "ai_harvest", candidate
+    path = f"{RULES}/{candidate['rule_id']}"
+    stored = client.get(path).json()
+    assert stored["rule_yaml"] == candidate["rule_yaml"] and stored["model_generated"]
+    rule = yaml.safe_load(stored["rule_yaml"])
+    assert rule["logsource"] == {"product": "linux", "category": "process_creation"}
+    assert sigma_runtime.check_support(rule)[0]
+    result = client.post(path + "/validate", headers=ADMIN, json={}).json()["validation_result"]
+    print(stored["model_generated"], stored["rule_yaml"], result["verdict"], result["confusion"])
+    assert result["dataset"]["datasets"][0]["name"] == LINUX_DATASET
+    assert result["confusion"] is not None
+    assert client.get(path).json()["status"] != "active"
+
+
+@pytest.mark.asyncio
+async def test_dataset_routes_only_relevant_independent_labels():
+    from test_ai_soc_studio import SUPPORTED
+
+    service = validation_module.ValidationService()
+    windows = await service.validate_rule(SUPPORTED)
+    assert windows["dataset"]["datasets"][0]["name"] == "windows_fixture_v1"
+    assert windows["dataset"]["attack"] == 2 and windows["confusion"] is None
+    assert not windows["passed"]  # fewer than five labelled target attacks
+    mismatch = await service.validate_rule(SUPPORTED, cti_text=WEB_CTI)
+    assert mismatch["confusion"] is None and "linux" in mismatch["reason"]
+    network = await service.validate_rule(WEB_SHELL_RULE.replace("process_creation", "network_connection"))
+    assert network["confusion"] is None and network["verdict"] == "INCONCLUSIVE"

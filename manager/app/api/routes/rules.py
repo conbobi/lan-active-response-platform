@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Request, Depends, Query, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
-from app.services.ai.harvest_service import harvest_service
+from app.services.ai.harvest_service import GenerationError, harvest_service
 from app.services.ai.validation_service import validation_service
 
 logger = logging.getLogger("larp.api.rules")
@@ -97,6 +97,8 @@ async def harvest_rule(
             "source": candidate.source,
             "created_at": candidate.created_at.isoformat() if candidate.created_at else None
         }
+    except GenerationError as exc:
+        raise HTTPException(status_code=502, detail=f"Sigma generation failed: {exc}") from exc
     except Exception as e:
         logger.error(f"Error in /harvest: {e}", exc_info=True)
         return {"error": f"Failed to harvest rule: {str(e)}"}
@@ -233,7 +235,8 @@ async def validate_rule_endpoint(
             rule_yaml=candidate.rule_yaml,
             fpr_threshold=fpr_th,
             precision_threshold=prec_th,
-            db_session=db
+            db_session=db,
+            cti_text=candidate.harvest_prompt or "",
         )
 
         val_result["engine_supported"] = True
@@ -273,6 +276,7 @@ async def validate_rule_endpoint(
 
 @router.post("/{rule_id}/activate")
 async def activate_rule(
+    request: Request,
     rule_id: str,
     body: Optional[ActivateRequest] = None,
     db: AsyncSession = Depends(get_db)
@@ -306,7 +310,7 @@ async def activate_rule(
 
         candidate.status = "active"
         candidate.activated_at = datetime.now(timezone.utc)
-        candidate.approved_by = body.analyst_id if body and body.analyst_id else "soc_analyst"
+        candidate.approved_by = request.state.operator
 
         await db.commit()
         await db.refresh(candidate)
