@@ -29,6 +29,7 @@ async def reconcile(db, row, *, undo_actor=None):
     peer = target.get("source_ip")
     stamp = now()
     refs = []
+    executor_error = None
     method = "application_lease_and_http_receipt"
     audit = ActionAuditLogService(db)
     try:
@@ -51,7 +52,8 @@ async def reconcile(db, row, *, undo_actor=None):
                 await audit.record_event(row.id, "executed", "lab_waf")
             status, refs = await asyncio.to_thread(lab_waf.verify, row.agent_id, peer, row.id,
                                                     snap["start"], snap["deadline"], row.action_type)
-    except (HTTPException, sqlite3.Error, OSError):
+    except (HTTPException, sqlite3.Error, OSError) as exc:
+        executor_error = str(exc.detail) if isinstance(exc, HTTPException) else type(exc).__name__
         status = "rollback_failed" if undo_actor else ("partial" if before != "dispatched" else "failed")
     if before == "rollback_failed" and not undo_actor and status != "expired":
         return
@@ -83,9 +85,14 @@ async def reconcile(db, row, *, undo_actor=None):
             "evidence_refs": refs,
             "verification_status": status,
             "status": status,
-            "failure_reason": failure_reason,
+            "failure_reason": executor_error or failure_reason,
             "elapsed_ms": round((stamp.timestamp() - snap["start"]) * 1000)
         }
         row.status = status
+        previous = snap.get("verification") or {}
+        if previous.get("verification_status") == "succeeded":
+            snap["last_verified_effect"] = previous
+        if status == "expired" and snap.get("last_verified_effect"):
+            verification.update(actual_result="Lease expired after observed HTTP rejection", failure_reason=None)
         row.snapshot = {**snap, "verification": verification}
         await audit.record_event(row.id, status, undo_actor or "lab_waf", metadata=verification)

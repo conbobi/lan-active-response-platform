@@ -478,6 +478,9 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
 
 
 async def load_alert_context(session, incident) -> AlertContext:
+    import logging
+    from time import monotonic
+    started = monotonic()
     evidence, network, observations = _snapshot(incident)
     identities = {identity for proc in observations if (identity := process_identity(proc))}
     reference = as_utc(network.get("observed_at") or evidence.get("last_observed_at") or incident.created_at)
@@ -516,6 +519,10 @@ async def load_alert_context(session, incident) -> AlertContext:
                 if any(RuleEngine._fingerprint(match) == incident.fingerprint for match in matches):
                     fim = event.details
                     break
-    return build_alert_context(
+    projected = monotonic()
+    context = build_alert_context(
         incident, hostname=agent.hostname if agent else None, processes=processes, flows=flows, fim=fim,
     )
+    logging.getLogger(__name__).info("Triage incident=%s evidence_retrieval_ms=%.2f context_projection_ms=%.2f",
+                                     incident.id, (projected - started) * 1000, (monotonic() - projected) * 1000)
+    return context

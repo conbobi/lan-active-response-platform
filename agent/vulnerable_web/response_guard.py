@@ -15,6 +15,12 @@ def install_guard(app):
     if not directory:
         return
     root = Path(directory).resolve(strict=True)
+    # A Tailnet address must be opted in independently by the application owner.
+    tail_peers = {ipaddress.ip_address(item.strip()) for item in
+                  os.getenv("LARP_HTTP_DISPOSABLE_PEERS", "").split(",") if item.strip()}
+    tailnet = ipaddress.ip_network("100.64.0.0/10")
+    trusted_proxies = [ipaddress.ip_network(item.strip(), strict=False) for item in
+                       os.getenv("LARP_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128").split(",") if item.strip()]
     observations = root / "observations.db"
     with closing(sqlite3.connect(observations)) as db, db:
         db.execute("""CREATE TABLE IF NOT EXISTS observation
@@ -52,7 +58,9 @@ def install_guard(app):
             peer = ipaddress.ip_address(request.environ.get("REMOTE_ADDR", ""))
         except ValueError:
             return
-        if not any(peer in subnet for subnet in TEST_NETWORKS):
+        if any(peer in subnet for subnet in trusted_proxies):
+            return
+        if not (any(peer in subnet for subnet in TEST_NETWORKS) or peer in tailnet and peer in tail_peers):
             return
         g.response_peer = str(peer)
         try:

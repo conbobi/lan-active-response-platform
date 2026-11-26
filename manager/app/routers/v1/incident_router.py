@@ -26,9 +26,20 @@ from app.services.ai.ai_triage_service import AITriageService
 router = APIRouter(tags=["Incidents"])
 
 
-def authenticated_actor(request: Request, claimed):
-    """Prefer the identity the auth middleware verified over a name supplied in the body."""
-    return getattr(request.state, "operator", None) or str(claimed or "anonymous")[:64]
+def authenticated_actor(request: Request):
+    return getattr(request.state, "operator", None) or "anonymous"
+
+
+async def response_actor(request, db, incident_id):
+    from app.models.incident import Incident
+    from app.core.network_security import verify_operator_or_admin
+    authorization = request.headers.get("authorization")
+    verify_operator_or_admin(authorization, write=True)
+    incident = await db.get(Incident, incident_id)
+    if not incident or not incident.agent_id:
+        raise HTTPException(404, "Incident or Agent unavailable")
+    return verify_operator_or_admin(authorization, incident.agent_id, write=True)[0]
+
 
 logger = logging.getLogger(__name__)
 @router.post("/", response_model=IncidentOut, status_code=status.HTTP_201_CREATED)
@@ -149,7 +160,7 @@ async def execute_incident_action(
     """Execute quick response action directly from an Incident (Isolate, Kill Tree, Block IP)."""
     action_type = payload.get("action_type")
     params = payload.get("params", {})
-    user = authenticated_actor(request, payload.get("user", "admin"))
+    user = await response_actor(request, db, incident_id)
 
     service = IncidentService(db)
     return await service.execute_action(incident_id, action_type=action_type, params=params, user=user)
@@ -159,7 +170,7 @@ async def execute_incident_action(
 async def add_incident_note(incident_id: str, dto: IncidentNoteAddDTO, request: Request, db: AsyncSession = Depends(get_db)):
     """Add a note or audit log entry to an incident."""
     service = IncidentService(db)
-    return await service.add_note(incident_id, content=dto.content, user=authenticated_actor(request, dto.user))
+    return await service.add_note(incident_id, content=dto.content, user=authenticated_actor(request))
 
 
 @router.get("/{incident_id}/notes", response_model=List[IncidentNoteOut])
@@ -318,7 +329,7 @@ async def apply_ai_suggestion(
     db: AsyncSession = Depends(get_db),
 ):
     """Apply AI response suggestion — delegates to ResponseActionService."""
-    analyst = authenticated_actor(request, payload.get("analyst", "current_user"))
+    analyst = await response_actor(request, db, incident_id)
     from app.services.ai.ai_response_service import AIResponseService
     from app.core.exceptions import FlappingCooldownError, AppException
     try:
@@ -352,7 +363,7 @@ async def dismiss_ai_suggestion(
     db: AsyncSession = Depends(get_db),
 ):
     """Analyst dismisses AI response suggestion with reasoning."""
-    analyst = authenticated_actor(request, payload.get("analyst", "current_user"))
+    analyst = authenticated_actor(request)
     reason = payload.get("reason", "")
     from app.services.ai.ai_response_service import AIResponseService
     from app.core.exceptions import AppException

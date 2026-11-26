@@ -3,18 +3,32 @@ from datetime import datetime, timezone
 import uuid
 
 from sqlalchemy import select, update
+from app.models.incident import Incident
 from app.models.incident_note import IncidentNote
+from app.services.ai.analysis_cache import fingerprint, find_similar, record_case
 from app.models.response_action import ResponseAction
 from app.models.web_access_log import WebAccessLog
 from app.services.common.audit_log_service import ActionAuditLogService
 from app.services.response.http_investigation import WATCH
 
 
-async def record_guidance(db, action, actor):
+async def record_guidance(db, action, actor, investigation):
+    from time import monotonic
+    start = monotonic()
+    fp = fingerprint(investigation)
+    matches = await find_similar(db, fp, tenant=action.agent_id, exclude_incident_id=action.incident_id)
+    references = sorted({ref for match in matches for ref in match.knowledge_refs})
+    pattern_ms = round((monotonic() - start) * 1000, 2)
+    incident = await db.get(Incident, action.incident_id)
+    runbook = ("authentication-abuse" if investigation["classification"] == "observed_login_failures"
+               else "sqli-lab-flask-guard")
+    await record_case(db, incident, fp, {"knowledge_refs": [runbook]}, tenant=action.agent_id)
+    advice = ("Review failed login records and the affected account."
+              if runbook == "authentication-abuse" else "Review the affected query and use parameterized statements.")
     note = IncidentNote(id=action.id, incident_id=action.incident_id, user=actor, content=(
-        "Review the affected application query and use parameterized statements. "
+        advice + " " +
         "Check application-side authentication outcomes around the observed request. "
-        "Evidence: " + ", ".join(action.action_params["evidence_ids"])))
+        "Runbooks: " + ", ".join(dict.fromkeys([runbook, *references])) + ". Evidence: " + ", ".join(action.action_params["evidence_ids"])))
     db.add(note)
     await db.flush()
     persisted = await db.scalar(select(IncidentNote.id).where(IncidentNote.id == note.id,
@@ -35,7 +49,7 @@ async def record_guidance(db, action, actor):
         "status": action.status,
         "failure_reason": None if persisted else "Database persistence failure"
     }
-    action.snapshot = {"verification": verification}
+    action.snapshot = {"verification": verification, "pattern_lookup_ms": pattern_ms}
     await ActionAuditLogService(db).record_event(action.id, action.status, "manager", metadata=action.snapshot)
 
 

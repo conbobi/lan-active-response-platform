@@ -2,13 +2,14 @@
 from typing import Literal
 from time import monotonic
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import get_db
-from app.core.network_security import verify_operator_or_admin, is_enrolled
+from app.core.network_security import verify_operator_or_admin, is_enrolled, issue_session, token_matches
+from app.core.config import settings
 from app.core import response_outcome as oc
 from app.core.response_outcome import OutcomeHTTPException
 from app.models.command import Command
@@ -30,14 +31,29 @@ class EmptyRequest(BaseModel):
 
 
 class ProposalRequest(EmptyRequest):
+    model_review: bool = False
     action_type: Literal["collect_additional_evidence", "temporary_ip_block", "apply_rate_limit", "revoke_session", "generate_remediation_guidance", "increase_monitoring"] | None = None
 
 
 def operator(token, agent=None, write=False):
-    identity, role = verify_operator_or_admin(token, agent, write=write)
+    identity, role = verify_operator_or_admin(token, agent)
+    if write and role is not None and role.role not in {"admin", "operator"}:
+        raise OutcomeHTTPException(403, "Response operator role required", oc.AUTHORIZATION_FAILED)
     if role is None and identity != "legacy_admin":
         raise OutcomeHTTPException(401, "Configured operator credentials required", oc.AUTHORIZATION_FAILED)
     return identity
+
+
+@router.post("/auth/session")
+async def sign_in(response: Response, authorization: str | None = Header(None)):
+    identity, config = verify_operator_or_admin(authorization)
+    digest = config.token_sha256 if config else settings.NETWORK_LEGACY_ADMIN_TOKEN
+    if not token_matches((authorization or "").partition(" ")[2].strip(), digest):
+        raise OutcomeHTTPException(401, "Operator credential required to sign in", oc.AUTHORIZATION_FAILED)
+    session, expires = issue_session(digest)
+    response.headers["Cache-Control"] = "no-store"
+    return {"access_token": session, "expires_at": expires, "actor": identity,
+            "role": config.role if config else "admin"}
 
 
 async def scoped_incident(db, key, token, lock=False):
@@ -72,7 +88,10 @@ async def proposals(incident_id: str, authorization: str | None = Header(None), 
     for row in actions:
         await reconcile(db, row)
         await reconcile_watch(db, row)
-    return {"investigation": investigation, "policy_decision": decision(proposal.action_type if proposal else COLLECT, proposal),
+    _, config = verify_operator_or_admin(authorization, incident.agent_id)
+    return {"can_execute": config is None or config.role in {"admin", "operator"},
+            "agent_online": is_enrolled(incident.agent_id) and incident.agent_id in connection_manager.authenticated_connections,
+            "investigation": investigation, "policy_decision": decision(proposal.action_type if proposal else COLLECT, proposal),
             "actions": [view(row) for row in actions]}
 
 
@@ -91,22 +110,29 @@ async def propose(incident_id: str, body: ProposalRequest, authorization: str | 
     previous = await db.get(ResponseAction, proposal.action_id)
     if previous:
         return view(previous)
-    await db.commit()  # Release the connection before Ollama inference.
-    selected, origin, latency = await recommend(investigation, proposal)
-    incident = await scoped_incident(db, incident_id, authorization, lock=True)
-    reviewed, _ = await investigate(db, incident)
-    current = match_proposal(reviewed, proposal.action_id)
-    if not current or current != proposal:
-        raise OutcomeHTTPException(409, "Evidence changed during review; investigate again", oc.INSUFFICIENT_EVIDENCE)
-    if origin == "policy_fallback" and current.action_type in WAF_TYPES:
-        current = CollectionProposal.model_validate(investigation["recommended_responses"][0])
-    previous = await db.get(ResponseAction, current.action_id)
-    if previous:
-        return view(previous)
+    current = proposal
+    stages = {"evidence_and_projection_ms": round((monotonic() - started) * 1000, 2)}
+    selected, origin, latency = True, "evidence_policy", 0
+    if body.model_review:
+        selected, origin, latency = await recommend(investigation, proposal, db, stages)
+        incident = await scoped_incident(db, incident_id, authorization, lock=True)
+        reviewed, _ = await investigate(db, incident)
+        current = match_proposal(reviewed, proposal.action_id)
+        if not current or current != proposal:
+            raise OutcomeHTTPException(409, "Evidence changed during review; investigate again", oc.INSUFFICIENT_EVIDENCE)
+        if origin == "policy_fallback" and current.action_type in WAF_TYPES:
+            current = CollectionProposal.model_validate(investigation["recommended_responses"][0])
+        previous = await db.get(ResponseAction, current.action_id)
+        if previous:
+            return view(previous)
+    policy_start = monotonic()
+    policy = decision(current.action_type, current)
+    stages["policy_ms"] = round((monotonic() - policy_start) * 1000, 4)
+    write_start = monotonic()
     action = ResponseAction(id=current.action_id, agent_id=incident.agent_id, incident_id=incident.id,
                             action_type=current.action_type, status=("pending_approval" if current.requires_approval else "approved") if selected else "not_recommended",
                             action_params={**current.model_dump(mode="json"), "recommendation_source": origin,
-                                           "policy_decision": decision(current.action_type, current)})
+                                           "policy_decision": policy})
     try:
         async with db.begin_nested():
             db.add(action)
@@ -116,8 +142,9 @@ async def propose(incident_id: str, body: ProposalRequest, authorization: str | 
         if existing:
             return view(existing)
         raise
+    stages["action_write_ms"] = round((monotonic() - write_start) * 1000, 2)
     audit = ActionAuditLogService(db)
-    await audit.record_event(action.id, "proposed", actor, metadata={"origin": origin, "analysis_ms": latency})
+    await audit.record_event(action.id, "proposed", actor, metadata={"origin": origin, "analysis_ms": latency, "stage_ms": stages})
     await audit.record_event(action.id, action.status, "policy", metadata={
         "policy_version": current.policy_version, "proposal_ms": round((monotonic() - started) * 1000)})
     return view(action)
@@ -196,7 +223,7 @@ async def transition(action_id: str, operation: Literal["approve", "reject", "ex
     action.status = target
     await ActionAuditLogService(db).record_event(action.id, target, actor)
     if operation == "execute" and action.action_type == GUIDE:
-        await record_guidance(db, action, actor)
+        await record_guidance(db, action, actor, investigation)
     if operation == "execute" and action.action_type == WATCH:
         await reconcile_watch(db, action)
     if operation == "execute" and action.action_type in WAF_TYPES:

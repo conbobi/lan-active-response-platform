@@ -113,9 +113,11 @@ _V1 = re.escape(settings.API_V1_STR)
 _ID = r"[^/]+"
 # Routes that authenticate and scope the operator themselves (Agent scope, read/write role).
 OWN_AUTHORIZATION = [re.compile(p) for p in (
+    rf"{_V1}/auth/session/?",
     rf"{_V1}/network/agents/.*",
-    rf"{_V1}/incidents/{_ID}/response-proposals/?",
+    rf"{_V1}/incidents/{_ID}/response-proposals(/batch)?/?",
     rf"{_V1}/response-actions/{_ID}/(approve|reject|execute|rollback)/?",
+    rf"{_V1}/response-actions/batch/(approve|reject)/?",
 )]
 # Incident workflow calls any configured operator (analyst or admin) may make. They change incident
 # bookkeeping or request read-only analysis; none dispatches a command to an endpoint.
@@ -160,7 +162,7 @@ async def protect_sensitive_legacy_apis(request: Request, call_next):
                 identity, _ = verify_operator_or_admin(
                     auth_header, write=not analyst_write(request.method, path))
             except HTTPException as exc:
-                return JSONResponse({"detail": exc.detail, "outcome_code": AUTHORIZATION_FAILED},
+                return JSONResponse({"detail": exc.detail, "outcome_code": getattr(exc, "outcome", AUTHORIZATION_FAILED)},
                                     status_code=exc.status_code, headers=exc.headers or {})
             request.state.operator = identity
 

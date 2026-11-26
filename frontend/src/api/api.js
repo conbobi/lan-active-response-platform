@@ -1,5 +1,6 @@
 // src/services/api.js
 import axios from 'axios';
+import { readSession, requestSignIn, saveSession } from './operatorSession';
 
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -14,17 +15,8 @@ export const subscribeLoading = () => () => { };
 
 // Interceptor tự động đính kèm Authorization Bearer token nếu đã đăng nhập hoặc có token mạng
 api.interceptors.request.use((config) => {
-    try {
-        const token = sessionStorage.getItem('larp_network_token')
-            || localStorage.getItem('larp_network_token')
-            || localStorage.getItem('token');
-        if (token && !config.headers?.Authorization) {
-            config.headers = config.headers || {};
-            config.headers.Authorization = `Bearer ${token.trim()}`;
-        }
-    } catch {
-        // Fallback an toàn nếu localStorage/sessionStorage không khả dụng
-    }
+    const token = readSession();
+    if (token && !config.headers.Authorization) config.headers.Authorization = `Bearer ${token}`;
     return config;
 });
 
@@ -42,6 +34,11 @@ api.interceptors.response.use(
         error.status = err.response?.status;
         error.outcome = err.response?.data?.outcome_code
             || (err.response ? undefined : 'NETWORK_ERROR');
+        if (error.status === 401 && err.config?.url !== '/auth/session') {
+            const token = readSession();
+            if (token && err.config?.headers?.Authorization === `Bearer ${token}`) saveSession('');
+            if (!readSession()) requestSignIn(error.outcome === 'SESSION_EXPIRED' ? 'Phiên đã hết hạn.' : 'Cần đăng nhập Dashboard.');
+        }
         error.use = err.response?.data?.use;
         error.requestId = err.response?.data?.request_id;
         return Promise.reject(error);

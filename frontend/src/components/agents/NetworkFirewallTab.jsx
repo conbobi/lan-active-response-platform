@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 import {
   FiCopy, FiRefreshCw, FiShield, FiAlertTriangle, FiCheckCircle,
@@ -10,7 +10,7 @@ import {
 } from '../../api/network';
 import './NetworkFirewallTab.css';
 
-const STORAGE_KEY = 'larp_network_token';
+import { readSession, requestSignIn, saveSession, subscribeSession } from '../../api/operatorSession';
 
 const mainTabs = [
   ['firewall', '🛡️ Quy Tắc Tường Lửa (Rules)'],
@@ -828,9 +828,7 @@ function EventCounts({ data }) {
 }
 
 export default function NetworkFirewallTab({ agent }) {
-  const [token, setToken] = useState(() => sessionStorage.getItem(STORAGE_KEY) || '');
-  const [draftToken, setDraftToken] = useState('');
-
+  const token = useSyncExternalStore(subscribeSession, readSession);
   const [tab, setTab] = useState('firewall');
   const [section, setSection] = useState('firewall');
   const [view, setView] = useState(null);
@@ -844,12 +842,6 @@ export default function NetworkFirewallTab({ agent }) {
   const [revision, reload] = useState(0);
   const [tick, setTick] = useState(0);
   const busy = submitting || ['pending', 'sent'].includes(command?.status);
-
-  const saveToken = (newToken) => {
-    setToken(newToken);
-    if (newToken) sessionStorage.setItem(STORAGE_KEY, newToken);
-    else sessionStorage.removeItem(STORAGE_KEY);
-  };
 
   const fetchSection = useCallback((signal) => {
     return getAgentNetwork(agent.id, section, token, { offset: page * pageSize, limit: pageSize, ...filter }, signal);
@@ -987,8 +979,8 @@ export default function NetworkFirewallTab({ agent }) {
                 <FiRefreshCw size={14} className={busy ? 'spin' : ''} /> Làm mới
               </button>
               <button className="btn btn-secondary" type="button" onClick={() => {
-                saveToken(''); setView(null); setError(''); setCommand(null);
-              }}>Đổi Token</button>
+                saveSession(''); setView(null); setError(''); setCommand(null);
+              }}>Đăng xuất</button>
             </>
           )}
         </div>
@@ -996,33 +988,7 @@ export default function NetworkFirewallTab({ agent }) {
 
       {/* Access Token Form if not signed in */}
       {!token && (
-        <form className="network-panel network-stack" style={{ maxWidth: '30rem', margin: '1rem auto' }} onSubmit={event => {
-          event.preventDefault();
-          saveToken(draftToken.trim());
-          setDraftToken('');
-        }}>
-          <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <FiLock size={18} color="#38bdf8" />
-            Nhập Token Quản Trị Mạng &amp; Tường Lửa
-          </h4>
-          <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
-            Mô-đun Network &amp; Firewall được bảo vệ bằng cơ chế xác thực riêng biệt. Vui lòng nhập Access Token của bạn:
-          </p>
-          <label>
-            Network Access Token
-            <input
-              type="password"
-              value={draftToken}
-              onChange={e => setDraftToken(e.target.value)}
-              placeholder="vd: larp-token-soc-admin-..."
-              autoComplete="off"
-              required
-            />
-          </label>
-          <button type="submit" className="btn btn-primary" disabled={!draftToken.trim()}>
-            Mở Network &amp; Firewall
-          </button>
-        </form>
+        <button className="btn btn-primary" onClick={() => requestSignIn('Cần đăng nhập để xem Agent.')}>Đăng nhập</button>
       )}
 
       {token && (

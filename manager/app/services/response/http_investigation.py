@@ -110,18 +110,38 @@ def match_proposal(investigation, key):
 def http_behavior(incident):
     evidence = incident.detection_evidence
     behavior = evidence.get("behavior") if isinstance(evidence, dict) else None
-    return behavior if isinstance(behavior, dict) and behavior.get("evidence_type") == "http" else {}
+    if isinstance(behavior, dict) and (behavior.get("evidence_type") == "http" or
+            (behavior.get("source") == "auth_events" and behavior.get("service") == "flask_web")):
+        return behavior
+    return {}
 
 
 async def investigate(db, incident):
     behavior = http_behavior(incident)
     ids = behavior.get("source_event_ids")
     group = behavior.get("evidence_id")
-    if (behavior.get("source") != "web_access_logs" or behavior.get("agent_id") != incident.agent_id
+    auth_source = behavior.get("source") == "auth_events"
+    if (behavior.get("source") not in {"auth_events", "web_access_logs"} or behavior.get("agent_id") != incident.agent_id
             or not isinstance(group, str) or not 0 < len(group) <= 64
             or not isinstance(ids, list) or not 0 < len(ids) <= 64
             or not all(isinstance(i, str) and 0 < len(i) <= 64 for i in ids)):
         return None, None
+    auth_refs = []
+    if auth_source:
+        # Bind the detector's cohort to persisted failures and one particular Flask request.
+        rid = behavior.get("request_id")
+        peer = behavior.get("source_ip")
+        if (not isinstance(rid, str) or not rid or behavior.get("request_method") != "POST"
+                or behavior.get("request_path") != "/login"
+                or behavior.get("http_event_id") != stable_id("wlog_", incident.agent_id, rid)):
+            return None, None
+        auth_refs = list((await db.scalars(select(AuthEvent.id).where(
+            AuthEvent.id.in_(ids), AuthEvent.agent_id == incident.agent_id, AuthEvent.service == "flask_web",
+            AuthEvent.source_ip == peer, AuthEvent.status == "failed", AuthEvent.count == 1
+        ).order_by(AuthEvent.id))).all())
+        if len(auth_refs) != len(set(ids)) or stable_id("auth_", incident.agent_id, "flask_web", rid) not in auth_refs:
+            return None, None
+        ids = [behavior["http_event_id"]]
     rows = (await db.scalars(select(WebAccessLog).where(
         WebAccessLog.agent_id == incident.agent_id, WebAccessLog.id.in_(ids),
     ).order_by(WebAccessLog.timestamp, WebAccessLog.id))).all()
@@ -136,8 +156,13 @@ async def investigate(db, incident):
         except (ValueError, TypeError):
             meta = {}
         indicators = sorted(valid_indicators(meta.get("payload_indicators"))) if isinstance(meta, dict) else []
-        if indicators and isinstance(meta, dict) and meta.get("source") == "normalized_http" and meta.get("service") == "flask_web" and row.path == "/login" and row.method == "POST":
-            candidates.append((row, meta.get("request_id")))
+        if auth_source and (row.src_ip != peer or row.method != "POST" or row.path != "/login"
+                            or not isinstance(meta, dict) or meta.get("request_id") != rid):
+            return None, None
+        burst = len(auth_refs) >= 5 and behavior.get("classification") == "authentication_brute_force"
+        if (burst or indicators) and isinstance(meta, dict) and meta.get("source") == "normalized_http" and meta.get("service") == "flask_web" and row.path == "/login" and row.method == "POST":
+            if meta.get("request_id") and row.id == stable_id("wlog_", incident.agent_id, meta["request_id"]):
+                candidates.append((row, meta["request_id"]))
             session_ref = meta.get("session_ref")
             request_id = meta.get("request_id")
             if (row.status_code == 302 and isinstance(session_ref, str) and re.fullmatch(r"[a-f0-9]{64}", session_ref)
@@ -152,13 +177,15 @@ async def investigate(db, incident):
         })
     if any(f["payload_indicators"] for f in facts):
         cls, confidence = "sqli_probe_observed", 0.85
+    elif auth_refs:
+        cls, confidence = "observed_login_failures", 0.85
     elif any(SQLI_TOOL_UA.fullmatch(f["automation_hint"] or "") for f in facts):
         cls, confidence = "sqli_tool_indicator", 0.60
     elif any(f["automation_hint"] for f in facts):
         cls, confidence = "automated_http_activity", 0.50
     else:
         return None, None
-    refs = [group, *(row.id for row in rows)]
+    refs = [group, *auth_refs, *(row.id for row in rows)]
     compromised = None
     if grants:
         auth_ids = {stable_id("auth_", incident.agent_id, "flask_web", rid): (row, rid, ref) for row, rid, ref in grants}
@@ -192,6 +219,7 @@ async def investigate(db, incident):
     fingerprint = json.dumps([VERSION, incident.id, incident.agent_id, refs, facts], sort_keys=True)
     action_id = hashlib.sha256(fingerprint.encode()).hexdigest()
     rationale = {
+        "observed_login_failures": f"Application authentication records contain {len(auth_refs)} failed login attempts.",
         "sqli_exploitation_confirmed": "The application granted a session despite an independently verified credential mismatch on the correlated request.",
         "sqli_exploitation_suspected": "A request with SQL indicators correlates to an application session grant.",
         "sqli_probe_observed": "A stored HTTP observation contains a recognized SQL payload indicator.",

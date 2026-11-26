@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.core.config import settings
 
 NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"))
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
 TTL = 300
 
 
@@ -20,7 +21,7 @@ def eligible(agent, peer):
     except ValueError:
         return False
     return bool(config and peer in config.disposable_peers and peer not in config.protected_peers
-                and any(ip in network and ip not in (network.network_address, network.broadcast_address) for network in NETWORKS))
+                and any(ip in network and ip not in (network.network_address, network.broadcast_address) for network in (*NETWORKS, TAILNET)))
 
 
 def store(agent, database, mode):
@@ -41,7 +42,7 @@ def direct_observation(agent, peer, request_id, observed_at):
             row = db.execute("SELECT at FROM observation WHERE request_id=? AND peer=? AND forwarded=0 AND action_id IS NULL",
                              (request_id, peer)).fetchone()
             return bool(row and 0 <= time.time() - row[0] <= TTL and abs(row[0] - observed_at) <= 5)
-    except sqlite3.Error:
+    except (HTTPException, sqlite3.Error, OSError):
         return False
 
 
@@ -85,7 +86,7 @@ def credential_mismatch(agent, peer, request_id, session_ref, observed_at):
             result = db.execute("""SELECT at FROM grant_observation WHERE peer=? AND request_id=?
                 AND session_ref=? AND credential_match=0""", (peer, request_id, session_ref)).fetchone()
         return bool(result and abs(result[0] - observed_at) <= 5)
-    except sqlite3.Error:
+    except (HTTPException, sqlite3.Error, OSError):
         return False
 
 

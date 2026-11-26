@@ -27,9 +27,12 @@ class ResponseActionRepository(SqlAlchemyRepository[ResponseAction]):
         action_type: Optional[str] = None,
         status: Optional[str] = None,
         skip: int = 0,
-        limit: int = 50
+        limit: int = 50,
+        allowed_agents: set[str] | None = None
     ) -> List[ResponseAction]:
         stmt = select(ResponseAction).where(ResponseAction.action_type.not_in(ASSIST_TYPES))
+        if allowed_agents is not None:
+            stmt = stmt.where(ResponseAction.agent_id.in_(allowed_agents))
         if agent_id:
             stmt = stmt.where(ResponseAction.agent_id == agent_id, ResponseAction.action_type.not_in(ASSIST_TYPES))
         if action_type:

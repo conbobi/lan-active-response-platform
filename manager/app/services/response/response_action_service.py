@@ -229,9 +229,11 @@ class ResponseActionService:
         action_type: Optional[str] = None,
         status: Optional[str] = None,
         skip: int = 0,
-        limit: int = 50
+        limit: int = 50,
+        allowed_agents: set[str] | None = None
     ) -> List[ResponseAction]:
         return await self.action_repo.list_all(
+            allowed_agents=allowed_agents,
             agent_id=agent_id,
             action_type=action_type,
             status=status,

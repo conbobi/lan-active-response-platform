@@ -8,8 +8,14 @@ TokenDigest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 class NetworkOperator(BaseModel):
     token_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    role: Literal["analyst", "admin"]
+    role: Literal["analyst", "operator", "admin"]
     agents: set[str]
+
+    @model_validator(mode="after")
+    def require_operator_scope(self):
+        if self.role == "operator" and not self.agents:
+            raise ValueError("Response operators require explicit Agent scope")
+        return self
 
 
 class NetworkSSHProbe(BaseModel):
@@ -36,6 +42,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "larp-manager-secret-key-change-in-production"
     DEBUG: bool = True
     NETWORK_AGENT_TOKENS: dict[str, TokenDigest] = Field(default_factory=dict, repr=False)
+    OPERATOR_SESSION_KEY: str | None = Field(default=None, min_length=32, repr=False)
     NETWORK_OPERATORS: dict[Annotated[str, Field(min_length=1, max_length=64)], NetworkOperator] = Field(default_factory=dict, repr=False)
     HTTP_RESPONSE_LAB_WAFS: dict[str, LabWaf] = Field(default_factory=dict)
     NETWORK_SSH_PROBES: dict[str, NetworkSSHProbe] = Field(default_factory=dict, repr=False)

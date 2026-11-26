@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass
 from math import isfinite
+from time import monotonic
 
 import httpx
 from sqlalchemy import select
@@ -183,6 +184,7 @@ class AITriageService:
             async with asyncio.timeout_at(started + QUEUE_WAIT_SECONDS):
                 await slot.acquire()
                 acquired = True
+                logger.info("Triage incident=%s manager_queue_wait_ms=%.2f", incident_id, (asyncio.get_running_loop().time() - started) * 1000)
             async with asyncio.timeout_at(started + 120 - PERSIST_RESERVE_SECONDS):
                 async with AsyncSessionLocal() as session:
                     incident = await session.get(Incident, incident_id)
@@ -231,7 +233,9 @@ class AITriageService:
     async def _infer(self, context, route, *, settings=TRIAGE_SETTINGS, tokenizer=None, references=None):
         tokenizer = tokenizer or await asyncio.to_thread(load_tokenizer)
         if references is None:
+            retrieval_start = monotonic()
             references = retrieve_references(context, tokenizer)
+            logger.info("Triage knowledge_retrieval_ms=%.2f", (monotonic() - retrieval_start) * 1000)
         is_complex = route == Route.MULTI_PHASE
         assessment = None
         if is_complex:
@@ -256,7 +260,10 @@ class AITriageService:
             **settings.request_options(),
         )
         logger.info("Triage inference input_tokens=%s metrics=%s", prepared.token_count, result.get("metrics", {}))
-        return parse_output(result, schema, prepared.visible_ids)
+        validation_start = monotonic()
+        parsed = parse_output(result, schema, prepared.visible_ids)
+        logger.info("Triage json_validation_ms=%.2f", (monotonic() - validation_start) * 1000)
+        return parsed
 
     async def _save(self, incident_id, expected_version, context, verdict, status):
         async with AsyncSessionLocal() as session, session.begin():

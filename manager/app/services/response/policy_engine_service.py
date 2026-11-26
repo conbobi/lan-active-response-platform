@@ -205,7 +205,8 @@ class PolicyEngineService:
         risk_score: float,
         context: Optional[Dict[str, Any]] = None,
         dry_run: bool = True,
-        incident_id: Optional[str] = None
+        incident_id: Optional[str] = None,
+        allowed_agents: set[str] | None = None
     ) -> PolicyEvaluateResponse:
         """
         Đánh giá điểm rủi ro của agent, xác định policy phù hợp và thực thi (hoặc dry-run).
@@ -276,6 +277,10 @@ class PolicyEngineService:
                 # Fallback: nếu agent chưa được phân vào nhóm nào, scope group sẽ chỉ tác động chính agent đó
                 target_agents = [agent]
                 logger.warning(f"Agent '{agent_id}' has scope 'group' but belongs to no groups. Falling back to agent.")
+
+        if allowed_agents is not None and any(agent.id not in allowed_agents for agent in target_agents):
+            from app.core.response_outcome import OutcomeHTTPException, AUTHORIZATION_FAILED
+            raise OutcomeHTTPException(403, "Policy targets include an Agent outside operator scope", AUTHORIZATION_FAILED)
 
         # 4. Tạo danh sách hành động mô phỏng (Simulated Actions)
         simulated_actions = [

@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
@@ -14,7 +14,14 @@ from app.services.response.response_policy_service import ResponsePolicyService
 from app.services.response.policy_engine_service import PolicyEngineService
 from app.core.exceptions import NotFoundError
 
-router = APIRouter(tags=["Response Policies & Policy Engine"])
+from app.core.network_security import verify_operator_or_admin
+
+
+def policy_access(request: Request, authorization: str | None = Header(None)):
+    return verify_operator_or_admin(authorization, write=request.method != "GET")
+
+
+router = APIRouter(tags=["Response Policies & Policy Engine"], dependencies=[Depends(policy_access)])
 
 
 # ==============================================================================
@@ -127,6 +134,7 @@ async def delete_policy(
 @router.post("/policies/evaluate", response_model=PolicyEvaluateResponse)
 async def evaluate_policy(
     req: PolicyEvaluateRequest,
+    authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -134,10 +142,12 @@ async def evaluate_policy(
     - dry_run = true: Mô phỏng hành vi, trả về policy khớp và danh sách các máy/nhóm sẽ bị tác động mà KHÔNG thực thi lệnh thật.
     - dry_run = false: Tự động kích hoạt phản ứng thật dựa trên policy và scope đã xác định.
     """
+    _, config = verify_operator_or_admin(authorization, req.agent_id, write=True)
     service = PolicyEngineService(db)
     return await service.evaluate_and_execute(
         agent_id=req.agent_id,
         risk_score=req.risk_score,
         context=req.context,
+        allowed_agents=config.agents if config and config.agents else None,
         dry_run=req.dry_run
     )

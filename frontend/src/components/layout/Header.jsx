@@ -5,7 +5,7 @@ import { FaShieldAlt } from 'react-icons/fa';
 import { getAgents } from '../../api/agents';
 import { getIncidents } from '../../api/incidents';
 
-export default function Header() {
+export default function Header({ sessionControl }) {
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -77,6 +77,7 @@ export default function Header() {
           <span style={{ background: 'var(--primary-light)', color: 'var(--primary)', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-full)', letterSpacing: '0.05em' }}>LIVE</span>
         </div>
         <div className="header-right">
+          {sessionControl}
           <button
             className="header-icon-btn"
             title="Global Search (Ctrl+K)"

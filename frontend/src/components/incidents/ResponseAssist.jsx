@@ -1,11 +1,14 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef, useSyncExternalStore } from 'react';
 import api from '../../api/api';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
-import OperatorTokenPrompt from '../common/OperatorTokenPrompt';
+import { readSession, requestSignIn, subscribeSession } from '../../api/operatorSession';
 
 // One message per backend outcome_code (app/core/response_outcome.py); never a generic "failed".
 const OUTCOME_TEXT = {
+  SIGN_IN_REQUIRED: 'Cần đăng nhập.',
+  SESSION_EXPIRED: 'Phiên đã hết hạn.',
+  INSUFFICIENT_PRIVILEGES: 'Thiếu quyền cho Agent hoặc thao tác này.',
   AUTHORIZATION_FAILED: 'Không có quyền: cần operator token hợp lệ cho Agent này (thao tác ghi cần vai trò admin).',
   INSUFFICIENT_EVIDENCE: 'Chưa đủ bằng chứng tương quan cho hành động này.',
   POLICY_DENIED: 'Chính sách phản ứng từ chối hành động này với bằng chứng hiện tại.',
@@ -20,31 +23,38 @@ const OUTCOME_TEXT = {
 };
 
 const describeError = (e) => ({
-  outcome: e?.outcome || 'INTERNAL_ERROR',
+  outcome: e?.status === 403 ? 'INSUFFICIENT_PRIVILEGES' : e?.status === 401 && e?.outcome !== 'SESSION_EXPIRED' ? 'SIGN_IN_REQUIRED' : e?.outcome || 'INTERNAL_ERROR',
   message: e?.message || '',
   requestId: e?.requestId,
 });
 
 export default function ResponseAssist({ incidentId }) {
+  const session = useSyncExternalStore(subscribeSession, readSession);
+  return <ProposalList key={`${incidentId}/${Boolean(session)}`} incidentId={incidentId} />;
+}
+
+function ProposalList({ incidentId }) {
   const [data, setData] = useState(null);
   const [auditActionId, setAuditActionId] = useState(null);
   const [auditLogs, setAuditLogs] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [nowStamp, setNowStamp] = useState(Date.now());
+  const [nowStamp, setNowStamp] = useState(Date.now);
 
+  const sequence = useRef(0);
   const path = `/incidents/${encodeURIComponent(incidentId)}/response-proposals`;
 
-  const load = useCallback(async (signal) => {
-    try {
-      const result = await api.get(path, { signal });
-      if (!signal?.aborted) {
-        setData(result);
-        setError('');
-      }
-    } catch (e) {
-      if (!signal?.aborted) setError(describeError(e));
-    }
+  const load = useCallback((signal) => {
+    const version = ++sequence.current;
+    return api.get(path, { signal }).then(result => {
+      if (signal?.aborted || version !== sequence.current) return;
+      setData(result);
+      setError('');
+    }).catch(error => {
+      if (signal?.aborted || version !== sequence.current) return;
+      setData(null);
+      setError(describeError(error));
+    });
   }, [path]);
 
   const hasActiveActions = useMemo(() => {
@@ -53,27 +63,41 @@ export default function ResponseAssist({ incidentId }) {
     );
   }, [data]);
 
+  const hasData = Boolean(data);
+
   // Periodic refresh & live clock for TTL
   useEffect(() => {
     const controller = new AbortController();
     load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
+  useEffect(() => {
+    if (!hasData) return;
+    const controller = new AbortController();
     const clock = setInterval(() => setNowStamp(Date.now()), 1000);
-    const poller = hasActiveActions && setInterval(() => load(controller.signal), 3000);
-
+    const poller = setInterval(() => load(controller.signal), hasActiveActions ? 3000 : 10000);
     return () => {
       clearInterval(clock);
-      if (poller) clearInterval(poller);
+      clearInterval(poller);
       controller.abort();
     };
-  }, [load, hasActiveActions]);
+  }, [load, hasData, hasActiveActions]);
+
+  function showSaved(saved) {
+    sequence.current++;
+    setData(previous => previous && ({
+      ...previous,
+      actions: [saved, ...previous.actions.filter(item => item.action_id !== saved.action_id)],
+    }));
+  }
 
   async function handleOperation(operation, action = null) {
     if (operation === 'propose') {
       setBusy(true);
       setError('');
       try {
-        await api.post(path, action ? { action_type: action.action_type } : {});
+        showSaved(await api.post(path, action ? { action_type: action.action_type } : {}));
         await load();
       } catch (e) {
         setError(describeError(e));
@@ -111,7 +135,7 @@ export default function ResponseAssist({ incidentId }) {
     setError('');
     try {
       const endpoint = `/response-actions/${encodeURIComponent(action.action_id)}/${operation}`;
-      await api.post(endpoint, {});
+      showSaved(await api.post(endpoint, {}));
       await load();
     } catch (e) {
       setError(describeError(e));
@@ -172,13 +196,13 @@ export default function ResponseAssist({ incidentId }) {
             onClick={() => handleOperation('propose')}
             title="Refresh evidence investigation"
           >
-            {busy ? 'Investigating...' : '🔄 Investigate'}
+            {busy ? 'Đang xử lý…' : 'Tạo đề xuất từ bằng chứng'}
           </Button>
         </div>
       </div>
 
-      {error?.outcome === 'AUTHORIZATION_FAILED' && (
-        <OperatorTokenPrompt reason={error.message} onSaved={() => { setError(''); load(); }} />
+      {['SIGN_IN_REQUIRED', 'SESSION_EXPIRED'].includes(error?.outcome) && (
+        <button onClick={() => requestSignIn(OUTCOME_TEXT[error.outcome])}>Đăng nhập</button>
       )}
 
       {error && (
@@ -299,6 +323,11 @@ export default function ResponseAssist({ incidentId }) {
           {data.actions.map((action) => {
             const snap = action.result || {};
             const verification = snap.verification;
+            const executeReason = !data.can_execute ? 'Thiếu quyền thực thi.' :
+              action.status !== 'approved' ? 'Đang chờ phê duyệt.' :
+              !investigation?.recommended_responses?.some(item => item.action_id === action.action_id)
+                ? 'Bằng chứng hiện tại chưa đủ.' :
+              action.action_type === 'collect_additional_evidence' && !data.agent_online ? 'Agent offline.' : '';
             const target = action.target_resource || {};
 
             // Calculate remaining TTL
@@ -336,7 +365,14 @@ export default function ResponseAssist({ incidentId }) {
                         color: getStatusColor(action.status),
                         border: `1px solid ${getStatusColor(action.status)}50`
                       }}>
-                        {action.status.toUpperCase()}
+                        {({
+                          pending_approval: 'Chờ phê duyệt', approved: 'Đã duyệt', dispatched: 'Đã xếp hàng',
+                          executing: 'Đang thực thi', verifying: 'Đang xác minh', monitoring: 'Đang giám sát',
+                          partial: 'Hoàn thành một phần', failed: 'Thất bại', rejected: 'Đã từ chối',
+                          not_recommended: 'Không khuyến nghị', rollback_failed: 'Hoàn tác thất bại',
+                          succeeded: verification?.verification_status === 'succeeded' ? 'Đã xác minh' : 'Hoàn thành',
+                          rolled_back: 'Đã hoàn tác', expired: 'Hết TTL',
+                        })[action.status] || action.status.toUpperCase()}
                       </span>
                       {action.recommendation_source && (
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
@@ -345,7 +381,7 @@ export default function ResponseAssist({ incidentId }) {
                       )}
                     </div>
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                      {action.expected_effect}
+                      {action.rationale} {action.expected_effect}
                     </div>
                   </div>
 
@@ -377,9 +413,16 @@ export default function ResponseAssist({ incidentId }) {
                   gap: '1rem',
                   fontFamily: 'monospace'
                 }}>
+                  <span>Agent: {action.target_agent_id}</span>
+                  <span>Executor: {['temporary_ip_block', 'apply_rate_limit', 'revoke_session'].includes(action.action_type) ? 'Flask HTTP/WAF' : action.action_type === 'collect_additional_evidence' ? 'Agent' : 'Manager'}</span>
+                  <span>Approval: {action.requires_approval ? 'required' : 'automatic'}</span>
+                  <span>Thực thi: {['dispatched', 'executing', 'verifying', 'monitoring', 'succeeded', 'partial', 'failed', 'rolled_back', 'rollback_failed', 'expired'].includes(action.status) ? 'đã thực thi' : 'chưa thực thi'}</span>
+                  {snap.command_id && <span>Command: {snap.command_id}</span>}
                   {target.source_ip && <span>Direct Peer: <strong>{target.source_ip}</strong></span>}
                   {target.endpoint && <span>Route: {target.method || 'POST'} {target.endpoint}</span>}
                   {target.session_ref && <span>Session Ref: {target.session_ref.slice(0, 16)}...</span>}
+                  {!verification && <span>Hiệu lực chưa xác minh</span>}
+                  <span>Có thể hoàn tác: {action.rollback_available ? 'có' : 'không'}</span>
                   {action.rollback_strategy && <span>Rollback: {action.rollback_strategy}</span>}
                 </div>
 
@@ -452,7 +495,7 @@ export default function ResponseAssist({ incidentId }) {
                       <Button
                         size="sm"
                         variant="primary"
-                        disabled={busy}
+                        disabled={busy || !data.can_execute}
                         onClick={() => handleOperation('approve', action)}
                       >
                         ✓ Approve
@@ -460,7 +503,7 @@ export default function ResponseAssist({ incidentId }) {
                       <Button
                         size="sm"
                         variant="danger"
-                        disabled={busy}
+                        disabled={busy || !data.can_execute}
                         onClick={() => handleOperation('reject', action)}
                       >
                         ✕ Reject
@@ -468,14 +511,14 @@ export default function ResponseAssist({ incidentId }) {
                     </>
                   )}
 
-                  {action.status === 'approved' && (
+                  {['approved', 'pending_approval'].includes(action.status) && (
                     <Button
                       size="sm"
                       variant="primary"
-                      disabled={busy}
+                      disabled={busy || !!executeReason}
                       onClick={() => handleOperation('execute', action)}
                     >
-                      ⚡ Execute Action
+                      ⚡ Execute Action {executeReason && `· ${executeReason}`}
                     </Button>
                   )}
 
@@ -483,7 +526,7 @@ export default function ResponseAssist({ incidentId }) {
                     <Button
                       size="sm"
                       variant="danger"
-                      disabled={busy}
+                      disabled={busy || !data.can_execute}
                       onClick={() => handleOperation('rollback', action)}
                     >
                       ↺ Rollback / Undo

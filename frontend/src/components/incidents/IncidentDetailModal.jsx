@@ -13,7 +13,6 @@ import { executeIncidentAction, updateIncidentStatus, getIncident, closeIncident
 import { useAgents } from '../../hooks/useAgents';
 
 import ResponseAssist from './ResponseAssist';
-import OperatorTokenPrompt from '../common/OperatorTokenPrompt';
 import AIAnalysisTab from './AIAnalysisTab';
 
 const STORYBOARD_TABS = [
@@ -48,7 +47,6 @@ export default function IncidentDetailModal({
 }) {
   const [tab, setTab] = useState('story');
   const tabTouched = useRef(false);
-  const [tokenReason, setTokenReason] = useState('');
   const selectTab = (value) => { tabTouched.current = true; setTab(value); };
   const [detailedIncident, setDetailedIncident] = useState(incident);
   const [actionLoading, setActionLoading] = useState(false);
@@ -64,7 +62,8 @@ export default function IncidentDetailModal({
 
   // HTTP incidents are answered by evidence-scoped proposals in AI Response Assist; the host
   // containment and legacy suggestion paths refuse them (RESPONSE_ROOT_CAUSE.md).
-  const httpIncident = detailedIncident?.detection_evidence?.behavior?.evidence_type === 'http';
+  const behavior = detailedIncident?.detection_evidence?.behavior;
+  const httpIncident = behavior?.evidence_type === 'http' || (behavior?.source === 'auth_events' && behavior?.service === 'flask_web');
   useEffect(() => {
     if (httpIncident && !tabTouched.current) setTab('assist');
   }, [httpIncident]);
@@ -124,7 +123,6 @@ export default function IncidentDetailModal({
       toast.error(errMsg);
       showToast(errMsg, 'error');
       if (err.use === 'response_assist') selectTab('assist');
-      if (err.outcome === 'AUTHORIZATION_FAILED') setTokenReason(err.message);
     } finally {
       setActionLoading(false);
     }
@@ -145,7 +143,6 @@ export default function IncidentDetailModal({
       const errMsg = `Không thể cập nhật trạng thái: ${err.message}`;
       toast.error(errMsg);
       showToast(errMsg, 'error');
-      if (err.outcome === 'AUTHORIZATION_FAILED') setTokenReason(err.message);
     } finally {
       setActionLoading(false);
     }
@@ -216,10 +213,6 @@ export default function IncidentDetailModal({
               ×
             </button>
           </div>
-        )}
-
-        {tokenReason && (
-          <OperatorTokenPrompt reason={tokenReason} onSaved={() => setTokenReason('')} />
         )}
 
         {/* 1. HERO NARRATIVE BANNER */}

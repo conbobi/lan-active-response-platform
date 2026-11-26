@@ -26,14 +26,7 @@ router = APIRouter(tags=["Response Actions & Rollback"])
 
 
 def _enforce_operator(authorization: Optional[str], agent_id: Optional[str] = None, write: bool = True) -> str:
-    identity, role = verify_operator_or_admin(authorization, agent_id=agent_id, write=write)
-    if role is None and identity != "legacy_admin":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Configured operator credentials required for response actions",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    return identity
+    return verify_operator_or_admin(authorization, agent_id, write=write)[0]
 
 
 # ==============================================================================
@@ -67,11 +60,14 @@ async def list_all_actions(
     status: Optional[str] = Query(None, description="Filter by status"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Lấy danh sách tất cả các response actions trong hệ thống."""
     service = ResponseActionService(db)
+    _, config = verify_operator_or_admin(authorization, agent_id)
     return await service.list_all_actions(
+        allowed_agents=config.agents if config and config.agents else None,
         agent_id=agent_id,
         action_type=action_type,
         status=status,
@@ -83,13 +79,16 @@ async def list_all_actions(
 @router.get("/actions/{action_id}", response_model=ResponseActionResponse)
 async def get_response_action(
     action_id: str,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Lấy thông tin chi tiết của một response action và snapshot của nó."""
     service = ResponseActionService(db)
+    _enforce_operator(authorization, write=False)
     action = await service.get_action(action_id)
     if not action:
         raise NotFoundError(f"ResponseAction '{action_id}' was not found.")
+    _enforce_operator(authorization, agent_id=action.agent_id, write=False)
     return action
 
 
@@ -105,6 +104,7 @@ async def undo_single_action(
     Khôi phục trạng thái agent dựa trên snapshot và gửi lệnh đảo ngược tương ứng.
     """
     service = ResponseActionService(db)
+    _enforce_operator(authorization, write=False)
     action = await service.get_action(action_id)
     if not action:
         raise NotFoundError(f"ResponseAction '{action_id}' was not found.")
@@ -117,11 +117,15 @@ async def undo_single_action(
 @router.get("/actions/{action_id}/audit", response_model=List[ActionAuditLogResponse])
 async def get_action_audit_logs(
     action_id: str,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Lấy lịch sử audit log của một response action."""
-    if not await ResponseActionService(db).get_action(action_id):
+    _enforce_operator(authorization, write=False)
+    action = await ResponseActionService(db).get_action(action_id)
+    if not action:
         raise NotFoundError("Action unavailable")
+    _enforce_operator(authorization, action.agent_id, write=False)
     service = ActionAuditLogService(db)
     return await service.get_logs_for_action(action_id)
 
@@ -135,10 +139,12 @@ async def list_agent_actions(
     agent_id: str,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Lấy danh sách các response action đã thực hiện trên một agent."""
     service = ResponseActionService(db)
+    _enforce_operator(authorization, agent_id, write=False)
     return await service.list_actions_by_agent(agent_id, limit=limit, offset=offset)
 
 
@@ -159,10 +165,17 @@ async def undo_all_agent_actions(
 @router.get("/incidents/{incident_id}/actions", response_model=List[ResponseActionResponse])
 async def list_incident_actions(
     incident_id: str,
+    authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Lấy danh sách các response action thuộc về một incident."""
     service = ResponseActionService(db)
+    from app.models.incident import Incident
+    _enforce_operator(authorization, write=False)
+    incident = await db.get(Incident, incident_id)
+    if not incident or not incident.agent_id:
+        raise NotFoundError("Incident or Agent unavailable")
+    _enforce_operator(authorization, incident.agent_id, write=False)
     return await service.list_actions_by_incident(incident_id)
 
 
