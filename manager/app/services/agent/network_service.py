@@ -371,3 +371,68 @@ async def add_context(session, agent_id, rows, *, groups):
                        if exact.search(f"{item.description or ''} {item.notes or ''}")]
             context.setdefault(value, {})["incidents"] = matches[:10]
     return [{**row, **context.get(row.get(ip_key), {})} for row in rows]
+
+
+MANAGEMENT_PROCESSES = {"tailscaled", "cloudflared", "sshd", "sshd-session", "systemd-resolved", "chronyd"}
+OPEN_TCP = {"ESTAB", "ESTABLISHED", "SYN-SENT", "FIN-WAIT-1", "FIN-WAIT-2", "CLOSE-WAIT", "LAST-ACK", "CLOSING", "TIME-WAIT"}
+
+
+def annotate_directions(rows, port_rows):
+    """Fill unknown TCP directions from the listening sockets of the same snapshot (never guessed otherwise)."""
+    listeners = {}
+    for row in port_rows:
+        if row.get("status") == "LISTEN" and str(row.get("protocol", "")).upper() == "TCP":
+            listeners[(row.get("family"), row.get("src_ip"), row.get("src_port"))] = row.get("process_name")
+    out = []
+    for row in rows:
+        row = dict(row)
+        if row.get("direction") in (None, "unknown") and str(row.get("protocol", "")).upper() == "TCP" and listeners:
+            wildcard = "::" if row.get("family") == "IPv6" else "0.0.0.0"
+            service = next((listeners[k] for k in ((row.get("family"), row.get("src_ip"), row.get("src_port")),
+                                                   (row.get("family"), wildcard, row.get("src_port"))) if k in listeners), None)
+            if service is not None or any(k[2] == row.get("src_port") for k in listeners):
+                row.update(direction="inbound", direction_basis="local_listener", service=service)
+            elif row.get("status") in OPEN_TCP:
+                row.update(direction="outbound", direction_basis="no_local_listener")
+        row["management_channel"] = row.get("process_name") in MANAGEMENT_PROCESSES and row.get("direction") == "outbound"
+        out.append(row)
+    return out
+
+
+async def access_anomalies(session, agent_id, hours=24):
+    from app.models.auth_event import AuthEvent
+    from app.models.flow import Flow
+    since = now() - timedelta(hours=hours)
+    events = (await session.scalars(select(AuthEvent).where(
+        AuthEvent.agent_id == agent_id, AuthEvent.status == "success", AuthEvent.timestamp >= since,
+    ).order_by(AuthEvent.timestamp.desc()).limit(2000))).all()
+    accounts = {}
+    for event in events:
+        if not event.username or event.username == "unknown" or event.source_ip in (None, "", "unknown"):
+            continue
+        entry = accounts.setdefault((event.service, event.username), {})
+        seen = entry.setdefault(event.source_ip, {"ip": event.source_ip, "logins": 0, "last_login": None})
+        seen["logins"] += event.count or 1
+        stamp = utc(event.timestamp).isoformat()
+        seen["last_login"] = max(seen["last_login"] or stamp, stamp)
+    logins = [{"service": service, "account": user, "ips": sorted(ips.values(), key=lambda i: i["last_login"], reverse=True)}
+              for (service, user), ips in accounts.items() if len(ips) >= 2]
+    flows = (await session.scalars(select(Flow).where(
+        Flow.agent_id == agent_id, Flow.created_at >= now() - timedelta(minutes=3), Flow.socket_evidence.is_not(None),
+    ).order_by(Flow.created_at.desc()).limit(500))).all()
+    channels = {}
+    for flow in flows:
+        evidence = flow.socket_evidence or {}
+        if evidence.get("direction") == "inbound" or not str(evidence.get("attribution") or "").startswith("inode_verified"):
+            continue
+        for holder in evidence.get("holders") or []:
+            if holder.get("socket_stdio"):
+                key = (flow.dst_ip, flow.dst_port, holder.get("pid"))
+                channels.setdefault(key, {
+                    "remote_ip": flow.dst_ip, "remote_port": flow.dst_port, "pid": holder.get("pid"),
+                    "process": holder.get("process_name"), "cmdline": str(holder.get("cmdline") or "")[:200],
+                    "euid": holder.get("euid", holder.get("uid")), "last_seen": utc(flow.created_at).isoformat()})
+    return {"agent_id": agent_id, "window_hours": hours, "shared_account_logins": logins,
+            "control_channels": list(channels.values()),
+            "basis": {"logins": "Sự kiện đăng nhập THÀNH CÔNG (SSH/web) theo tài khoản; kết nối đi ra không được tính.",
+                      "control_channels": "Socket đi ra mà stdin/stdout của tiến trình gắn trực tiếp vào (xác minh qua inode)."}}

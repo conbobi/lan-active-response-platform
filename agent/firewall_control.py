@@ -234,6 +234,26 @@ def _remaining(state):
     return min(state["deadline"] - _now(), state["deadline_mono"] - time.monotonic())
 
 
+# Firewall state with a known owner that does not compete with UFW for management traffic:
+# - Tailscale: ts-* chains (filter/nat) and the INPUT/FORWARD/POSTROUTING jumps to them; its mangle rules
+#   only save/restore connection marks (no verdicts). ts-input drops only spoofed 100.64/10 traffic
+#   that did not arrive on tailscale0, so SSH and the Manager channel on other interfaces are unaffected.
+# - LARP's own host blocklist (inet larp_blocklist): accept-policy chains holding per-IP drop rules
+#   for approved targets; protected management addresses are refused before such a rule is added.
+OWNED_TABLES = {("inet", "larp_blocklist")}
+VERDICTS = {"drop", "reject", "queue", "goto"}
+
+
+def _tailscale_chain(name):
+    return isinstance(name, str) and name.startswith("ts-")
+
+
+def _jump_target(item):
+    expressions = [expr for expr in item.get("expr", []) if "counter" not in expr]
+    jump = expressions[0].get("jump") if len(expressions) == 1 else None
+    return jump.get("target") if isinstance(jump, dict) else None
+
+
 def _kernel_scope(active=None, recovery=False):
     if not all("nf_tables" in run(command, "-V") for command in ("iptables", "ip6tables")):
         raise CollectionError("UFW controls require the Debian iptables-nft backend")
@@ -252,6 +272,16 @@ def _kernel_scope(active=None, recovery=False):
             continue
         table = item.get("table") or item.get("name")
         family = item.get("family")
+        if (family, table) in OWNED_TABLES:
+            if "chain" in entry and item.get("hook") and item.get("policy") != "accept":
+                raise CollectionError(f"LARP table {table} must keep an accept policy")
+            continue
+        if table == "mangle" and family in {"ip", "ip6"}:
+            if "chain" in entry and item.get("hook") and item.get("policy") != "accept":
+                raise CollectionError("Independent mangle policy present")
+            if "rule" in entry and any(VERDICTS & set(expr) for expr in item.get("expr", [])):
+                raise CollectionError("Independent mangle rules can filter traffic")
+            continue
         if table == "nat" and family in {"ip", "ip6"}:
             if "chain" in entry and item.get("hook") and item.get("type") != "nat":
                 raise CollectionError("Independent filtering hook in the NAT table")
@@ -259,14 +289,19 @@ def _kernel_scope(active=None, recovery=False):
         if table != "filter" or family not in {"ip", "ip6"}:
             raise CollectionError(f"Independent firewall policy present ({family}/{table})")
         chain = item.get("chain") or (item.get("name") if "chain" in entry else None)
+        if _tailscale_chain(chain):
+            if "chain" in entry and item.get("hook"):
+                raise CollectionError("A Tailscale chain is unexpectedly hooked")
+            continue  # Tailscale-owned chain and its rules
         if chain and chain not in builtin and not chain.startswith("ufw"):
             raise CollectionError("Independent filter chains are present")
         if "rule" in entry and chain in builtin:
-            expressions = [expr for expr in item.get("expr", []) if "counter" not in expr]
-            jump = expressions[0].get("jump") if len(expressions) == 1 else None
-            if not isinstance(jump, dict) or not jump.get("target", "").startswith("ufw"):
+            target = _jump_target(item)
+            if _tailscale_chain(target):
+                continue  # INPUT/FORWARD → ts-*; not part of the UFW ordering requirement
+            if not isinstance(target, str) or not target.startswith("ufw"):
                 raise CollectionError("Independent filtering rules are present")
-            jumps.setdefault((family, chain), []).append(jump["target"])
+            jumps.setdefault((family, chain), []).append(target)
         if "rule" in entry and chain in {"ufw-before-logging-input", "ufw6-before-logging-input",
                                          "ufw-before-logging-output", "ufw6-before-logging-output"}:
             if any(set(expr) - {"match", "limit", "log", "counter", "return"} for expr in item.get("expr", [])):
@@ -290,6 +325,9 @@ def _kernel_fingerprint(entries):
             value = entry.get(kind)
             if not value or (value.get("table") or value.get("name")) != "filter":
                 continue
+            chain = value.get("chain") or (value.get("name") if kind == "chain" else None)
+            if _tailscale_chain(chain) or (kind == "rule" and _tailscale_chain(_jump_target(value))):
+                continue  # Tailscale maintains these itself; they are not drift in a UFW transaction
             value = {key: item for key, item in value.items() if key != "handle"}
             if "expr" in value:
                 value["expr"] = [expr for expr in value["expr"] if "counter" not in expr]

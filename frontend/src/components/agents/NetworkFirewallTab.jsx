@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
 import {
   FiCopy, FiRefreshCw, FiShield, FiAlertTriangle, FiCheckCircle,
@@ -8,6 +8,11 @@ import toast from 'react-hot-toast';
 import {
   applyAgentFirewallAction, getAgentNetwork, refreshAgentNetwork,
 } from '../../api/network';
+import api from '../../api/api';
+import { requestBlock } from '../../api/accessControl';
+import { BlockDialog } from '../access/AccessDialogs';
+
+const getAccessAnomalies = (agentId) => api.get(`/network/agents/${agentId}/access-anomalies`);
 import './NetworkFirewallTab.css';
 
 import { readSession, requestSignIn, subscribeSession } from '../../api/operatorSession';
@@ -137,95 +142,80 @@ function GatewayHeroCard({ gatewayRoute, allGateways }) {
   );
 }
 
-/* Multi-IP Concurrent Account Anomaly Banner */
-function MultiIpAnomalyBanner({ rows, onBlockIp }) {
-  const { anomalies, normalAccounts } = useMemo(() => {
-    const accountMap = {};
-    (rows || []).forEach(row => {
-      const remoteIp = row.dst_ip;
-      if (!remoteIp || remoteIp === '127.0.0.1' || remoteIp === '::1') return;
-      // Identify target account: process_owner or process_name
-      const owner = row.process_owner || (row.process_name === 'sshd' ? 'admin' : (row.process_name || 'Hệ thống'));
-      if (!accountMap[owner]) {
-        accountMap[owner] = { ips: new Set(), rows: [] };
-      }
-      accountMap[owner].ips.add(remoteIp);
-      accountMap[owner].rows.push(row);
-    });
-
-    const anomaliesList = [];
-    const normalList = [];
-    for (const [account, info] of Object.entries(accountMap)) {
-      const distinctIps = Array.from(info.ips);
-      if (distinctIps.length >= 2) {
-        anomaliesList.push({ account, ips: distinctIps, rows: info.rows, count: distinctIps.length });
-      } else {
-        normalList.push({ account, ips: distinctIps, rows: info.rows });
-      }
-    }
-    return { anomalies: anomaliesList, normalAccounts: normalList };
-  }, [rows]);
-
-  if (anomalies.length > 0) {
+/* Access anomalies from evidence: successful logins to one account from several IPs (authentication
+   events) and verified outbound control channels. Outbound connections of services are not "logins". */
+function AccessAnomalyBanner({ agentId, onBlockIp }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    getAccessAnomalies(agentId).then((res) => alive && setData(res)).catch((err) => alive && setError(err.message));
+    return () => { alive = false; };
+  }, [agentId]);
+  if (error) return <div className="anomaly-banner">Không tải được phân tích truy cập: {error}</div>;
+  if (!data) return null;
+  const logins = data.shared_account_logins || [];
+  const channels = data.control_channels || [];
+  if (!logins.length && !channels.length) {
     return (
-      <div className="anomaly-banner anomaly-banner-danger">
+      <div className="anomaly-banner anomaly-banner-safe">
         <div className="anomaly-banner-header">
-          <div className="anomaly-banner-title">
-            <FiAlertTriangle size={22} color="#f87171" />
-            <span>🚨 CẢNH BÁO BẢO MẬT: Phát hiện đa địa chỉ IP cùng truy cập 1 tài khoản!</span>
+          <div className="anomaly-banner-title"><FiCheckCircle size={20} color="#34d399" />
+            <span>Không có tài khoản đăng nhập thành công từ nhiều IP và không có kênh điều khiển ngược ({data.window_hours} giờ qua)</span>
           </div>
-          <span className="badge-status badge-deny">{anomalies.length} TÀI KHOẢN CÓ NGUY CƠ</span>
         </div>
-        <p style={{ fontSize: '0.86rem', color: 'var(--text-secondary)' }}>
-          Hệ thống phát hiện có từ <strong>2 địa chỉ IP khác nhau trở lên</strong> đang đồng thời kết nối vào cùng một tài khoản người dùng trên máy chủ này. Đây là dấu hiệu nghi vấn của việc <strong>chia sẻ mật khẩu, rò rỉ credential, hoặc xâm nhập trái phép đồng thời (Concurrent Session Hijacking)</strong>.
-        </p>
-        <div style={{ display: 'grid', gap: '0.65rem' }}>
-          {anomalies.map(item => (
-            <div key={item.account} className="anomaly-account-card">
-              <div className="anomaly-account-header">
-                <div>
-                  <strong style={{ color: '#f87171', fontSize: '0.92rem' }}>Tài khoản: {item.account}</strong>
-                  <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginLeft: '0.5rem' }}>
-                    ({item.count} địa chỉ IP khác nhau đang kết nối)
-                  </span>
-                </div>
-              </div>
-              <div className="anomaly-ip-chips">
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Các IP đang kết nối:</span>
-                {item.ips.map(ip => (
-                  <span key={ip} className="anomaly-ip-chip">
-                    <code>{ip}</code>
-                    <button
-                      type="button"
-                      className="btn-action-block"
-                      title={`Thêm rule chặn ngay IP ${ip} trên Firewall`}
-                      onClick={() => onBlockIp(ip, item.account)}
-                    >
-                      <FiSlash size={12} /> Chặn IP
-                    </button>
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>{data.basis?.logins}</p>
       </div>
     );
   }
-
+  const BlockButton = ({ ip, basis }) => (
+    <button type="button" className="btn-action-block" title={`Tạo yêu cầu chặn toàn bộ IP ${ip} (cần phê duyệt)`}
+            onClick={() => onBlockIp(ip, basis)}><FiSlash size={12} /> Đề xuất chặn IP</button>
+  );
   return (
-    <div className="anomaly-banner anomaly-banner-safe">
-      <div className="anomaly-banner-header">
-        <div className="anomaly-banner-title">
-          <FiCheckCircle size={20} color="#34d399" />
-          <span>✅ Kiểm soát tài khoản bình thường: Không phát hiện đa IP đăng nhập đồng thời</span>
+    <div className="anomaly-banner anomaly-banner-danger">
+      {channels.length > 0 && (<>
+        <div className="anomaly-banner-header">
+          <div className="anomaly-banner-title"><FiAlertTriangle size={22} color="#f87171" />
+            <span>Kết nối điều khiển ngược đang hoạt động (stdin/stdout của tiến trình gắn vào socket)</span></div>
+          <span className="badge-status badge-deny">{channels.length} KẾT NỐI</span>
         </div>
-        <span className="badge-status badge-active">AN TOÀN</span>
-      </div>
-      <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
-        Tất cả các tài khoản đang kết nối vào máy chủ hiện chỉ ghi nhận từ <strong>tối đa 1 địa chỉ IP nguồn hợp lệ</strong>. Không có dấu hiệu bất thường về truy cập phân tán.
-        {normalAccounts.length > 0 && ` (Đang giám sát ${normalAccounts.length} tài khoản có kết nối hoạt động).`}
-      </p>
+        <div className="anomaly-ip-chips">
+          {channels.map((c) => (
+            <span key={`${c.remote_ip}-${c.remote_port}-${c.pid}`} className="anomaly-ip-chip">
+              <code>{c.remote_ip}:{c.remote_port}</code>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                PID {c.pid} {c.process} · {c.euid === 0 ? 'root' : `uid ${c.euid ?? '?'}`}
+              </span>
+              <BlockButton ip={c.remote_ip} basis={[`Kênh điều khiển ngược từ PID ${c.pid} (${c.process}) tới ${c.remote_ip}:${c.remote_port}`]} />
+            </span>
+          ))}
+        </div>
+      </>)}
+      {logins.length > 0 && (<>
+        <div className="anomaly-banner-header" style={{ marginTop: channels.length ? '0.75rem' : 0 }}>
+          <div className="anomaly-banner-title"><FiAlertTriangle size={20} color="#fbbf24" />
+            <span>Tài khoản đăng nhập thành công từ nhiều địa chỉ IP ({data.window_hours} giờ qua)</span></div>
+          <span className="badge-status badge-deny">{logins.length} TÀI KHOẢN</span>
+        </div>
+        <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+          Có thể là chia sẻ hoặc lộ thông tin đăng nhập — cần xác minh IP nào thuộc người dùng hợp lệ trước khi chặn.
+        </p>
+        {logins.map((item) => (
+          <div key={`${item.service}-${item.account}`} className="anomaly-account-card">
+            <strong style={{ color: '#fbbf24', fontSize: '0.9rem' }}>Tài khoản {item.account} · dịch vụ {item.service}</strong>
+            <div className="anomaly-ip-chips">
+              {item.ips.map((ip) => (
+                <span key={ip.ip} className="anomaly-ip-chip">
+                  <code>{ip.ip}</code>
+                  <span style={{ fontSize: '0.76rem', color: 'var(--text-tertiary)' }}>{ip.logins} lần · gần nhất {date(ip.last_login)}</span>
+                  <BlockButton ip={ip.ip} basis={[`Đăng nhập thành công vào tài khoản ${item.account} (${item.service})`]} />
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </>)}
     </div>
   );
 }
@@ -941,16 +931,10 @@ export default function NetworkFirewallTab({ agent }) {
   const rows = data.rows || [];
   const available = view && !['unenrolled', 'unavailable', 'unsupported'].includes(view.status);
 
-  // Quick 1-click block IP handler from Anomaly or Groups view
-  const handleBlockIp = (ip, accountName) => {
-    setSelection({
-      operation: 'add_rule',
-      prefillAction: 'deny',
-      prefillSource: ip,
-      prefillPort: '22',
-      prefillReason: `Chặn IP ${ip} do phát hiện truy cập bất thường vào tài khoản ${accountName || 'hệ thống'}`
-    });
-  };
+  // Block a whole IP through Access Control (nftables on the Agent, approval + management-path preflight),
+  // not a UFW rule on a single port.
+  const [blockTarget, setBlockTarget] = useState(null);
+  const handleBlockIp = (ip, basis) => setBlockTarget({ ip, basis: Array.isArray(basis) ? basis : [`Từ bảng kết nối: ${basis}`] });
 
   // Quick overview stats
   const isUfwActive = data.status === 'active' || (data.firewall_status === 'active');
@@ -958,6 +942,18 @@ export default function NetworkFirewallTab({ agent }) {
 
   return (
     <section className="network-stack" aria-label="Network and Firewall">
+      <BlockDialog open={!!blockTarget} target={blockTarget} agentId={agent.id} incidentId={null}
+                   onClose={() => setBlockTarget(null)}
+                   onConfirm={async (reason) => {
+                     const target = blockTarget;
+                     setBlockTarget(null);
+                     try {
+                       await requestBlock({ agent_id: agent.id, target_ip: target.ip, reason });
+                       toast('Đã tạo yêu cầu chặn; chờ SOC Admin phê duyệt tại "Chặn đang hiệu lực"', { icon: '⏳' });
+                     } catch (err) {
+                       toast.error(err.status === 403 ? 'Bạn không có quyền tạo yêu cầu chặn' : err.message);
+                     }
+                   }} />
       {/* Top Heading */}
       <div className="network-heading">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -1136,7 +1132,7 @@ export default function NetworkFirewallTab({ agent }) {
               {tab === 'anomaly' && (
                 <div className="network-stack">
                   {/* Multi-IP Concurrent Account Anomaly Alert Engine */}
-                  <MultiIpAnomalyBanner rows={rows} onBlockIp={handleBlockIp} />
+                  <AccessAnomalyBanner agentId={agent.id} onBlockIp={handleBlockIp} />
 
                   {section === 'connections' && (
                     <>
@@ -1185,9 +1181,9 @@ export default function NetworkFirewallTab({ agent }) {
                             <button
                               type="button"
                               className="btn-action-block"
-                              onClick={() => handleBlockIp(row.remote_ip, 'ip-group')}
+                              onClick={() => handleBlockIp(row.remote_ip, 'nhóm IP từ xa')}
                             >
-                              <FiSlash size={12} /> Chặn IP
+                              <FiSlash size={12} /> Đề xuất chặn IP
                             </button>
                           )]
                         ]}

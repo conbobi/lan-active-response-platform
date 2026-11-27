@@ -131,6 +131,17 @@ async def firewall_action(agent_id: str, request: FirewallRequest, session=Depen
     return await network_service.queue_command(session, agent_id, operator[0], request.model_dump(exclude_none=True))
 
 
+@router.get("/agents/{agent_id}/access-anomalies")
+async def access_anomalies(agent_id: str, hours: int = Query(24, ge=1, le=168), session=Depends(get_session),
+                           _operator=Depends(require_network_read)):
+    """Evidence-based access anomalies: successful logins to one account from several IPs (authentication
+    events) and verified outbound control channels (socket bound to a process's stdin/stdout)."""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    return await network_service.access_anomalies(session, agent_id, hours)
+
+
 @router.get("/agents/{agent_id}/{section}", response_model=NetworkView)
 @router.get("/agents/{agent_id}/firewall/{section}", response_model=NetworkView, include_in_schema=False)
 async def network_section(
@@ -179,6 +190,8 @@ async def network_section(
                 data[key] = data.get(key, [])[:500]
         if section in {"groups", "connections", "ports", "events", "interfaces", "routes", "policy", "neighbors", "nat"}:
             rows = data.pop("groups", []) if section == "groups" else data.get("rows", [])
+            if section == "connections":
+                rows = network_service.annotate_directions(rows, (payload["sections"].get("ports") or {}).get("rows") or [])
             data.pop("groups", None)
             data.pop("rows", None)
             def matches(row):
