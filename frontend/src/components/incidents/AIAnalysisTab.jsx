@@ -37,6 +37,15 @@ const MITRE_EXPLANATIONS = {
   T1046: 'Quét cổng dịch vụ nhằm phát hiện các cổng/dịch vụ đang mở trên máy mục tiêu.',
   T1059: 'Thực thi lệnh qua trình thông dịch hệ thống như bash, sh hoặc PowerShell.',
   'T1059.004': 'Thực thi lệnh qua Unix/Linux Shell.',
+  'T1059.006': 'Thực thi mã hoặc backdoor bằng trình thông dịch Python.',
+};
+
+const FALLBACK_STATUS_WARNINGS = {
+  timeout: 'Mô hình AI quá thời gian chờ (timeout) — nội dung bên dưới là báo cáo tổng hợp xác định từ bằng chứng thực tế và đề xuất theo policy, KHÔNG phải phân tích AI thành công.',
+  model_error: 'Không gọi được mô hình AI cục bộ — hệ thống hiển thị báo cáo tổng hợp xác định từ bằng chứng thực tế.',
+  schema_invalid: 'Mô hình AI trả cấu trúc không hợp lệ — hệ thống đã loại bỏ kết quả thiếu căn cứ và hiển thị báo cáo xác định từ bằng chứng.',
+  queue_saturated: 'Hàng đợi phân tích AI đang quá tải — hệ thống hiển thị tóm tắt xác định từ bằng chứng.',
+  evidence_changed: 'Bằng chứng sự cố vừa cập nhật trong lúc phân tích — hệ thống đang xếp hàng đánh giá lại theo bằng chứng mới nhất.',
 };
 
 export default function AIAnalysisTab({ incidentId, incident = null, httpIncident = false, onOpenAssist }) {
@@ -150,16 +159,41 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
   };
 
   const behavior = incident?.detection_evidence?.behavior || {};
+  const chain = incident?.detection_evidence?.chain || null;
+  const isChain = Boolean(chain) || incident?.detection_evidence?.rule_id === 'web_compromise_chain';
   const investigation = assistState?.investigation || null;
   const severityMeta = translateSeverity(incident?.severity);
-  const rawClassification = investigation?.classification || behavior.classification || '';
-  const classificationText = translateClassification(rawClassification);
-  const sourceIp = behavior.source_ip || investigation?.observed_facts?.find((f) => f.source_ip)?.source_ip || null;
-  const serviceName = behavior.service || (httpIncident ? 'flask_web' : null);
+  const rawMeta = useMemo(() => {
+    if (!analysis?.raw_response) return {};
+    try {
+      const parsed = JSON.parse(analysis.raw_response);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, [analysis?.raw_response]);
+  const rawClassification = investigation?.classification || behavior.classification || rawMeta.classification || '';
+  const classificationText = isChain && !rawClassification
+    ? (chain?.execution_observed ? 'Chuỗi xâm nhập ứng dụng web (RCE / Reverse Shell)' : 'Chuỗi tấn công ứng dụng web')
+    : translateClassification(rawClassification);
+  const sourceIp =
+    behavior.source_ip ||
+    chain?.source_ips?.[0] ||
+    chain?.network?.[0]?.dst?.split(':')[0] ||
+    investigation?.observed_facts?.find((f) => f.source_ip)?.source_ip ||
+    null;
+  const anchorCmd = `${chain?.anchor?.name || ''} ${chain?.anchor?.exe || ''} ${chain?.anchor?.cmdline || ''}`.toLowerCase();
+  const serviceName =
+    behavior.service ||
+    (isChain ? (anchorCmd.includes('vulnerable_web') || anchorCmd.includes('flask') ? 'flask_web' : (chain?.anchor?.name || 'web_service')) : null) ||
+    (httpIncident ? 'flask_web' : null);
   const failedAttempts = Number.isInteger(behavior.failed_attempts) ? behavior.failed_attempts : null;
   const successAttempts = Number.isInteger(behavior.successful_attempts) ? behavior.successful_attempts : null;
 
   const executiveNarrative = useMemo(() => {
+    if (isChain && chain) {
+      return chain.severity_reason || incident?.description || 'Hệ thống đã tương quan chuỗi xâm nhập ứng dụng web từ nhiều nguồn bằng chứng.';
+    }
     if (failedAttempts !== null && sourceIp) {
       const successNote =
         successAttempts === 0
@@ -173,13 +207,35 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       return investigation.behavioral_interpretation;
     }
     return incident?.story || incident?.description || 'Hệ thống đã ghi nhận sự cố từ dữ liệu telemetry trên máy trạm.';
-  }, [failedAttempts, successAttempts, sourceIp, serviceName, investigation, incident]);
+  }, [isChain, chain, failedAttempts, successAttempts, sourceIp, serviceName, investigation, incident]);
 
   const parsedSections = useMemo(() => parseAnalysisSections(analysis?.summary || ''), [analysis?.summary]);
 
-  // Build real-timestamp-only timeline combining backend timeline, incident, AI analysis, and response actions.
+  // Build real-timestamp-only timeline combining backend timeline, chain stages, incident, AI analysis, and response actions.
   const mergedTimeline = useMemo(() => {
     const entries = [];
+    if (chain) {
+      for (const cond of chain.conditions || []) {
+        if (['OBSERVED', 'CORRELATED'].includes(cond.status) && cond.observed_at) {
+          entries.push({
+            time: cond.observed_at,
+            label: cond.label || cond.id,
+            title: cond.detail || cond.id,
+            severity: ['outbound_connection', 'privileged_execution', 'web_spawned_shell'].includes(cond.id) ? 'critical' : 'warning',
+          });
+        }
+      }
+      for (const net of chain.network || []) {
+        if (net.first_seen) {
+          entries.push({
+            time: net.first_seen,
+            label: 'Kết nối ra ngoài',
+            title: `PID ${net.pid} → ${net.dst}${net.socket_stdio ? ' (stdin/stdout gắn vào socket)' : ''}`,
+            severity: 'critical',
+          });
+        }
+      }
+    }
     for (const item of timelineEvents) {
       if (!item?.time) continue;
       entries.push({
@@ -264,11 +320,47 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
     }
     deduped.sort((a, b) => new Date(a.time) - new Date(b.time));
     return deduped;
-  }, [timelineEvents, behavior.first_attempt_at, behavior.evidence_type, behavior.activity_summary, sourceIp, serviceName, incident, analysis, assistState]);
+  }, [chain, timelineEvents, behavior.first_attempt_at, behavior.evidence_type, behavior.activity_summary, sourceIp, serviceName, incident, analysis, assistState]);
 
   // Observed evidence cards (distinguishing confirmed facts vs inferences vs missing evidence).
   const observedFacts = useMemo(() => {
     const facts = [];
+    if (chain) {
+      for (const cond of chain.conditions || []) {
+        if (!['OBSERVED', 'CORRELATED'].includes(cond.status)) continue;
+        facts.push({
+          kind: 'confirmed',
+          title: `${cond.label || cond.id} (${cond.status === 'OBSERVED' ? 'Quan sát trực tiếp' : 'Liên kết bằng chứng'})`,
+          summary: cond.detail || '',
+          observedAt: cond.observed_at,
+          evidenceIds: cond.evidence_ids || [],
+          raw: cond,
+        });
+      }
+      const anchorId = chain.anchor?.id;
+      for (const proc of chain.process_tree || []) {
+        if (proc.id === anchorId) continue;
+        facts.push({
+          kind: 'confirmed',
+          title: `Tiến trình liên quan: ${proc.name || 'process'} (PID ${proc.pid})`,
+          summary: `PPID ${proc.parent_pid} · ${proc.euid === 0 ? 'root (euid 0)' : `euid ${proc.euid ?? 'chưa rõ'}`} · ${proc.cmdline || proc.exe}`,
+          observedAt: proc.started_at,
+          evidenceIds: proc.id ? [proc.id] : [],
+          raw: proc,
+        });
+      }
+      for (const net of chain.network || []) {
+        facts.push({
+          kind: 'confirmed',
+          title: `Kết nối mạng xác minh qua inode: ${net.dst}`,
+          summary: `${net.src} → ${net.dst} (${net.direction || 'outbound'}) · PID ${net.pid}${net.socket_stdio ? ' · stdin/stdout gắn socket' : ''}`,
+          observedAt: net.first_seen,
+          evidenceIds: net.flow_id ? [net.flow_id] : [],
+          raw: net,
+        });
+      }
+      return facts;
+    }
     const scan = behavior.activity_summary;
     if (scan) {
       const answered = (scan.answered || []).map((a) => `${a.method} ${a.path} → ${a.http_status}`).join(', ');
@@ -323,9 +415,15 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       });
     }
     return facts;
-  }, [investigation, failedAttempts, successAttempts, serviceName, behavior]);
+  }, [chain, investigation, failedAttempts, successAttempts, serviceName, behavior]);
 
   const missingEvidenceList = useMemo(() => {
+    if (chain) {
+      const items = (chain.conditions || [])
+        .filter((c) => c.status === 'NOT_OBSERVED')
+        .map((c) => `${c.label || c.id}: ${c.detail || 'Chưa có bằng chứng'}`);
+      return items.length > 0 ? items : ['Không có khoảng trống lớn trong chuỗi bằng chứng đã quan sát.'];
+    }
     const items = [];
     if (Array.isArray(investigation?.missing_evidence)) {
       for (const m of investigation.missing_evidence) items.push(translateMissingEvidence(m));
@@ -337,7 +435,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       items.push('Chưa có tiến trình hoặc PID trên host gắn trực tiếp vào lưu lượng này.');
     }
     return Array.from(new Set(items));
-  }, [investigation, successAttempts, incident]);
+  }, [chain, investigation, successAttempts, incident]);
 
   const confidencePct = Math.round(((analysis?.confidence ?? investigation?.confidence ?? 0) * 100));
   const completenessCode = investigation?.evidence_completeness || (analysis ? 'partial' : 'partial');
@@ -449,6 +547,22 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       </div>
 
       <AnalysisSourcePanel incidentId={incidentId} analysisId={analysis?.id} busy={regenerating} onRun={handleRegenerate} />
+
+      {FALLBACK_STATUS_WARNINGS[rawMeta.status] && (
+        <div
+          style={{
+            padding: '0.75rem 1rem',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.45)',
+            color: '#fbbf24',
+            fontSize: '0.84rem',
+            fontWeight: 600,
+          }}
+        >
+          ⚠ {FALLBACK_STATUS_WARNINGS[rawMeta.status]}
+        </div>
+      )}
 
       {/* B. CHUYỆN GÌ ĐÃ XẢY RA? (Safe Structured Interpretation, NO raw Markdown) */}
       <SectionCard title="Chuyện gì đã xảy ra?" subtitle={analysis ? (analysis.model_name === 'threat-memory' ? 'Từ mẫu đã kiểm chứng (không gọi mô hình)' : `Mô hình: ${analysis.model_name || 'AI cục bộ'}`) : 'Chưa có bản phân tích AI'}>
@@ -693,15 +807,15 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
               <li key={idx}>{item}</li>
             ))}
           </ul>
-          {httpIncident && onOpenAssist && (
+          {(httpIncident || isChain) && onOpenAssist && (
             <Button variant="primary" size="sm" onClick={onOpenAssist}>
-              <FiShield size={13} style={{ marginRight: '0.35rem' }} /> Mở Trợ lý ứng phó AI
+              <FiShield size={13} style={{ marginRight: '0.35rem' }} /> Mở Trợ lý ứng phó & Cách ly
             </Button>
           )}
         </div>
       </SectionCard>
 
-      {!httpIncident && <AISuggestionPanel incidentId={incidentId} onRefresh={() => fetchAnalysis(true)} />}
+      {!httpIncident && !isChain && <AISuggestionPanel incidentId={incidentId} onRefresh={() => fetchAnalysis(true)} />}
 
       {/* Analyst Feedback */}
       {analysis && (

@@ -12,8 +12,29 @@ from network_monitor import socket_rows
 
 logger = logging.getLogger(__name__)
 SHELLS = {"bash", "dash", "sh", "ash", "ksh", "zsh", "fish"}
+INTERPRETERS = {"python", "perl", "php", "ruby", "node", "nodejs"}
+TEMP_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/")
 SOCKET_LIMIT = 100
 HOLDER_LIMIT = 16
+
+
+def _exe_stem(exe_path: str) -> str:
+    return os.path.basename(exe_path or "").lower().rstrip("0123456789.")
+
+
+def _primary_holder(holders, attribution: str) -> dict:
+    """Pick the most specific verified holder (stdio/shell/temp script) while preserving all holders."""
+    if not holders or not str(attribution).startswith("inode_verified"):
+        return {}
+    return max(
+        holders,
+        key=lambda h: (
+            bool(h.get("socket_stdio")),
+            _exe_stem(h.get("exe_path", "")) in SHELLS,
+            any(t in str(h.get("cmdline") or "") for t in TEMP_PREFIXES),
+            int(h.get("pid") or 0),
+        ),
+    )
 
 
 def _optional(read, default=None):
@@ -73,7 +94,7 @@ def _descendants(root, sample_started):
         parent = pending.pop(0)
         try:
             proc = psutil.Process(parent["pid"])
-            if proc.create_time() != parent["process_start_time"]:
+            if proc.create_time() != parent["process_start_time"] or not hasattr(proc, "children"):
                 continue
             children = proc.children()[:12 - len(descendants)]
         except psutil.Error:
@@ -133,12 +154,13 @@ def socket_holders(row, sample_started, cache=None):
             process["socket_fds"] = verified[:32]
             process["stdio_fds"] = sorted(stdio.intersection(verified))
             process["socket_stdio"] = 0 in process["stdio_fds"] and bool({1, 2}.intersection(process["stdio_fds"]))
-            shell = os.path.basename(process["exe_path"]) in SHELLS
+            shell = _exe_stem(process["exe_path"]) in SHELLS
+            interpreter = _exe_stem(process["exe_path"]) in INTERPRETERS
             # Parent chain for every verified holder: an orphaned payload keeps PPID 1 once its
             # launcher exits, so the chain must be captured while it still exists.
             process["ancestry"] = [{k: v for k, v in a.items() if k not in ("terminal",)}
                                    for a in _ancestry(process, cache)]
-            if shell:
+            if shell or interpreter:
                 process["descendants"] = _descendants(process, sample_started)
             holders.append(process)
         except (psutil.AccessDenied, PermissionError):
@@ -202,16 +224,24 @@ def collect_connections(tracker, activity=None):
                 # An accepted TCP connection always uses a listening local port; without one we dialled out.
                 direction, direction_basis = "outbound", "no_local_listener"
         interfaces = sorted(interface_ips.get(row["src_ip"], ()))
-        owner = holders[0] if len(holders) == 1 and attribution == "inode_verified" else {}
+        owner = _primary_holder(holders, attribution)
+        has_pty_shell = any(
+            d.get("terminal") or _exe_stem(d.get("exe_path", "")) in SHELLS
+            for holder in holders
+            for d in (holder.get("descendants") or [])
+        )
         connections.append({
             **{key: value for key, value in row.items() if key != "owners"},
             "pid": owner.get("pid"), "parent_pid": owner.get("parent_pid"),
             "process_name": owner.get("process_name", "unknown"), "exe_path": owner.get("exe_path", ""),
             "process_start_time": owner.get("process_start_time"),
-            "socket_stdio": owner.get("socket_stdio", False),
-            # stdin+stdout bound to a network socket: a shell, or an interpreter acting as one, that dialled out.
-            "is_suspicious": any(holder["socket_stdio"] and (os.path.basename(holder["exe_path"]) in SHELLS
-                                                             or direction == "outbound") for holder in holders),
+            "socket_stdio": bool(owner.get("socket_stdio", False)),
+            # stdin+stdout bound to a network socket, or an outbound interpreter that spawned a pty/shell.
+            "is_suspicious": any(
+                (holder.get("socket_stdio") and (os.path.basename(holder.get("exe_path", "")) in SHELLS or direction == "outbound"))
+                or (direction == "outbound" and has_pty_shell)
+                for holder in holders
+            ),
             "direction": direction, "direction_basis": direction_basis, "interfaces": interfaces,
             "overlay": "tailscale" if interfaces == ["tailscale0"] else None,
             "status": "ESTABLISHED" if row["status"] == "ESTAB" else row["status"],

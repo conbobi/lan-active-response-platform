@@ -391,12 +391,44 @@ class IncidentTimelineService:
                 "time": observed, "type": "network_connection", "severity": "warning",
                 "title": evidence["story"], "details": network,
             })
+        chain = evidence.get("chain") if isinstance(evidence.get("chain"), dict) else None
+        if chain:
+            anchor_id = (chain.get("anchor") or {}).get("id")
+            for cond in chain.get("conditions") or []:
+                if cond.get("status") in ("OBSERVED", "CORRELATED") and cond.get("observed_at"):
+                    timeline.append({
+                        "time": cond["observed_at"],
+                        "type": "rule_trigger",
+                        "severity": "critical" if cond.get("id") in ("outbound_connection", "privileged_execution", "web_spawned_shell") else "warning",
+                        "title": cond.get("label") or cond.get("id"),
+                        "details": {"rule": cond.get("id"), "score": cond.get("contribution"), "reason": cond.get("detail")},
+                    })
+            for proc in chain.get("process_tree") or []:
+                if proc.get("id") != anchor_id and proc.get("started_at"):
+                    timeline.append({
+                        "time": proc["started_at"],
+                        "type": "process_spawn",
+                        "severity": "warning",
+                        "title": f"Khởi chạy {proc.get('name') or 'tiến trình'} (PID {proc.get('pid')})",
+                        "details": {**proc, "exe_path": proc.get("exe")},
+                    })
+            for net in chain.get("network") or []:
+                if net.get("first_seen"):
+                    dst_ip, _, dst_port = str(net.get("dst", "")).rpartition(":")
+                    timeline.append({
+                        "time": net["first_seen"],
+                        "type": "network_connection",
+                        "severity": "critical",
+                        "title": f"Kết nối ra ngoài tới {net.get('dst')} (PID {net.get('pid')})",
+                        "details": {"dst_ip": dst_ip, "dst_port": dst_port, "protocol": "TCP", "pid": net.get("pid")},
+                    })
         signals = evidence.get("signals", evidence.get("factors", []))
-        for signal in signals:
-            timeline.append({
-                "time": observed, "type": "rule_trigger", "severity": "warning",
-                "title": signal["reason"], "details": {"rule": evidence.get("rule_id"), **signal},
-            })
+        if not chain:
+            for signal in signals:
+                timeline.append({
+                    "time": observed, "type": "rule_trigger", "severity": "warning",
+                    "title": signal["reason"], "details": {"rule": evidence.get("rule_id"), **signal},
+                })
 
         actions = (await self.session.execute(select(ResponseAction).where(
             ResponseAction.incident_id == incident.id,

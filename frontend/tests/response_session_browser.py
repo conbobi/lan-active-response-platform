@@ -168,6 +168,72 @@ def backend(route):
         ]
     elif path.endswith("/incidents/inc_90940e8f23fb"):
         body = inc_ref
+    elif path.endswith("/incidents/inc_chain_demo"):
+        body = {
+            "id": "inc_chain_demo",
+            "agent_id": "ip-172-31-32-238",
+            "title": "Web Application Compromise: reverse shell to 100.67.222.3:4444 on Agent 'ip-172-31-32-238' (Score: 100)",
+            "severity": "critical",
+            "risk_score": 100,
+            "status": "open",
+            "detection_activity": "active",
+            "created_at": "2026-11-27T09:00:00Z",
+            "detection_evidence": {
+                "rule_id": "web_compromise_chain",
+                "chain": {
+                    "anchor": {"id": "proc_web", "pid": 153380, "name": "python", "exe": "/usr/bin/python3.13", "cmdline": "python /opt/larp-agent/vulnerable_web/app.py"},
+                    "source_ips": ["100.67.222.3"],
+                    "severity_reason": "Thực thi mã từ web process đã được quan sát và tiến trình đó giữ kết nối ra ngoài",
+                    "execution_observed": True,
+                    "conditions": [
+                        {"id": "auth_bypass", "label": "Vượt xác thực", "status": "OBSERVED", "detail": "SQLi bypass", "evidence_ids": ["auth1"], "observed_at": "2026-11-27T09:00:00Z"},
+                        {"id": "suspicious_upload", "label": "Upload file đáng ngờ", "status": "CORRELATED", "detail": "/tmp/uploads/backdoor.py", "evidence_ids": ["up1"], "observed_at": "2026-11-27T09:00:10Z", "upload_path": "/tmp/uploads/backdoor.py", "upload_sha256": "c" * 64},
+                        {"id": "outbound_connection", "label": "Kết nối điều khiển ngược", "status": "OBSERVED", "detail": "PID 154107 -> 100.67.222.3:4444", "evidence_ids": ["flow1"], "observed_at": "2026-11-27T09:00:25Z"},
+                    ],
+                    "process_tree": [
+                        {"id": "proc_web", "pid": 153380, "parent_pid": 1, "name": "python", "exe": "/usr/bin/python3.13", "cmdline": "python /opt/larp-agent/vulnerable_web/app.py"},
+                        {"id": "proc_py", "pid": 154107, "parent_pid": 1, "name": "python3", "exe": "/usr/bin/python3.13", "cmdline": "python3 /tmp/uploads/backdoor.py", "euid": 0, "process_start_time": 1700000000.0, "started_at": "2026-11-27T09:00:20Z"},
+                    ],
+                    "network": [{"flow_id": "flow1", "src": "100.112.146.63:40986", "dst": "100.67.222.3:4444", "direction": "outbound", "pid": 154107, "socket_stdio": True, "first_seen": "2026-11-27T09:00:25Z"}],
+                },
+            },
+        }
+    elif path.endswith("/incidents/inc_chain_demo/ai-analysis"):
+        body = {
+            "incident_id": "inc_chain_demo",
+            "created_at": "2026-11-27T09:01:00Z",
+            "confidence": 0.9,
+            "model_name": "rule-based",
+            "summary": "### Tóm tắt sự cố\nWeb application trên Agent đã sinh tiến trình chạy /tmp/uploads/backdoor.py và mở kết nối tới 100.67.222.3:4444.",
+            "root_cause": "Chuỗi xâm nhập web dẫn đến reverse shell.",
+            "mitre_techniques": [{"id": "T1059.006", "name": "Python", "tactic": "Execution", "evidence": "proc_py"}],
+            "raw_response": json.dumps({"status": "timeout", "analysis_source": "RULE_BASED_FALLBACK", "classification": "likely_malicious"}),
+        }
+    elif path.endswith("/containment/incidents/inc_chain_demo/overview"):
+        body = {
+            "incident_id": "inc_chain_demo",
+            "agent_id": "ip-172-31-32-238",
+            "severity": "critical",
+            "risk_score": 100,
+            "is_chain": True,
+            "agent_online": True,
+            "stages": [
+                {"id": "auth_bypass", "status": "OBSERVED", "detail": "SQLi"},
+                {"id": "suspicious_upload", "status": "CORRELATED", "detail": "/tmp/uploads/backdoor.py"},
+                {"id": "outbound_connection", "status": "OBSERVED", "detail": "100.67.222.3:4444"},
+            ],
+            "inferred_requests": [],
+            "files": [{"path": "/tmp/uploads/backdoor.py", "sha256": "c" * 64, "uploaded": True, "executed_by": [154107], "state": "EXECUTION_OBSERVED", "file_status": "FILE_EXECUTION_CORRELATED"}],
+            "processes": [{"id": "proc_py", "pid": 154107, "parent_pid": 1, "exe": "/usr/bin/python3.13", "cmdline": "python3 /tmp/uploads/backdoor.py", "euid": 0, "process_start_time": 1700000000.0, "live": {"state": "RUNNING", "label": "Đang chạy"}}],
+            "network": [{"flow_id": "flow1", "src": "100.112.146.63:40986", "dst": "100.67.222.3:4444", "pid": 154107, "socket_stdio": True, "live": {"state": "ESTABLISHED", "label": "Đang kết nối"}}],
+            "actions": [],
+            "ip_blocks": [],
+            "capabilities": {"collect_process_evidence": True, "inspect_file": True, "quarantine_file": True, "restore_file": True, "terminate_process": True, "block_ip": True},
+        }
+    elif path.endswith("/access-control/incidents/inc_chain_demo/suggestions"):
+        body = {"items": [{"ip": "100.67.222.3", "basis": ["Đích kết nối ra ngoài của PID 154107"], "allowed": True}]}
+    elif path.endswith("/incidents/inc_chain_demo/timeline"):
+        body = {"timeline": []}
     elif path.endswith("/response-proposals"):
         seen_auth.append(auth)
         if auth not in ("Bearer jwt-access-1", "Bearer jwt-access-2"):
@@ -200,7 +266,11 @@ def backend(route):
     elif path.endswith("/incidents/lab"):
         body = incident
     elif path.endswith("/incidents/"):
-        body = [incident, inc_ref]
+        body = [
+            incident,
+            inc_ref,
+            {"id": "inc_chain_demo", "agent_id": "ip-172-31-32-238", "title": "Web Compromise Reverse Shell", "severity": "critical", "risk_score": 100, "status": "open", "detection_evidence": {"rule_id": "web_compromise_chain", "chain": {"execution_observed": True}}},
+        ]
     else:
         body = []
 
@@ -261,6 +331,20 @@ def check_dashboard(base_url):
         expect(page.get_by_text("Tóm tắt điều tra")).to_be_visible()
         ai_text = page.locator("body").inner_text()
         assert "## " not in ai_text and "**" not in ai_text
+
+        # Verify web_compromise_chain UX (ContainmentPanel + AIAnalysisTab timeout warning)
+        page.goto(base_url + "/incidents/inc_chain_demo")
+        expect(page.get_by_text("Phát hiện xâm nhập")).to_be_visible()
+        expect(page.get_by_text("Đã tương quan upload & thực thi")).to_be_visible()
+        expect(page.get_by_text("PID 154107")).to_be_visible()
+        expect(page.get_by_text("100.67.222.3:4444")).to_be_visible()
+        expect(page.get_by_role("button", name="Đề xuất cách ly")).to_be_visible()
+        expect(page.get_by_role("button", name="Đề xuất dừng tiến trình")).to_be_visible()
+
+        page.get_by_role("button", name="🤖 Phân tích AI", exact=True).click()
+        expect(page.get_by_text("Mô hình AI quá thời gian chờ (timeout)")).to_be_visible()
+        chain_ai_text = page.locator("body").inner_text()
+        assert "## " not in chain_ai_text and "**" not in chain_ai_text
 
         page.get_by_role("button", name="Đăng xuất", exact=True).click()
         expect(page.get_by_role("button", name="Đăng nhập", exact=True)).to_be_visible()

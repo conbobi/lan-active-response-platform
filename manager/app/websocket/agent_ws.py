@@ -336,6 +336,7 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
     logger.info(f"Saved {saved_count} processes for agent '{target_agent_id}' via PROCESS_LIST")
     if isinstance(procs_data, list) and target_agent_id == agent_id:
         await _record_process_history(session, agent_id, [("snapshot", p) for p in procs_data])
+        await _correlate_web_chain(session, agent_id)
 
     try:
         await _evaluate_incident_rules(target_agent_id, payload, session)
@@ -728,7 +729,7 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
             key: value for key, value in event.items()
             if key in {"request_id", "request_method", "request_path", "http_status", "user_agent",
                        "payload_indicators", "timestamp_source", "auth_method", "session_ref",
-                       "auth_result", "credential_match", "suspected_auth_bypass"} and value is not None
+                       "auth_result", "credential_match", "suspected_auth_bypass", "process_pid"} and value is not None
         }
         session.add(Event(
             id=identifier, agent_id=agent_id, event_type="AUTH_OBSERVATION",

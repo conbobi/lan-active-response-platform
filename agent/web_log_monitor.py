@@ -7,7 +7,10 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Callable
 
-from delivery import WEB_OUTBOX
+try:
+    from delivery import WEB_OUTBOX
+except ImportError:  # imported as the package module agent.web_log_monitor (Manager tests)
+    from .delivery import WEB_OUTBOX
 
 if __package__:
     from .vulnerable_web.http_evidence import SQL_PATTERNS, safe_http_target

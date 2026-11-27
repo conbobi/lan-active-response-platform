@@ -65,10 +65,13 @@ export default function IncidentDetailModal({
   // HTTP incidents are answered by evidence-scoped proposals in AI Response Assist; the host
   // containment and legacy suggestion paths refuse them (RESPONSE_ROOT_CAUSE.md).
   const behavior = detailedIncident?.detection_evidence?.behavior;
+  const isChain =
+    detailedIncident?.detection_evidence?.rule_id === 'web_compromise_chain' ||
+    Boolean(detailedIncident?.detection_evidence?.chain);
   const httpIncident = behavior?.evidence_type === 'http' || (behavior?.source === 'auth_events' && behavior?.service === 'flask_web');
   useEffect(() => {
-    if (httpIncident && !tabTouched.current) setTab('assist');
-  }, [httpIncident]);
+    if ((httpIncident || isChain) && !tabTouched.current) setTab('assist');
+  }, [httpIncident, isChain]);
 
   const refreshIncident = async () => {
     if (!detailedIncident?.id) return;
@@ -266,7 +269,9 @@ export default function IncidentDetailModal({
             <>
               <ContainmentPanel key={`ct-${incident.id}`} incidentId={incident.id} />
               <AccessControlPanel key={`ac-${incident.id}`} incident={detailedIncident || incident} />
-              <ResponseAssist key={incident.id} incidentId={incident.id} incident={detailedIncident} />
+              {(httpIncident || !isChain) && (
+                <ResponseAssist key={incident.id} incidentId={incident.id} incident={detailedIncident} />
+              )}
             </>
           )}
           {tab === 'actions' && (

@@ -409,6 +409,58 @@ class IncidentService(AbstractService[IncidentRepository]):
             inc.culprit_process = evidence.get("process")
             inc.parent_process = next(iter(evidence.get("ancestry", [])), None)
             inc.network_indicators = [evidence["network"]] if "network" in evidence else []
+            chain = evidence.get("chain") if isinstance(evidence.get("chain"), dict) else None
+            if chain:
+                anchor = chain.get("anchor") if isinstance(chain.get("anchor"), dict) else None
+                anchor_id = anchor.get("id") if anchor else None
+                tree = [p for p in (chain.get("process_tree") or []) if isinstance(p, dict)]
+                non_anchor = [p for p in tree if p.get("id") != anchor_id]
+                nets = [n for n in (chain.get("network") or []) if isinstance(n, dict)]
+                holder_pids = {n.get("pid") for n in nets if n.get("pid") is not None}
+                primary = next((p for p in reversed(non_anchor) if p.get("pid") in holder_pids), None)
+                if primary is None and non_anchor:
+                    primary = non_anchor[-1]
+                if not inc.culprit_process and (primary or anchor):
+                    target_proc = primary or anchor
+                    inc.culprit_process = {
+                        **target_proc,
+                        "exe_path": target_proc.get("exe_path") or target_proc.get("exe") or "",
+                        "is_suspicious": True,
+                    }
+                    parent_match = next(
+                        (p for p in tree if p.get("pid") == target_proc.get("parent_pid")),
+                        anchor if anchor and primary and primary.get("id") != anchor_id else None,
+                    )
+                    if not inc.parent_process and parent_match:
+                        inc.parent_process = {
+                            **parent_match,
+                            "exe_path": parent_match.get("exe_path") or parent_match.get("exe") or "",
+                        }
+                if not inc.network_indicators and nets:
+                    by_pid = {p.get("pid"): p for p in tree if p.get("pid") is not None}
+                    for net in nets:
+                        src_ip, _, src_port = str(net.get("src", "")).rpartition(":")
+                        dst_ip, _, dst_port = str(net.get("dst", "")).rpartition(":")
+                        holder_proc = by_pid.get(net.get("pid"), {})
+                        inc.network_indicators.append({
+                            "src_ip": src_ip or "0.0.0.0",
+                            "src_port": int(src_port) if src_port.isdigit() else 0,
+                            "dst_ip": dst_ip,
+                            "dst_port": int(dst_port) if dst_port.isdigit() else 0,
+                            "protocol": "TCP",
+                            "status": "ESTABLISHED",
+                            "direction": net.get("direction") or "outbound",
+                            "pid": net.get("pid"),
+                            "process_name": holder_proc.get("name") or "unknown",
+                            "process_start_time": holder_proc.get("process_start_time"),
+                            "attribution": "inode_verified",
+                            "holders": [{
+                                "pid": net.get("pid"),
+                                "name": holder_proc.get("name") or "unknown",
+                                "process_start_time": holder_proc.get("process_start_time"),
+                                "stdio_fds": [0, 1, 2] if net.get("socket_stdio") else [],
+                            }] if net.get("pid") else [],
+                        })
             inc.factors_breakdown = evidence.get("factors") or [
                 {"rule": evidence["rule_id"], "score": signal["score"], "reason": signal["reason"]}
                 for signal in evidence.get("signals", [])

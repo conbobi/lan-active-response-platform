@@ -105,3 +105,30 @@ def test_validated_termination_verifies_exit_of_each_holder(monkeypatch):
     assert process_target.terminate(params, tree=True)["killed_pids"] == [1002, 1000]
     assert signals == [1003, 1001]
     assert closed == [1003, 1001]
+
+
+def test_shared_socket_and_interpreter_pty_pick_primary_holder(monkeypatch):
+    py = {"pid": 500, "parent_pid": 1, "process_start_time": 10.0, "process_name": "python3",
+          "exe_path": "/usr/bin/python3.13", "cmdline": "python3 /tmp/uploads/backdoor.py",
+          "socket_stdio": False, "descendants": [{"pid": 501, "exe_path": "/bin/bash", "terminal": "/dev/pts/1"}]}
+    sh = {"pid": 501, "parent_pid": 500, "process_start_time": 11.0, "process_name": "bash",
+          "exe_path": "/usr/bin/bash", "cmdline": "/bin/bash -i", "socket_stdio": True}
+    rows = [
+        {"family": "IPv4", "protocol": "TCP", "inode": "42", "owners": [(500, 3), (501, 0)],
+         "src_ip": "100.112.146.63", "src_port": 40986, "dst_ip": "100.67.222.3", "dst_port": 4444, "status": "ESTAB"},
+        {"family": "IPv4", "protocol": "TCP", "inode": "10", "owners": [(100, 3)],
+         "src_ip": "0.0.0.0", "src_port": 5000, "dst_ip": None, "dst_port": None, "status": "LISTEN"},
+    ]
+    monkeypatch.setattr(telemetry, "socket_rows", lambda errors: rows)
+    monkeypatch.setattr(telemetry, "socket_holders", lambda row, started, cache=None: ([py, sh], "inode_verified"))
+
+    class Tracker:
+        def process_connections(self, connections, **kwargs):
+            return connections
+
+    conn, = telemetry.collect_connections(Tracker())
+    assert conn["attribution_reason"] == "multiple_holders"
+    assert conn["pid"] == 501
+    assert conn["socket_stdio"] is True
+    assert conn["is_suspicious"] is True
+    assert conn["direction"] == "outbound"

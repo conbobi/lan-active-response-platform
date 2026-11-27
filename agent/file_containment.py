@@ -169,6 +169,7 @@ def inspect(path: str) -> Dict[str, Any]:
         "status": "success", "path": path, "exists": True, "sha256": sha, "size": size,
         "mode": oct(stat.S_IMODE(info.st_mode)), "executable_bits": bool(info.st_mode & 0o111),
         "owner": _owner(info.st_uid, info.st_gid), "inode": info.st_ino, "device": info.st_dev, "links": info.st_nlink,
+        "created_at": _iso(getattr(info, "st_birthtime", None)) if getattr(info, "st_birthtime", None) else None,
         "modified_at": _iso(info.st_mtime), "changed_at": _iso(info.st_ctime), "accessed_at": _iso(info.st_atime),
         "kind": "elf" if head.startswith(b"\x7fELF") else "script" if head.startswith(b"#!") else "data",
         "processes": processes_using(path), "observed_at": observed,

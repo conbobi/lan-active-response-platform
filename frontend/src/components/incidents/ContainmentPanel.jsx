@@ -19,6 +19,9 @@ const STAGE_STATE = { OBSERVED: ['Quan sát trực tiếp', '#f87171'], CORRELAT
 const FILE_STATE = {
   UPLOADED: 'Đã upload, chưa thấy thực thi', SUSPICIOUS: 'Đáng ngờ', EXECUTION_OBSERVED: 'Đã thấy tiến trình chạy file',
   QUARANTINED: 'Đã cách ly & xác minh', RESTORED: 'Đã khôi phục',
+  FILE_UPLOADED: 'Đã upload, chưa thấy thực thi', FILE_SUSPICIOUS: 'Đáng ngờ',
+  FILE_EXECUTION_OBSERVED: 'Đã thấy tiến trình chạy file', FILE_EXECUTION_CORRELATED: 'Đã tương quan upload & thực thi',
+  FILE_QUARANTINED: 'Đã cách ly & xác minh', FILE_REMOVED: 'Không còn trên ổ đĩa',
 };
 const ACTION_COLOR = {
   PENDING_APPROVAL: '#9ca3af', DISPATCHED: '#60a5fa', SUCCEEDED: '#60a5fa', VERIFIED: '#34d399', FAILED: '#fb7185',
@@ -166,7 +169,7 @@ export default function ContainmentPanel({ incidentId, onOpenIncident }) {
                 <div style={{ fontFamily: 'monospace' }}>{f.path}</div>
                 <div style={{ color: '#8b949e' }}>
                   SHA-256: {f.sha256 ? <span style={{ fontFamily: 'monospace' }}>{f.sha256.slice(0, 16)}…</span> : 'chưa thu thập'} ·
-                  {' '}Trạng thái: {FILE_STATE[f.state] || f.state}
+                  {' '}Trạng thái: {FILE_STATE[f.state === 'RESTORED' ? 'RESTORED' : (f.file_status || f.state)] || f.file_status || f.state}
                   {f.inspection && <> · Chủ sở hữu: {f.inspection.owner?.user ?? f.inspection.owner?.uid} · Quyền: {f.inspection.mode} · {f.inspection.exists ? `${f.inspection.size} byte` : 'không còn ở vị trí gốc'}</>}
                 </div>
                 <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
@@ -234,6 +237,7 @@ export default function ContainmentPanel({ incidentId, onOpenIncident }) {
                 <strong>{a.kind_label}</strong>
                 <span style={{ fontFamily: 'monospace', color: '#8b949e' }}>{a.target.path || (a.target.pid ? `PID ${a.target.pid}` : '')}</span>
                 <Badge color={ACTION_COLOR[a.status] || '#9ca3af'}>{a.status_label}</Badge>
+                {a.command_id && <span style={{ fontFamily: 'monospace', fontSize: '0.74rem', color: '#8b949e' }}>cmd: {a.command_id}</span>}
                 {a.status === 'PENDING_APPROVAL' && role.isAdmin && (<>
                   <Button size="sm" disabled={busy || !data.agent_online} onClick={() => ask({ title: `Phê duyệt: ${a.kind_label}`, confirmLabel: 'Phê duyệt',
                     message: `${kindMessage(a.kind, a.target)}\nLý do: ${a.reason}`, onConfirm: () => run(() => decideContainment(a.id, 'approve'), 'Đã gửi lệnh tới Agent, đang chờ xác minh…') })}>Phê duyệt</Button>

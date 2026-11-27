@@ -44,6 +44,7 @@ logger = logging.getLogger("larp.detection.web_compromise")
 RULE_ID = "web_compromise_chain"
 RULE_VERSION = "chain:1"
 WINDOW = timedelta(minutes=int(os.getenv("WEB_CHAIN_WINDOW_MINUTES", "60")))
+UPLOAD_HISTORY_WINDOW = timedelta(hours=int(os.getenv("WEB_CHAIN_UPLOAD_HISTORY_HOURS", "24")))
 INCIDENT_REUSE = timedelta(hours=24)
 # A long-running web service can be exploited many times. Activity of one web PID more than this far
 # apart is a new episode (a new incident), not an update of an hours-old one.
@@ -179,6 +180,7 @@ class Evidence:
     def __init__(self, now: datetime):
         self.now = now
         self.uploads: List[Dict[str, Any]] = []
+        self.prior_uploads: List[Dict[str, Any]] = []
         self.commands: List[Dict[str, Any]] = []
         self.bypasses: List[Dict[str, Any]] = []
         self.web_pids: Dict[int, float] = {}
@@ -192,6 +194,7 @@ class Evidence:
 async def load(session, agent_id: str, now: datetime) -> Evidence:
     ev = Evidence(now)
     since = now - WINDOW
+    upload_since = now - UPLOAD_HISTORY_WINDOW
     logs = (await session.scalars(select(WebAccessLog).where(
         WebAccessLog.agent_id == agent_id, WebAccessLog.timestamp >= since,
         WebAccessLog.raw_message.contains('"app_event"') | WebAccessLog.raw_message.contains('"process_pid"'),
@@ -212,15 +215,38 @@ async def load(session, agent_id: str, now: datetime) -> Evidence:
             ev.uploads.append({**base, **event})
         elif event.get("type") == "shell_command":
             ev.commands.append({**base, **event})
+    if upload_since < since:
+        older_uploads = (await session.scalars(select(WebAccessLog).where(
+            WebAccessLog.agent_id == agent_id,
+            WebAccessLog.timestamp >= upload_since,
+            WebAccessLog.timestamp < since,
+            WebAccessLog.raw_message.contains('"file_upload"'),
+        ).order_by(WebAccessLog.timestamp.desc()).limit(200))).all()
+        for log in older_uploads:
+            try:
+                raw = json.loads(log.raw_message or "{}")
+            except ValueError:
+                continue
+            event = raw.get("app_event") or {}
+            if event.get("type") == "file_upload" and event.get("stored"):
+                ev.prior_uploads.append({
+                    "evidence_id": log.id, "request_id": raw.get("request_id"), "source_ip": log.src_ip,
+                    "session_ref": raw.get("session_ref"), "at": _ts(log.timestamp),
+                    "web_pid": raw.get("process_pid"), "http_status": log.status_code, "path": log.path,
+                    **event,
+                })
     auth_rows = (await session.scalars(select(Event).where(
         Event.agent_id == agent_id, Event.event_type == "AUTH_OBSERVATION", Event.created_at >= since,
     ))).all()
     for row in auth_rows:
         details = row.details or {}
+        if type(details.get("process_pid")) is int:
+            ev.web_pids.setdefault(details["process_pid"], _ts(row.created_at))
         if details.get("suspected_auth_bypass") is True:
             auth = await session.get(AuthEvent, row.id)
             ev.bypasses.append({"evidence_id": row.id, "request_id": details.get("request_id"),
                                 "session_ref": details.get("session_ref"),
+                                "web_pid": details.get("process_pid"),
                                 "source_ip": auth.source_ip if auth else None,
                                 "at": _ts(auth.timestamp) if auth else _ts(row.created_at),
                                 "payload_indicators": details.get("payload_indicators") or []})
@@ -316,6 +342,43 @@ def build_chains(ev: Evidence) -> List[Chain]:
             chain.source_ips.append(item["source_ip"])
         if item.get("request_id") and item["request_id"] not in chain.request_ids:
             chain.request_ids.append(item["request_id"])
+
+    # Fallback process-identity correlation when wrapper /bin/sh exited before polling (or proc_connector missed it)
+    # and the payload interpreter/shell was re-parented (parent_pid == 1 or dead wrapper child_pid).
+    for command in ev.commands:
+        c_pid = command.get("child_pid")
+        c_at = command.get("child_spawned_at") or command.get("at")
+        if not c_at:
+            continue
+        refs = [r for r in (command.get("referenced_upload_files") or []) if r]
+        target_chain = next((c for c in chains if id(c) == command.get("episode")), None)
+        if target_chain is None:
+            continue
+        for inst in ev.instances:
+            if target_chain.anchor and inst.id == target_chain.anchor.id:
+                continue
+            if inst.id in target_chain.processes or _proc_kind(inst) is None:
+                continue
+            start = inst.process_start_time
+            if not start or not (c_at - 1.0 <= start <= c_at + 15.0):
+                continue
+            cmd = inst.cmdline or ""
+            child_match = bool(c_pid and inst.parent_pid == c_pid)
+            file_match = any(ref in cmd for ref in refs) or (_proc_kind(inst) == "interpreter" and any(t in cmd for t in TEMP_DIRS))
+            if not (child_match or (inst.parent_pid in (1, command.get("web_pid"), c_pid) and file_match)):
+                continue
+            target_chain.extend(start, execution=True)
+            target_chain.processes[inst.id] = inst
+            for desc in _descendants(inst, ev):
+                target_chain.processes[desc.id] = desc
+            target_chain.conditions["web_spawned_shell"].hit(
+                "CORRELATED", inst.id, start,
+                f"PID {inst.pid} ({inst.name}) khớp cửa sổ lệnh tiêm tại {command.get('path')} (wrapper child_pid={c_pid})",
+                link="command child_pid + spawn window + file_path")
+            target_chain.conditions["command_injection"].hit(
+                "CORRELATED", command["evidence_id"], command["at"],
+                f"Request {command['path']} tương quan với tiến trình PID {inst.pid}",
+                link="command child_pid + spawn window")
 
     for chain in chains:
         _infer_requests(chain, ev)
@@ -424,23 +487,36 @@ def _http_conditions(chain: Chain, ev: Evidence):
 
 def _execution_conditions(chain: Chain, ev: Evidence):
     paths = {u["upload_path"]: u for u in ev.uploads if u.get("upload_path") and u.get("episode") == id(chain)}
+    prior_paths = {u["upload_path"]: u for u in ev.prior_uploads if u.get("upload_path")}
     names = {n for c in ev.commands if c.get("episode") == id(chain) for n in (c.get("referenced_upload_files") or [])}
     for inst in list(chain.processes.values()):
         if chain.anchor and inst.id == chain.anchor.id:
             continue
         cmd = inst.cmdline or ""
         upload = next((u for p, u in paths.items() if p in cmd), None)
+        prior_upload = None if upload else next((u for p, u in prior_paths.items() if p in cmd), None)
+        matched_upload = upload or prior_upload
         referenced = next((n for n in names if re.search(rf"/{re.escape(n)}(?:\s|$)", cmd)), None)
         temp_script = _proc_kind(inst) == "interpreter" and any(t in cmd for t in TEMP_DIRS)
-        if upload or referenced:
+        if matched_upload or referenced:
             chain.conditions["uploaded_file_execution"].hit(
                 "CORRELATED", inst.id, inst.process_start_time,
                 f"PID {inst.pid} `{cmd[:160]}` chạy file "
-                + (f"đã upload {upload['upload_path']}" if upload else f"{referenced} được request nhắc tới")
+                + (f"đã upload {matched_upload['upload_path']}" if matched_upload else f"{referenced} được request nhắc tới")
                 + " (khớp theo đường dẫn; chưa so sánh hash nội dung)",
-                link="đường dẫn file trong command line", upload_evidence_id=upload["evidence_id"] if upload else None)
-            if upload:
-                chain.conditions["uploaded_file_execution"].evidence_ids.append(upload["evidence_id"])
+                link="đường dẫn file trong command line",
+                upload_evidence_id=matched_upload["evidence_id"] if matched_upload else None)
+            if matched_upload:
+                chain.conditions["uploaded_file_execution"].evidence_ids.append(matched_upload["evidence_id"])
+            if prior_upload:
+                chain.conditions["suspicious_upload"].hit(
+                    "CORRELATED", prior_upload["evidence_id"], prior_upload["at"],
+                    f"Upload trước đó {prior_upload.get('upload_path')} ({prior_upload.get('upload_size')} byte, "
+                    f"sha256 {(prior_upload.get('upload_sha256') or '')[:12]}…) được thực thi sau đó",
+                    link="đường dẫn file trong command line với lịch sử upload",
+                    upload_path=prior_upload.get("upload_path"), upload_sha256=prior_upload.get("upload_sha256"))
+                if prior_upload.get("source_ip") and prior_upload["source_ip"] not in chain.source_ips and prior_upload["source_ip"] != "unknown":
+                    chain.source_ips.append(prior_upload["source_ip"])
         elif temp_script:
             chain.conditions["uploaded_file_execution"].hit(
                 "CORRELATED", inst.id, inst.process_start_time,

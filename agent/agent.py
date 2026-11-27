@@ -132,6 +132,8 @@ def get_mac_address():
     return "00:00:00:00:00:00"
 
 def collect_stats():
+    if PROC_EVENTS is None:
+        start_process_events()
     return {
         "agent_id": AGENT_ID,
         "platform": platform.system().lower(),
@@ -292,13 +294,24 @@ def collect_suspicious_commands(all_processes=None):
                 suspicious_cmds.append(cmd)
     return suspicious_cmds
 
+def _is_priority_process(proc: dict) -> bool:
+    """Keep suspicious, temp-dir script, and web service processes ahead of the telemetry cap."""
+    if proc.get("is_suspicious"):
+        return True
+    text = f"{proc.get('name', '')} {proc.get('exe', '')} {proc.get('cmdline', '')}".lower()
+    if any(prefix in text for prefix in ("/tmp/", "/var/tmp/", "/dev/shm/")):
+        return True
+    return any(web in text for web in ("vulnerable_web", "flask", "gunicorn", "uvicorn", "nginx", "apache2", "httpd"))
+
+
 def get_process_list(all_processes=None):
-    """Lấy danh sách process đang chạy, ưu tiên các process suspicious."""
+    """Lấy danh sách process đang chạy, ưu tiên process suspicious, web service và script tạm."""
     if all_processes is None:
         all_processes = collect_process_info()
     suspicious_procs = [p for p in all_processes if p["is_suspicious"]]
-    normal_procs = [p for p in all_processes if not p["is_suspicious"]]
-    return (suspicious_procs + normal_procs)[:30]
+    priority_procs = [p for p in all_processes if not p["is_suspicious"] and _is_priority_process(p)]
+    normal_procs = [p for p in all_processes if not p["is_suspicious"] and not _is_priority_process(p)]
+    return (suspicious_procs + priority_procs + normal_procs)[:30]
 
 def get_network_connections(activity=None):
     return collect_connections(global_connection_tracker, activity)

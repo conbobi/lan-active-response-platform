@@ -364,7 +364,7 @@ async def expire(db, incident_id: Optional[str] = None) -> None:
 # ── views ───────────────────────────────────────────────────────────────────────────────────
 def action_view(a: ContainmentAction, events: List[ContainmentEvent]) -> Dict[str, Any]:
     return {
-        "id": a.id, "kind": a.kind, "kind_label": KIND_LABEL.get(a.kind, a.kind), "target": {k: v for k, v in a.target.items() if k != "key"},
+        "id": a.id, "command_id": a.command_id, "kind": a.kind, "kind_label": KIND_LABEL.get(a.kind, a.kind), "target": {k: v for k, v in a.target.items() if k != "key"},
         "status": a.status, "status_label": STATUS_LABEL.get(a.status, a.status), "effect": a.effect, "reason": a.reason,
         "requires_approval": a.requires_approval, "requested_by": a.requested_by, "approved_by": a.approved_by,
         "parent_action_id": a.parent_action_id, "error": a.error, "receipt": a.receipt if a.kind != "collect_process_evidence"
@@ -406,7 +406,15 @@ async def overview(db, incident: Incident) -> Dict[str, Any]:
         state = ("QUARANTINED" if quarantine and quarantine["effect"] == "QUARANTINED" else
                  "RESTORED" if quarantine and quarantine["effect"] == "RESTORED" else
                  "EXECUTION_OBSERVED" if f["executed_by"] else "UPLOADED" if f["uploaded"] else "SUSPICIOUS")
-        files.append({**f, "inspection": inspection, "state": state, "sha256": f.get("sha256") or (inspection or {}).get("sha256")})
+        file_status = (
+            "FILE_QUARANTINED" if quarantine and quarantine["effect"] == "QUARANTINED" else
+            "FILE_REMOVED" if inspection and inspection.get("exists") is False else
+            "FILE_EXECUTION_CORRELATED" if f["executed_by"] and f["uploaded"] else
+            "FILE_EXECUTION_OBSERVED" if f["executed_by"] else
+            "FILE_UPLOADED" if f["uploaded"] else "FILE_SUSPICIOUS"
+        )
+        files.append({**f, "inspection": inspection, "state": state, "file_status": file_status,
+                      "sha256": f.get("sha256") or (inspection or {}).get("sha256")})
     blocks = [await access_control.load_view(db, b) for b in (await db.scalars(
         select(access_control.IpBlock).where(access_control.IpBlock.incident_id == incident.id))).all()]
     caps = {kind: capable(incident.agent_id, kind) for kind in KINDS}
