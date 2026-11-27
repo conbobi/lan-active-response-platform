@@ -216,8 +216,8 @@ class ProcessChainRule(RiskRule):
             return 0.0, ""
 
         # Collect and normalize all candidate parent-child pairs
-        # Format: list of (raw_parent, raw_child, clean_parent, clean_child)
-        pairs: List[Tuple[str, str, str, str]] = []
+        # Format: list of (raw_parent, raw_child, clean_parent, clean_child, child identity or None)
+        pairs: List[Tuple[str, str, str, str, Any]] = []
 
         # 1. From process_tree
         for item in process_tree:
@@ -229,7 +229,7 @@ class ProcessChainRule(RiskRule):
             raw_p = str(p_dict.get("parent_name", "")).strip()
             raw_c = str(p_dict.get("child_name") or p_dict.get("name", "")).strip()
             if raw_p and raw_c:
-                pairs.append((raw_p, raw_c, raw_p.lower(), raw_c.lower()))
+                pairs.append((raw_p, raw_c, raw_p.lower(), raw_c.lower(), None))
 
         # 2. From process_list (build pid_map to resolve parent_name from parent_pid)
         pid_map: Dict[Any, Dict[str, Any]] = {}
@@ -272,7 +272,8 @@ class ProcessChainRule(RiskRule):
 
             for p_n in parent_names:
                 for c_n in child_names:
-                    pairs.append((p_n, c_n, p_n.lower(), c_n.lower()))
+                    pairs.append((p_n, c_n, p_n.lower(), c_n.lower(),
+                                  (p_dict.get("pid"), p_dict.get("process_start_time"))))
 
         if not pairs:
             return 0.0, ""
@@ -283,7 +284,8 @@ class ProcessChainRule(RiskRule):
         max_chain_score = 0.0
 
         # Evaluate pairs against compiled active chain rules
-        for raw_p, raw_c, clean_p, clean_c in pairs:
+        matched: List[Any] = []  # identity of every child behind an anomaly (None: tree entry without PID)
+        for raw_p, raw_c, clean_p, clean_c, child in pairs:
             for rule in rules:
                 p_matched = any(self._matches_pattern(clean_p, pat) for pat in rule["parent_patterns"])
                 if not p_matched:
@@ -297,6 +299,7 @@ class ProcessChainRule(RiskRule):
                 action = rule["action"]
                 anomaly_desc = f"[Rule: {rule_name} ({action.upper()})] '{raw_p}' spawned '{raw_c}'"
 
+                matched.append(child)
                 if anomaly_desc not in anomalies:
                     anomalies.append(anomaly_desc)
                     logger.info(
@@ -310,6 +313,7 @@ class ProcessChainRule(RiskRule):
             # Evaluate against built-in SUSPICIOUS_CHAINS
             for (parent_pat, child_pat), chain_score in self.SUSPICIOUS_CHAINS.items():
                 if self._matches_pattern(clean_p, parent_pat) and self._matches_pattern(clean_c, child_pat):
+                    matched.append(child)
                     anomaly_desc = f"[Rule: Suspicious Execution Chain] '{raw_p}' spawned '{raw_c}'"
                     if anomaly_desc not in anomalies:
                         anomalies.append(anomaly_desc)
@@ -320,6 +324,8 @@ class ProcessChainRule(RiskRule):
                         )
 
         if anomalies:
+            # Which processes produced this factor, so a correlated detection can claim it (see risk service).
+            context.setdefault("matched_processes", {})["process_chain"] = list(dict.fromkeys(matched))
             base_score = ACTION_TO_SCORE.get(highest_action, 40.0)
             if max_chain_score > 0.0:
                 base_score = max(base_score, max_chain_score)

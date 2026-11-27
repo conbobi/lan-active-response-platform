@@ -13,6 +13,16 @@ PROTECTED = {
 }
 
 
+TERM_GRACE_MS = 1500
+KILL_WAIT_MS = 3000
+
+
+def _exited(fd, timeout_ms):
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    return any(events & select.POLLIN for _, events in poller.poll(timeout_ms))
+
+
 def _protected(proc, agent_lineage):
     name = proc.name()
     exe = os.path.basename(proc.exe())
@@ -78,10 +88,13 @@ def terminate(params, tree):
                     return {**result, "message": "Process identity changed before termination"}
                 fd = descriptors[proc.pid]
                 signal.pidfd_send_signal(fd, signal.SIGTERM)
-                poller = select.poll()
-                poller.register(fd, select.POLLIN)
-                if not any(events & select.POLLIN for _, events in poller.poll(1500)):
-                    return {**result, "message": f"Exit of PID {proc.pid} could not be verified"}
+                if not _exited(fd, TERM_GRACE_MS):
+                    # Interactive shells (a reverse shell's bash on a pty) ignore SIGTERM by design. The pidfd
+                    # still names the validated instance, so escalating cannot hit a recycled PID.
+                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    result.setdefault("forced_pids", []).append(proc.pid)
+                    if not _exited(fd, KILL_WAIT_MS):
+                        return {**result, "message": f"Exit of PID {proc.pid} could not be verified after SIGKILL"}
                 result["killed_pids"].append(proc.pid)
     except (psutil.Error, OSError, ValueError) as error:
         return {**result, "message": f"Process termination failed: {error}"}

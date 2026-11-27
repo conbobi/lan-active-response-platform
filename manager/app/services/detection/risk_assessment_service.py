@@ -254,6 +254,7 @@ class RiskAssessmentService:
             rule_scores[NETWORK_SHELL_RULE_ID] = best["risk_score"]
             factors[NETWORK_SHELL_RULE_ID] = best["classification"]
 
+        self._matched_processes = context.get("matched_processes", {})
         final_score = min(100.0, apply_category_cap(rule_scores))
         if rule_scores:
             factors["_scores"] = {rule_id: round(score, 2) for rule_id, score in rule_scores.items()}
@@ -281,6 +282,33 @@ class RiskAssessmentService:
         elif score >= alert_th:
             return "alert"
         return "log"
+
+    async def _chain_owner(self, agent_id: str, factors: Dict[str, Any]):
+        """Open web compromise chain incident that contains every process behind the process_chain factor."""
+        matched = (getattr(self, "_matched_processes", None) or {}).get("process_chain") or []
+        if "process_chain" not in factors or not matched or any(m is None or m[0] is None for m in matched):
+            return None
+        from sqlalchemy import select
+        from app.models.incident import Incident, IncidentStatus
+        from app.services.detection.web_compromise import RULE_ID as CHAIN_RULE_ID
+        if not isinstance(self.session, AsyncSession):
+            return None
+        rows = (await self.session.scalars(select(Incident).where(
+            Incident.agent_id == agent_id,
+            Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED]),
+        ).order_by(Incident.created_at.desc()).limit(50))).all()
+        for incident in rows:
+            evidence = incident.detection_evidence or {}
+            if evidence.get("rule_id") != CHAIN_RULE_ID:
+                continue
+            known = [(p.get("pid"), p.get("process_start_time")) for p in (evidence.get("chain") or {}).get("process_tree") or []]
+
+            def covered(pid, start):
+                return any(pid == kp and (start is None or ks is None or abs(float(start) - float(ks)) <= 2.0)
+                           for kp, ks in known)
+            if all(covered(pid, start) for pid, start in matched):
+                return incident
+        return None
 
     async def process_risk(
         self,
@@ -404,7 +432,20 @@ class RiskAssessmentService:
             incident_factors = {key: value for key, value in factors.items() if key != NETWORK_SHELL_RULE_ID}
             if NETWORK_SHELL_RULE_ID in factors:
                 incident_factors = {**incident_factors, "_scores": other_scores, "total_score": incident_score}
-            record.incident = await incident_service.create_from_risk(agent_id, incident_score, incident_factors)
+            owner = await self._chain_owner(agent_id, factors)
+            if owner is not None:
+                # The web compromise chain already explains these processes: the same activity must not open a
+                # second, less informed incident. What is left of the score decides on its own.
+                remaining = {key: value for key, value in (incident_factors.get("_scores") or {}).items()
+                             if key != "process_chain"}
+                incident_score = min(100.0, apply_category_cap(remaining)) if remaining else 0.0
+                incident_factors = {**{k: v for k, v in incident_factors.items() if k != "process_chain"},
+                                    "_scores": remaining, "total_score": incident_score}
+                record.incident = owner
+                logger.info("Process chain factor for agent %s attributed to chain incident %s; remaining score %.1f",
+                            agent_id, owner.id, incident_score)
+            if incident_score >= incident_creation_th:
+                record.incident = await incident_service.create_from_risk(agent_id, incident_score, incident_factors)
 
         # Telemetry records proposed policy actions in dry-run mode.
         if action != "log":
