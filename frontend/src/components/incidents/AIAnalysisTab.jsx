@@ -283,7 +283,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
           `${scan.not_found_path_count} đường dẫn 404 bị dò`,
           answered ? `Dịch vụ đã trả lời: ${answered}` : null,
           ...(scan.successful_logins_from_source || []).map(
-            (l) => `Cùng nguồn đã đăng nhập thành công: ${l.username} (${l.service})`,
+            (l) => `Cùng nguồn đã đăng nhập thành công: ${l.username && l.username !== 'unknown' ? l.username : 'tài khoản không xác định'} (${l.service})`,
           ),
         ]
           .filter(Boolean)

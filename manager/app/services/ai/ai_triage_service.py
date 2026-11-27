@@ -516,8 +516,10 @@ def _activity_fact(key: str, src_ip: str, service: str, activity: dict) -> str:
     if answered:
         lines.append(f"  - **Dịch vụ đã trả lời công cụ quét**: {answered}.")
     for login in activity.get("successful_logins_from_source") or []:
+        account = f"`{login['username']}`" if login.get("username") not in (None, "", "unknown") else (
+            "không xác định (ứng dụng không ghi nhận tên tài khoản)")
         lines.append(
-            f"  - **Liên quan**: cùng nguồn `{src_ip}` đã đăng nhập **thành công** tài khoản `{login['username']}` "
+            f"  - **Liên quan**: cùng nguồn `{src_ip}` đã đăng nhập **thành công** tài khoản {account} "
             f"trên `{login['service']}` (gần nhất {_vn_time(login['last_success_at'])})."
         )
     return "\n".join(lines)
