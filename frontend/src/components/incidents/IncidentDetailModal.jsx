@@ -13,6 +13,7 @@ import { executeIncidentAction, updateIncidentStatus, getIncident, closeIncident
 import { useAgents } from '../../hooks/useAgents';
 
 import ResponseAssist from './ResponseAssist';
+import AccessControlPanel from '../access/AccessControlPanel';
 import AIAnalysisTab from './AIAnalysisTab';
 
 const STORYBOARD_TABS = [
@@ -260,7 +261,12 @@ export default function IncidentDetailModal({
             />
           )}
 
-          {tab === 'assist' && <ResponseAssist key={incident.id} incidentId={incident.id} incident={detailedIncident} />}
+          {tab === 'assist' && (
+            <>
+              <AccessControlPanel key={`ac-${incident.id}`} incident={detailedIncident || incident} />
+              <ResponseAssist key={incident.id} incidentId={incident.id} incident={detailedIncident} />
+            </>
+          )}
           {tab === 'actions' && (
             <ActionSuggestions
               incident={detailedIncident}

@@ -27,10 +27,10 @@ from datetime import datetime, timezone
 
 if __package__:
     from .response_guard import install_guard
-    from .http_evidence import ACCOUNT, safe_http_target, sql_indicators
+    from .http_evidence import ACCOUNT, referenced_files, safe_filename, safe_http_target, shell_indicators, sql_indicators
 else:
     from response_guard import install_guard
-    from http_evidence import ACCOUNT, safe_http_target, sql_indicators
+    from http_evidence import ACCOUNT, referenced_files, safe_filename, safe_http_target, shell_indicators, sql_indicators
 
 
 # ============================================================
@@ -52,7 +52,10 @@ DB_PATH = os.getenv("VULNERABLE_DB_PATH", "/tmp/users.db")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BASE_DIR, exist_ok=True)
-os.makedirs("/var/log/vulnerable_web", exist_ok=True)
+try:
+    os.makedirs("/var/log/vulnerable_web", exist_ok=True)
+except OSError:
+    pass  # unprivileged runs (tests) still log to the remaining targets
 
 # Log file targets
 AUTH_LOG_PATHS = [
@@ -66,6 +69,9 @@ ACCESS_LOG_PATHS = [
     "/var/log/vulnerable_web/access.log",
     "/tmp/web_access.log",
 ]
+# One handler per real file: VULNERABLE_WEB_DIR=/var/log/vulnerable_web otherwise writes every line twice.
+AUTH_LOG_PATHS = list(dict.fromkeys(os.path.realpath(p) for p in AUTH_LOG_PATHS))
+ACCESS_LOG_PATHS = list(dict.fromkeys(os.path.realpath(p) for p in ACCESS_LOG_PATHS))
 
 # ============================================================
 # LARP WEB AUTHENTICATION & ACCESS LOGGING
@@ -90,7 +96,7 @@ if not auth_logger.handlers:
             h.setFormatter(formatter)
             auth_logger.addHandler(h)
             try:
-                os.chmod(log_p, 0o666)
+                os.chmod(log_p, 0o640)  # telemetry is read by the root Agent; not writable by others
             except Exception:
                 pass
         except Exception:
@@ -105,7 +111,7 @@ if not access_logger.handlers:
             h.setFormatter(formatter)
             access_logger.addHandler(h)
             try:
-                os.chmod(log_p, 0o666)
+                os.chmod(log_p, 0o640)  # telemetry is read by the root Agent; not writable by others
             except Exception:
                 pass
         except Exception:
@@ -140,6 +146,10 @@ def get_client_ip():
 @app.before_request
 def assign_observation_id():
     g.observation_id = uuid.uuid4().hex
+    # Link every request of an authenticated session to the login that created it (hash only).
+    nonce = session.get("audit_nonce")
+    if isinstance(nonce, str) and len(nonce) == 32:
+        g.session_ref = hashlib.sha256(nonce.encode()).hexdigest()
 
 
 install_guard(app)
@@ -161,9 +171,12 @@ def log_http_access_telemetry(response):
         "user_agent": ua if ua.isprintable() else "", "request_id": g.observation_id,
         "timestamp": datetime.now(timezone.utc).isoformat(), "host": request.host,
         "service": "flask_web", "payload_indicators": sorted(indicators),
+        "event_id": uuid.uuid4().hex, "process_pid": os.getpid(), "parent_pid": os.getppid(),
     }
     if g.get("session_ref"):
         entry["session_ref"] = g.session_ref
+    if g.get("app_event"):
+        entry["app_event"] = g.app_event
     access_logger.info(json.dumps(entry, ensure_ascii=False))
     if auth is not None:
         auth_logger.info(json.dumps({
@@ -175,8 +188,13 @@ def log_http_access_telemetry(response):
 
 def write_auth_event(status, username, error_type=None):
     indicators = sql_indicators(username)
+    credential_match = g.get("credential_match")
+    credential_match = credential_match if type(credential_match) is bool else None
     g.authentication_observation = {
-        "status": status, "event_type": "WEB_AUTH_" + status.upper(),
+        "status": status, "event_type": "WEB_AUTH_" + status.upper(), "auth_result": status,
+        # Session granted although the submitted credentials do not match the returned account.
+        "credential_match": credential_match,
+        "suspected_auth_bypass": status == "success" and credential_match is False,
         "username": username if isinstance(username, str) and ACCOUNT.fullmatch(username) and not indicators else None,
         "auth_method": "password", "timestamp_source": "application",
         "payload_indicators": sorted(indicators), "error_type": error_type,
@@ -635,12 +653,38 @@ def upload():
     )
 
     f.save(filepath)
+    record_upload(filename, filepath)
 
     return (
         f"<h3>Upload thành công: "
         f"/tmp/uploads/{filename}</h3>"
         "<a href='/dashboard'>Quay lại</a>"
     )
+
+
+def record_upload(filename, filepath):
+    """Telemetry for a stored upload: what was written, never whether it was executed."""
+    event = {"type": "file_upload", "client_filename": safe_filename(filename), "stored": False}
+    try:
+        real = os.path.realpath(filepath)
+        digest = hashlib.sha256()
+        size = 0
+        with open(real, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+                size += len(chunk)
+        with open(real, "rb") as handle:
+            head = handle.read(4)
+        event.update({
+            "stored": True, "upload_path": real[:512], "upload_size": size, "upload_sha256": digest.hexdigest(),
+            "extension": os.path.splitext(real)[1].lower()[:16],
+            "outside_upload_dir": os.path.commonpath([real, os.path.realpath(UPLOAD_DIR)]) != os.path.realpath(UPLOAD_DIR),
+            "script_or_binary": os.path.splitext(real)[1].lower() in (".py", ".sh", ".pl", ".php", ".rb", ".jsp", ".elf")
+                                or head.startswith((b"#!", b"\x7fELF")),
+        })
+    except (OSError, ValueError) as exc:
+        event["error"] = type(exc).__name__
+    g.app_event = event
 
 
 # ============================================================
@@ -661,13 +705,35 @@ def ping():
     # LAB ONLY:
     # Command Injection intentionally retained.
 
-    result = subprocess.run(
+    command_event = {
+        "type": "shell_command", "parameter": "ip", "parameter_length": len(ip),
+        "parameter_sha256": hashlib.sha256(ip.encode("utf-8", "replace")).hexdigest(),
+        "shell_indicators": sorted(shell_indicators(ip)),
+        "referenced_upload_files": referenced_files(ip, UPLOAD_DIR),
+        "execution_result": "not_started",
+    }
+    g.app_event = command_event
+    started = time.time()
+    # Same behaviour as subprocess.run(..., timeout=10); Popen exposes the child shell PID.
+    proc = subprocess.Popen(
         f"ping -c 1 {ip}",
         shell=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=10
     )
+    command_event.update({"child_pid": proc.pid, "child_spawned_at": started, "execution_result": "running"})
+    try:
+        stdout, stderr = proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        # Only the shell is killed; processes it started may keep running (observed by the Agent).
+        command_event.update({"execution_result": "timeout", "duration_s": round(time.time() - started, 3)})
+        raise
+    command_event.update({"execution_result": "completed", "exit_code": proc.returncode,
+                          "duration_s": round(time.time() - started, 3)})
+    result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
     return (
         "<pre style='background:#000;color:#0f0;padding:15px;'>"

@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import Agents from './pages/Agents';
 import Incidents from './pages/Incidents';
 import ActionsHistory from './pages/ActionsHistory';
+import AccessControl from './pages/AccessControl';
 import Policies from './pages/Policies';
 import DetectionRules from './pages/DetectionRules';
 import Settings from './pages/Settings';
@@ -30,6 +31,7 @@ export default function App() {
 
         {/* Response Actions & Automation */}
         <Route path="/actions" element={<ActionsHistory />} />
+        <Route path="/access-control" element={<AccessControl />} />
         <Route path="/policies" element={<Policies />} />
 
         {/* Management & Administration */}

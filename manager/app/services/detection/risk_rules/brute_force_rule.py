@@ -46,6 +46,11 @@ def normalize_auth_event(event: dict) -> dict | None:
         ("log" if observed is not None else "manager_receipt"),
         "auth_method": method if method in ("password", "publickey") else None,
         "evidence_id": event.get("evidence_id") if isinstance(event.get("evidence_id"), str) else None,
+        # Application-side authentication evidence (web app only); None when not reported.
+        "auth_result": status if service == "flask_web" else None,
+        "credential_match": event["credential_match"] if type(event.get("credential_match")) is bool else None,
+        "suspected_auth_bypass": (event["suspected_auth_bypass"] if type(event.get("suspected_auth_bypass")) is bool
+                                  else None),
     }
 
 

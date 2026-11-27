@@ -156,6 +156,10 @@ class AuthMonitor:
                                 "request_id", "method", "path", "http_status", "user_agent",
                                 "auth_method",
                             ) if key in payload},
+                            # Application-side authentication evidence (see vulnerable_web write_auth_event).
+                            **{key: payload[key] for key in ("credential_match", "suspected_auth_bypass")
+                               if type(payload.get(key)) is bool},
+                            **({"auth_result": st}),
                         })
                         continue
 

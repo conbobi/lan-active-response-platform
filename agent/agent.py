@@ -19,6 +19,7 @@ from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
 from socket_telemetry import collect_connections
 from web_log_monitor import web_log_monitor_task
+from proc_events import ProcEventListener
 from network_channel import NetworkChannel, TOKEN as NETWORK_TOKEN, websocket_auth
 from firewall_control import SAFETY_VERSION
 
@@ -221,7 +222,7 @@ def collect_process_info(activity=None):
     if activity is not None:
         activity.update(version=1, captured_at=datetime.now(timezone.utc).isoformat(), complete=True)
     try:
-        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent', 'status', 'create_time']):
+        for proc in psutil.process_iter(['pid', 'ppid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent', 'status', 'create_time', 'uids', 'username']):
             try:
                 info = proc.info
                 status = info.get('status')
@@ -254,7 +255,11 @@ def collect_process_info(activity=None):
                     "cmdline": cmdline,
                     "cpu_percent": cpu_pct,
                     "memory_percent": mem_pct,
-                    "is_suspicious": is_suspicious
+                    "is_suspicious": is_suspicious,
+                    # Real and effective UID: a web service running as root makes every child root.
+                    "uid": info["uids"].real if info.get("uids") else None,
+                    "euid": info["uids"].effective if info.get("uids") else None,
+                    "username": info.get("username"),
                 })
             except psutil.AccessDenied:
                 if activity is not None:
@@ -513,7 +518,7 @@ async def send_ws_json_no_wait(websocket, message):
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
     params = cmd.get("payload", {})
-    if action in {"isolate", "auto_isolate", "quarantine", "block_ip", "remove_registry", "suspend_process"} and params.get("confirmed") is not True:
+    if action in {"isolate", "auto_isolate", "quarantine", "block_ip", "unblock_ip", "remove_registry", "suspend_process"} and params.get("confirmed") is not True:
         return {"status": "failed", "message": "Explicit operator confirmation required"}
     if action in {"kill_process_verified", "kill_process_tree_verified"}:
         action = action.removesuffix("_verified")
@@ -547,6 +552,7 @@ async def send_stats(websocket):
                                 "status": "success" if ack_payload.get("status") == "success" else "failed",
                                 "validation": ack_payload.get("validation"),
                                 "killed_pids": ack_payload.get("killed_pids"),
+                                "receipt": ack_payload.get("receipt"),
                                 "error_message": ack_payload.get("message"),
                                 "executed_at": datetime.now(timezone.utc).isoformat()
                             }
@@ -620,6 +626,70 @@ async def send_risk_telemetry(websocket):
         except Exception as e:
             print(f"Error sending risk telemetry: {e}", flush=True)
         await asyncio.sleep(15)
+
+PROC_EVENTS = None
+
+
+def start_process_events():
+    """Kernel process events (exec/exit) when available; polling collectors remain the fallback."""
+    global PROC_EVENTS
+    if PROC_EVENTS is None and platform.system() == "Linux" and os.getenv("LARP_PROC_EVENTS", "1") != "0":
+        listener = ProcEventListener()
+        if listener.open():
+            listener.start()
+            print(f"[{AGENT_ID}] Process connector subscribed: exec/exit events enabled", flush=True)
+        else:
+            print(f"[{AGENT_ID}] Process connector unavailable ({listener.error}); polling only", flush=True)
+        PROC_EVENTS = listener
+    return PROC_EVENTS
+
+
+async def send_process_events(websocket):
+    """Forward buffered exec/exit observations every 2 s (backlog kept, bounded, across reconnects)."""
+    listener = start_process_events()
+    last_status = 0.0
+    while True:
+        if listener is None:
+            await asyncio.sleep(60)
+            continue
+        events, stats = listener.drain(1000)
+        if events or stats["dropped"] or time.time() - last_status > 60:
+            message = {
+                "type": "PROCESS_EVENT",
+                "payload": {"agent_id": AGENT_ID, "events": events, "collector": "proc_connector", **stats,
+                            "timestamp": datetime.now(timezone.utc).isoformat()},
+                "wait_ack": False,
+            }
+            try:
+                await send_ws_json_no_wait(websocket, message)
+            except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
+                listener.requeue(events)  # resent after reconnect
+                raise
+            last_status = time.time()
+        await asyncio.sleep(0.2 if stats["pending"] else 2)
+
+
+async def send_blocklist_state(websocket):
+    """Report LARP-owned firewall blocks (nftables) every 60 s so the Manager can reconcile after restarts."""
+    from ip_blocklist import Blocklist
+    from network_sources import tool
+    await asyncio.sleep(10)
+    while True:
+        if platform.system() == "Linux" and tool("nft"):
+            try:
+                def read():
+                    from firewall_control import firewall_lock
+                    with firewall_lock():
+                        return Blocklist(manager_url=os.getenv("MANAGER_URL", "")).status()
+                state = await asyncio.to_thread(read)
+                await send_ws_json_no_wait(websocket, {"type": "BLOCKLIST_STATE", "wait_ack": False,
+                                                       "payload": {"agent_id": AGENT_ID, **state}})
+            except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError):
+                raise
+            except Exception as error:  # noqa: BLE001 - report nothing rather than a guess
+                print(f"[{AGENT_ID}] Blocklist state unavailable: {error}", flush=True)
+        await asyncio.sleep(60)
+
 
 async def send_process_list(websocket):
     """
@@ -738,7 +808,7 @@ async def main_agent():
                 last_heartbeat_ack_time = time.time()  # Reset watchdog timer upon connect
                 workers = [
                     send_stats(ws), send_risk_telemetry(ws), send_process_list(ws), send_flow_stats(ws),
-                    send_fim_alerts(ws), web_log_monitor_task(ws), watchdog_task(),
+                    send_fim_alerts(ws), web_log_monitor_task(ws), watchdog_task(), send_process_events(ws), send_blocklist_state(ws),
                 ]
                 if NETWORK:
                     workers.append(NETWORK.run(partial(send_ws_json_no_wait, ws)))

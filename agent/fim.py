@@ -38,6 +38,7 @@ class FileIntegrityMonitor:
         "/etc/ssh/sshd_config.d",
         "/var/spool/cron",
         "/tmp/malware_sim",
+        "/tmp/uploads",  # UPLOAD_DIR of agent/vulnerable_web/app.py
         "/home/webuser/vulnerable_web/uploads",
         "/var/www/uploads",
         "/var/www/html",

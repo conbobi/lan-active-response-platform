@@ -171,6 +171,7 @@ class WebLogMonitor:
                             "timestamp": stamp or journal_timestamp or now_iso, "request_id": request_id,
                             "timestamp_source": "log" if stamp or journal_timestamp else "agent_receipt",
                             "service": payload.get("service"), "payload_indicators": sorted(indicators),
+                            **app_fields(payload),
                         }
             except (ValueError, TypeError, OverflowError):
                 logger.debug("Invalid structured HTTP observation")
@@ -243,6 +244,30 @@ class WebLogMonitor:
         }
 
 
+APP_EVENT_KEYS = {
+    "file_upload": ("type", "client_filename", "stored", "upload_path", "upload_size", "upload_sha256",
+                    "extension", "outside_upload_dir", "script_or_binary", "error"),
+    "shell_command": ("type", "parameter", "parameter_length", "parameter_sha256", "shell_indicators",
+                      "referenced_upload_files", "execution_result", "child_pid", "child_spawned_at",
+                      "exit_code", "duration_s"),
+}
+
+
+def app_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Application-side observation fields forwarded as-is (bounded); the Manager validates them again."""
+    out: Dict[str, Any] = {}
+    event_id = payload.get("event_id")
+    if isinstance(event_id, str) and re.fullmatch(r"[0-9a-f]{32}", event_id):
+        out["event_id"] = event_id
+    for key in ("process_pid", "parent_pid"):
+        if type(payload.get(key)) is int and 0 < payload[key] < 2**31:
+            out[key] = payload[key]
+    event = payload.get("app_event")
+    if isinstance(event, dict) and event.get("type") in APP_EVENT_KEYS:
+        out["app_event"] = {k: event[k] for k in APP_EVENT_KEYS[event["type"]] if k in event}
+    return out
+
+
 async def send_web_log(ws, log_data: Dict[str, Any], agent_id: Optional[str] = None) -> bool:
     """
     Wraps log_data into a structured WEB_ACCESS_LOG message and sends it via WebSocket.
@@ -285,7 +310,9 @@ async def tail_cloudflared_logs(
         proc = None
         try:
             # 1. Attempt to stream journalctl -u cloudflared and -u vulnerable_web
-            cmd = ["journalctl", "-u", "cloudflared", "-u", "vulnerable_web", "-f", "-o", "json", "-n", "0"]
+            # The lab unit is vulnerable-web.service; vulnerable_web is kept for older installs.
+            cmd = ["journalctl", "-u", "cloudflared", "-u", "vulnerable-web", "-u", "vulnerable_web",
+                   "-f", "-o", "json", "-n", "0"]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

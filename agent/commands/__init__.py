@@ -6,6 +6,7 @@ from .kill_process_tree import KillProcessTreeCommand
 from .self_update import SelfUpdateCommand
 from .quarantine import QuarantineCommand, ReleaseQuarantineCommand
 from .yara_scan import YaraScanCommand
+from .ip_block import BlockIpCommand, BlocklistStatusCommand, UnblockIpCommand
 
 COMMAND_HANDLERS = {
     SynFloodCommand.name: SynFloodCommand(),
@@ -17,4 +18,7 @@ COMMAND_HANDLERS = {
     QuarantineCommand.name: QuarantineCommand(),
     ReleaseQuarantineCommand.name: ReleaseQuarantineCommand(),
     YaraScanCommand.name: YaraScanCommand(),
+    BlockIpCommand.name: BlockIpCommand(),
+    UnblockIpCommand.name: UnblockIpCommand(),
+    BlocklistStatusCommand.name: BlocklistStatusCommand(),
 }

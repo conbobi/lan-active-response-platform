@@ -22,6 +22,7 @@ const operationsNav = [
 
 const responseNav = [
   { to: '/actions', icon: <FiClock size={16} />, label: 'Actions History' },
+  { to: '/access-control', icon: <FiShield size={16} />, label: 'Chặn đang hiệu lực' },
   { to: '/policies', icon: <FiShield size={16} />, label: 'Response Policies' },
 ];
 

@@ -136,3 +136,80 @@ def technique_for(evidence: dict) -> str | None:
 
 def evidence_ids(events: list[dict]) -> list[str]:
     return list(dict.fromkeys(item["evidence_id"] for item in events if item.get("evidence_id")))
+
+
+SHELL_INDICATORS = {"shell_command_separator", "shell_pipe", "shell_and_or", "shell_background",
+                    "shell_substitution", "shell_redirection"}
+EXECUTION_RESULTS = {"not_started", "running", "completed", "timeout", "error"}
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
+
+
+def _pid(value):
+    return value if type(value) is int and 0 < value < 2**31 else None
+
+
+def _text(value, limit):
+    return value[:limit] if isinstance(value, str) and value.isprintable() else None
+
+
+def app_observation(data: dict) -> dict:
+    """Validated application-side fields of a web observation (vulnerable_web telemetry).
+
+    Everything is optional; unknown keys and malformed values are dropped, never trusted.
+    """
+    out = {}
+    event_id = data.get("event_id")
+    if isinstance(event_id, str) and re.fullmatch(r"[0-9a-f]{32}", event_id):
+        out["app_event_id"] = event_id
+    for key in ("process_pid", "parent_pid"):
+        if _pid(data.get(key)):
+            out[key] = data[key]
+    event = data.get("app_event")
+    if not isinstance(event, dict):
+        return out
+    if event.get("type") == "file_upload":
+        upload = {"type": "file_upload", "stored": event.get("stored") is True}
+        path = _text(event.get("upload_path"), 512)
+        if path and path.startswith("/"):
+            upload["upload_path"] = path
+        if type(event.get("upload_size")) is int and 0 <= event["upload_size"] < 2**40:
+            upload["upload_size"] = event["upload_size"]
+        if isinstance(event.get("upload_sha256"), str) and SHA256.fullmatch(event["upload_sha256"]):
+            upload["upload_sha256"] = event["upload_sha256"]
+        for key in ("outside_upload_dir", "script_or_binary"):
+            if type(event.get(key)) is bool:
+                upload[key] = event[key]
+        ext = _text(event.get("extension"), 16)
+        if ext and re.fullmatch(r"\.[a-z0-9]{0,15}", ext):
+            upload["extension"] = ext
+        name = _text(event.get("client_filename"), 255)
+        if name:
+            upload["client_filename"] = name
+        out["app_event"] = upload
+    elif event.get("type") == "shell_command":
+        command = {"type": "shell_command"}
+        if event.get("parameter") in ("ip",):
+            command["parameter"] = event["parameter"]
+        if type(event.get("parameter_length")) is int and 0 <= event["parameter_length"] < 2**20:
+            command["parameter_length"] = event["parameter_length"]
+        if isinstance(event.get("parameter_sha256"), str) and SHA256.fullmatch(event["parameter_sha256"]):
+            command["parameter_sha256"] = event["parameter_sha256"]
+        indicators = event.get("shell_indicators")
+        if isinstance(indicators, list):
+            command["shell_indicators"] = sorted({i for i in indicators if i in SHELL_INDICATORS})
+        files = event.get("referenced_upload_files")
+        if isinstance(files, list):
+            command["referenced_upload_files"] = [f for f in files if isinstance(f, str) and SAFE_NAME.fullmatch(f)][:8]
+        if event.get("execution_result") in EXECUTION_RESULTS:
+            command["execution_result"] = event["execution_result"]
+        if _pid(event.get("child_pid")):
+            command["child_pid"] = event["child_pid"]
+        if isinstance(event.get("child_spawned_at"), (int, float)) and 0 < event["child_spawned_at"] < 4e9:
+            command["child_spawned_at"] = float(event["child_spawned_at"])
+        if type(event.get("exit_code")) is int and -256 < event["exit_code"] < 256:
+            command["exit_code"] = event["exit_code"]
+        if isinstance(event.get("duration_s"), (int, float)) and 0 <= event["duration_s"] < 86400:
+            command["duration_s"] = float(event["duration_s"])
+        out["app_event"] = command
+    return out

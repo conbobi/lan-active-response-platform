@@ -184,3 +184,50 @@ async def get_process_detail(agent_id: str, pid: int, db: AsyncSession = Depends
         "is_suspicious": proc.is_suspicious,
     }
 
+
+
+# ── Process history (instances kept across snapshots; Task B) ─────────────────────────────────
+@router.get("/{agent_id}/history")
+async def process_history_search(
+    agent_id: str,
+    pid: Optional[int] = None,
+    q: Optional[str] = None,
+    minutes: int = 1440,
+    limit: int = 100,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recorded process instances for one Agent (operator authentication and Agent scope required)."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.process_instance import ProcessInstance
+    from app.services.agent import process_history
+
+    await authenticate_operator_request(authorization, db, agent_id=agent_id, write=False)
+    since = datetime.now(timezone.utc) - timedelta(minutes=max(1, min(minutes, 7 * 1440)))
+    query = select(ProcessInstance).where(ProcessInstance.agent_id == agent_id, ProcessInstance.last_seen >= since)
+    if pid is not None:
+        query = query.where(ProcessInstance.pid == pid)
+    if q:
+        query = query.where(ProcessInstance.cmdline.contains(q[:128]))
+    rows = (await db.scalars(query.order_by(ProcessInstance.first_seen.desc()).limit(max(1, min(limit, 500))))).all()
+    return {"agent_id": agent_id, "collector": process_history.COLLECTOR_STATUS.get(agent_id),
+            "items": [process_history.serialize(r) for r in rows]}
+
+
+@router.get("/{agent_id}/history/{instance_id}/lineage")
+async def process_history_lineage(
+    agent_id: str,
+    instance_id: str,
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ancestors of a recorded instance, nearest first; each link says how it was established."""
+    from app.models.process_instance import ProcessInstance
+    from app.services.agent import process_history
+
+    await authenticate_operator_request(authorization, db, agent_id=agent_id, write=False)
+    inst = await db.get(ProcessInstance, instance_id)
+    if inst is None or inst.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Process instance not found")
+    return {"instance": process_history.serialize(inst),
+            "ancestors": await process_history.lineage(db, agent_id, inst)}

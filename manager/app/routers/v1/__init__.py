@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.routers.v1.access_control_router import router as access_control_router
 from app.routers.v1.agent_router import router as agent_router
 from app.routers.v1.flow_router import router as flow_router
 from app.routers.v1.command_router import router as command_router
@@ -53,6 +54,7 @@ api_router.include_router(process_group_router, prefix="/process-groups", tags=[
 api_router.include_router(process_chain_rule_router, prefix="/process-chain-rules", tags=["Process Chain Rules"])
 api_router.include_router(yara_router, prefix="/yara", tags=["YARA Rules"])
 api_router.include_router(network_router)
+api_router.include_router(access_control_router)
 
 __all__ = ["api_router"]
 

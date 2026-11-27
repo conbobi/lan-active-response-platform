@@ -19,11 +19,16 @@ from app.schemas.heartbeat import HeartbeatDTO
 from app.core.response_safety import PROTECTED_COMMANDS, VERIFIED_KILL_COMMANDS
 from app.schemas.command_ack import CommandAckDTO
 from app.services.agent.agent_service import AgentService
+from app.services.agent import process_history
+from app.services.detection import web_compromise
+from app.services.response import access_control
 from app.services.agent.activity import process_identity, record_sample
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.detection.risk_assessment_service import RiskAssessmentService
 from app.services.detection.risk_rules.brute_force_rule import normalize_auth_event
-from app.services.detection.behavior_evidence import REQUEST_ID, address, http_fields, observed_time, stable_id
+from app.services.detection.behavior_evidence import (
+    REQUEST_ID, address, app_observation, http_fields, observed_time, stable_id,
+)
 from app.models.process_info import ProcessInfo
 from app.repositories.process_info_repository import ProcessInfoRepository
 from app.models.flow import Flow
@@ -258,6 +263,63 @@ async def _evaluate_incident_rules(agent_id: str, telemetry: dict, session: Asyn
     await dashboard_manager.broadcast(message)
 
 
+async def _record_process_history(session: AsyncSession, agent_id: str, observations, exits=()) -> None:
+    """History is supplementary: a failure here must not roll back the snapshot being processed."""
+    try:
+        async with session.begin_nested():
+            await process_history.record(session, agent_id, observations)
+            if exits:
+                await process_history.record_exits(session, agent_id, exits)
+    except Exception:
+        logger.exception("Process history update failed for Agent '%s'", agent_id)
+
+
+async def _correlate_web_chain(session: AsyncSession, agent_id: str) -> None:
+    """Multi-stage web compromise correlation (deterministic); isolated from the triggering message."""
+    try:
+        async with session.begin_nested():
+            await web_compromise.correlate(session, agent_id)
+    except Exception:
+        logger.exception("Web compromise correlation failed for Agent '%s'", agent_id)
+
+
+async def _handle_blocklist_state(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
+    payload = data.get("payload")
+    if not isinstance(payload, dict) or payload.get("agent_id", agent_id) != agent_id:
+        return {"status": "error", "message": "Invalid blocklist state Agent"}
+    await access_control.expire(session, agent_id)
+    await access_control.reconcile(session, agent_id, payload, source="periodic")
+    return {"status": "ack"} if data.get("wait_ack") else None
+
+
+async def _handle_process_event(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
+    """Kernel exec/exit observations (Agent proc connector) recorded into process history."""
+    payload = data.get("payload")
+    if not isinstance(payload, dict) or payload.get("agent_id", agent_id) != agent_id:
+        return {"status": "error", "message": "Invalid process event Agent"}
+    events = [e for e in (payload.get("events") or [])[:2000] if isinstance(e, dict)]
+    observations = []
+    for event in events:
+        if event.get("event") != "exec" or event.get("access_denied"):
+            continue
+        observations.append(("exec_event", event))
+        if isinstance(event.get("parent"), dict):
+            observations.append(("exec_parent", event["parent"]))
+    exits = [e for e in events if e.get("event") == "exit"]
+    await _record_process_history(session, agent_id, observations, exits)
+    if observations:
+        await _correlate_web_chain(session, agent_id)
+    process_history.COLLECTOR_STATUS[agent_id] = {
+        "collector": "proc_connector" if payload.get("available") else "polling_only",
+        "error": str(payload.get("error"))[:200] if payload.get("error") else None,
+        "dropped": payload.get("dropped") if type(payload.get("dropped")) is int else None,
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if payload.get("dropped"):
+        logger.warning("Agent '%s' process connector dropped %s event batch(es)", agent_id, payload["dropped"])
+    return {"status": "ack", "count": len(observations)} if data.get("wait_ack") else None
+
+
 async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
     target_agent_id = payload.get("agent_id", agent_id)
@@ -269,6 +331,8 @@ async def _handle_process_list(agent_id: str, data: dict, session: AsyncSession)
         await ProcessInfoRepository(session).delete_by_agent(target_agent_id)
     saved_count = await _save_process_list(session, target_agent_id, procs_data)
     logger.info(f"Saved {saved_count} processes for agent '{target_agent_id}' via PROCESS_LIST")
+    if isinstance(procs_data, list) and target_agent_id == agent_id:
+        await _record_process_history(session, agent_id, [("snapshot", p) for p in procs_data])
 
     try:
         await _evaluate_incident_rules(target_agent_id, payload, session)
@@ -314,7 +378,8 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
                 socket_evidence = None
                 if conn.get("attribution") or conn.get("direction") in ("inbound", "outbound"):
                     socket_evidence = {key: conn[key] for key in (
-                        "status", "direction", "observed_at", "first_seen", "inode", "socket_id", "holders", "originator_pid",
+                        "status", "direction", "direction_basis", "observed_at", "first_seen", "inode", "socket_id",
+                        "holders", "originator_pid",
                         "attribution", "attribution_reason", "interfaces", "overlay", "bytes_sent", "bytes_received",
                     ) if key in conn}
                 pid = conn.get("pid")
@@ -332,6 +397,13 @@ async def _handle_telemetry_risk(agent_id: str, data: dict, session: AsyncSessio
                 logger.debug("Skipping malformed socket observation for Agent %s", target_agent_id)
         if flows:
             session.add_all(flows)
+
+    procs = payload.get("process_list")
+    await _record_process_history(session, target_agent_id, [
+        *[("snapshot", p) for p in (procs if isinstance(procs, list) else [])],
+        *process_history.socket_processes(conns if isinstance(conns, list) else []),
+    ])
+    await _correlate_web_chain(session, target_agent_id)
 
     try:
         await _evaluate_incident_rules(target_agent_id, payload, session)
@@ -469,6 +541,15 @@ async def _handle_fim_alert(agent_id: str, data: dict, session: AsyncSession) ->
 
 async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) -> Optional[dict]:
     payload = data.get("payload", {})
+    from app.models.command import Command as _Command
+    access_cmd = await session.get(_Command, payload.get("command_id")) if isinstance(payload.get("command_id"), str) else None
+    if access_cmd is not None and access_cmd.action in access_control.ACTIONS:
+        if access_cmd.agent_id != agent_id:
+            return {"status": "error", "message": "Invalid command acknowledgement"}
+        # Applied even after TIMEOUT: a late receipt is the evidence of what actually ran.
+        await access_control.handle_ack(session, agent_id, access_cmd, payload)
+        await session.flush()
+        return {"status": "ack", "message": "Access control receipt recorded"}
     dto = CommandAckDTO(**payload)
     from app.models.command import Command
     existing = await session.get(Command, dto.command_id)
@@ -637,7 +718,8 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
         properties = {
             key: value for key, value in event.items()
             if key in {"request_id", "request_method", "request_path", "http_status", "user_agent",
-                       "payload_indicators", "timestamp_source", "auth_method", "session_ref"} and value is not None
+                       "payload_indicators", "timestamp_source", "auth_method", "session_ref",
+                       "auth_result", "credential_match", "suspected_auth_bypass"} and value is not None
         }
         session.add(Event(
             id=identifier, agent_id=agent_id, event_type="AUTH_OBSERVATION",
@@ -653,6 +735,9 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
             auth_history_before=now,
         )
         score = record.score
+    if fresh:
+        await session.flush()
+        await _correlate_web_chain(session, agent_id)
     logger.info("Recorded AUTH_EVENT for Agent %s (risk=%s)", agent_id, score)
     return {"status": "ack", "message": "Auth event processed", "score": score} if data.get("wait_ack", True) else None
 
@@ -706,6 +791,7 @@ async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSessio
     observation = http_fields(payload)
     if not observation.get("request_method") or not observation.get("request_path"):
         return None
+    observation.update(app_observation(payload))
     src_ip = address(payload.get("src_ip") or payload.get("client_ip")) or "unknown"
     host = str(payload.get("host") or "")[:128]
     service = payload.get("service")
@@ -747,6 +833,8 @@ async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSessio
     record = await RiskAssessmentService(session).process_risk(
         agent_id=agent_id, data={"agent_id": agent_id, "web_logs": [normalized]}, trusted_web=True,
     )
+    await session.flush()
+    await _correlate_web_chain(session, agent_id)
     logger.info("Recorded WEB_ACCESS_LOG for Agent %s (risk=%s)", agent_id, record.score)
     return {"status": "ack", "message": "Web access log processed", "score": record.score} if data.get("wait_ack", False) else None
 
@@ -754,6 +842,8 @@ async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSessio
 MESSAGE_HANDLERS = {
     "HEARTBEAT": _handle_heartbeat,
     "PROCESS_LIST": _handle_process_list,
+    "PROCESS_EVENT": _handle_process_event,
+    "BLOCKLIST_STATE": _handle_blocklist_state,
     "TELEMETRY_RISK": _handle_telemetry_risk,
     "FLOW_STATS": _handle_flow_stats,
     "FIM_ALERT": _handle_fim_alert,
