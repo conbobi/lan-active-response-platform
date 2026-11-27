@@ -268,6 +268,8 @@ async def update_rule_endpoint(
         yaml_changed = False
         if body.rule_yaml is not None and body.rule_yaml.strip() != candidate.rule_yaml:
             candidate.rule_yaml = body.rule_yaml.strip()
+            from app.services.ai import threat_memory
+            await threat_memory.invalidate_rule(db, str(candidate.id), "Logic rule thay đổi")
             yaml_changed = True
             # Changed YAML is unvalidated: it must not keep running or stay approved.
             was_active = candidate.status == "active"
@@ -527,6 +529,8 @@ async def disable_rule(
 
         candidate.status = "disabled"
         candidate.disabled_at = datetime.now(timezone.utc)
+        from app.services.ai import threat_memory
+        await threat_memory.invalidate_rule(db, str(candidate.id), "Rule bị tắt")
 
         await db.commit()
         await db.refresh(candidate)

@@ -36,6 +36,7 @@ import MetricsCard from '../components/ai/MetricsCard';
 import StatusBadge from '../components/ai/StatusBadge';
 import SourceBadge from '../components/ai/SourceBadge';
 import MITRETags from '../components/ai/MITRETags';
+import ThreatMemoryMetrics from '../components/ai/ThreatMemoryMetrics';
 import './AIDashboard.fallback.css';
 
 const STATUS_TEXT = {
@@ -293,6 +294,8 @@ export default function AIDashboard() {
           icon={<FiClock size={18} />}
         />
       </div>
+
+      <ThreatMemoryMetrics />
 
       {/* ── KHỐI 2 & 3: CHARTS ROW ─────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-w-0 ai-charts-grid">

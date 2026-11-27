@@ -34,7 +34,7 @@ from app.models.process_instance import ProcessInstance
 from app.models.ip_block import IpBlock, IpBlockEvent, IpUnblock
 from app.models.web_access_log import WebAccessLog
 from app.models.network_snapshot import NetworkSnapshot
-from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase
+from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase, ThreatMemory, ThreatMemoryEvent
 from app.models.soc_auth import SocUser, SocUserAgentScope, SocRefreshSession, SocAuthAuditLog
 
 __all__ = [

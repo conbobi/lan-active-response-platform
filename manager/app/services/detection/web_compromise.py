@@ -76,6 +76,7 @@ LABELS = {
 STAGES = ("auth_bypass", "suspicious_upload", "command_injection", "web_spawned_shell",
           "uploaded_file_execution", "outbound_connection")
 EXECUTION = ("web_spawned_shell", "uploaded_file_execution")
+SEVERITY_RANK = {IncidentSeverity.LOW: 1, IncidentSeverity.MEDIUM: 2, IncidentSeverity.HIGH: 3, IncidentSeverity.CRITICAL: 4}
 
 
 def _base(path: str) -> str:
@@ -526,10 +527,16 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
             "chain_digest": digest, "last_received_at": now.isoformat(),
             "observations": int(previous.get("observations", 1)) + 1, "risk_calculated_at": now.isoformat(),
         }
+        escalated = SEVERITY_RANK[result["severity"]] > SEVERITY_RANK.get(existing.severity, 0)
         if result["score"] >= existing.risk_score:
             existing.risk_score = result["score"]
             existing.severity = result["severity"]
             existing.title = title
+        if escalated:
+            # New stages change the threat fingerprint: re-run AI triage so cached analysis is re-evaluated.
+            context = getattr(session, "info", {})
+            if context.get("defer_incident_events") is True:
+                context.setdefault("new_incident_ids", []).append(existing.id)
         existing.updated_at = now
         session.add(IncidentNote(id=f"note_{uuid.uuid4().hex[:12]}", incident_id=existing.id, user="detection_engine",
                                  content=f"Chuỗi tấn công cập nhật: {', '.join(result['matched'])} "

@@ -10,9 +10,11 @@ import {
   FiShield,
 } from 'react-icons/fi';
 import api from '../../api/api';
-import { getAIAnalysis, getIncidentTimeline, rateAIAnalysis, regenerateAIAnalysis } from '../../api/incidents';
+import { getAIAnalysis, getIncidentTimeline, rateAIAnalysis } from '../../api/incidents';
 import Button from '../ui/Button';
 import AISuggestionPanel from './AISuggestionPanel';
+import AnalysisSourcePanel from './AnalysisSourcePanel';
+import { runAnalysis } from '../../api/threatMemory';
 import { SafeStructuredParagraphs, parseAnalysisSections } from './SafeAnalysisContent';
 import {
   COMPLETENESS_LABELS,
@@ -83,7 +85,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
     };
   }, [incidentId]);
 
-  const handleRegenerate = async () => {
+  const handleRegenerate = async (mode = 'fresh') => {
     try {
       setRegenerating(true);
       setError(null);
@@ -92,8 +94,8 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       const oldAnalysisId = analysis?.id || null;
       const startTime = Date.now();
 
-      await regenerateAIAnalysis(incidentId);
-      toast.success('AI đang phân tích (~2-4 phút). Bạn có thể chuyển tab hoặc rời trang.', { duration: 5000 });
+      await runAnalysis(incidentId, mode);
+      toast(mode === 'fresh' ? 'Đang làm mới bằng AI (~2-4 phút trên CPU).' : 'Đang phân tích lại (có thể dùng mẫu đã kiểm chứng).', { icon: '⏳', duration: 5000 });
 
       let attempts = 0;
       pollTimerRef.current = setInterval(async () => {
@@ -209,7 +211,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       entries.push({
         time: analysis.created_at,
         label: 'Phân tích AI hoàn tất',
-        title: `Tạo báo cáo phân tích bởi ${analysis.model_name || 'mô hình AI cục bộ'}`,
+        title: analysis.model_name === 'threat-memory' ? 'Tạo báo cáo từ mẫu đã kiểm chứng (không gọi mô hình)' : `Tạo báo cáo phân tích bởi ${analysis.model_name || 'mô hình AI cục bộ'}`,
         severity: 'info',
       });
     }
@@ -363,7 +365,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
             </strong>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <Button variant="outline" size="sm" onClick={handleRegenerate} disabled={regenerating}>
+            <Button variant="outline" size="sm" onClick={() => handleRegenerate('fresh')} disabled={regenerating}>
               <FiRefreshCw size={13} style={{ marginRight: '0.35rem' }} /> Phân tích lại bằng AI
             </Button>
           </div>
@@ -404,8 +406,10 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
         </div>
       </div>
 
+      <AnalysisSourcePanel incidentId={incidentId} analysisId={analysis?.id} busy={regenerating} onRun={handleRegenerate} />
+
       {/* B. CHUYỆN GÌ ĐÃ XẢY RA? (Safe Structured Interpretation, NO raw Markdown) */}
-      <SectionCard title="Chuyện gì đã xảy ra?" subtitle={analysis ? `Mô hình: ${analysis.model_name || 'AI cục bộ'}` : 'Chưa có bản phân tích AI'}>
+      <SectionCard title="Chuyện gì đã xảy ra?" subtitle={analysis ? (analysis.model_name === 'threat-memory' ? 'Từ mẫu đã kiểm chứng (không gọi mô hình)' : `Mô hình: ${analysis.model_name || 'AI cục bộ'}`) : 'Chưa có bản phân tích AI'}>
         {error && error !== 'pending' && !analysis ? (
           <div style={{ color: 'var(--error)', fontSize: '0.84rem' }}>
             Không thể tải kết quả phân tích AI: {error}
@@ -415,7 +419,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
             <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Sự cố chưa có bản tóm tắt AI. Hệ thống vẫn hiển thị đầy đủ bằng chứng xác định và các hành động ứng phó ở dưới.
             </span>
-            <Button variant="primary" size="sm" onClick={handleRegenerate}>
+            <Button variant="primary" size="sm" onClick={() => handleRegenerate('fresh')}>
               Chạy phân tích AI ngay
             </Button>
           </div>

@@ -36,6 +36,8 @@ from app.services.ai.triage_schema import (
     validate_verdict,
 )
 from app.services.ai.triage_tokens import load_tokenizer, serialize_data
+from app.services.ai import threat_memory
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,15 @@ def _kb_version() -> str:
         return knowledge_base.version or "none"
     except Exception:
         return "none"
+
+
+def memory_versions() -> tuple[str, str]:
+    """(model identity, prompt version) a Threat Memory template is bound to."""
+    revision = os.getenv("AI_RESPONSE_MODEL_VERSION") or "unpinned"
+    return f"{ai_client.model}@{revision}", _version(SYSTEM_PROMPT, ASSESSMENT_PROMPT)
+
+
+MALICIOUS = {"likely_malicious", "confirmed_malicious", "sqli_exploitation_confirmed"}
 
 
 def triage_cache_key(prepared_text: str, context, schema, system) -> AnalysisKey | None:
@@ -187,8 +198,18 @@ def fallback_verdict(context: AlertContext) -> ValidatedVerdict:
     return ValidatedVerdict("insufficient_telemetry", 0.0, [], [])
 
 
+class _NoFlight:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 class AITriageService:
-    async def analyze_incident(self, incident_id: str, *, manual: bool = False) -> AIAnalysis | None:
+    async def analyze_incident(self, incident_id: str, *, manual: bool = False, use_memory: bool | None = None) -> AIAnalysis | None:
+        """manual=True bypasses analysis caches (L1 and Threat Memory reuse) unless use_memory=True;
+        validation of the result is never bypassed."""
         started = asyncio.get_running_loop().time()
         async with asyncio.timeout_at(started + QUEUE_WAIT_SECONDS):
             async with AsyncSessionLocal() as session:
@@ -198,17 +219,20 @@ class AITriageService:
                 version = evidence_version(incident)
         task = triage_queue.submit(
             (incident_id, version),
-            lambda slot: self._run(incident_id, version, manual, started, slot),
+            lambda slot: self._run(incident_id, version, manual, started, slot,
+                                   use_memory=(not manual) if use_memory is None else use_memory),
         )
         if task is None:
             async with asyncio.timeout(PERSIST_RESERVE_SECONDS):
                 return await self._save(incident_id, version, None, None, "queue_saturated")
         return await asyncio.shield(task)
 
-    async def _run(self, incident_id, version, manual, started, slot):
+    async def _run(self, incident_id, version, manual, started, slot, use_memory=True):
         context, verdict, decision = None, None, None
         status = "ok"
         acquired = False
+        fp, memory, source, memory_id, llm_ms = None, None, None, None, None
+        model_name, prompt_version = memory_versions()
         try:
             async with asyncio.timeout_at(started + QUEUE_WAIT_SECONDS):
                 await slot.acquire()
@@ -222,6 +246,10 @@ class AITriageService:
                     if evidence_version(incident) == version:
                         context = await load_alert_context(session, incident)
                         await enrich_rule_mapping(session, context)
+                        try:
+                            fp = threat_memory.build_fingerprint(incident, context)
+                        except Exception:  # noqa: BLE001 - memory is optional
+                            logger.exception("Threat fingerprint failed incident=%s", incident_id)
             if context is None:
                 status = "evidence_changed"
             else:
@@ -232,7 +260,24 @@ class AITriageService:
                     async with asyncio.timeout_at(
                         started + decision.deadline_seconds - PERSIST_RESERVE_SECONDS
                     ):
-                        verdict = await self._infer(context, decision.route, manual=manual, subject=incident_id)
+                        flight = threat_memory.single_flight(fp.value) if fp else _NoFlight()
+                        async with flight:
+                            if fp is not None:
+                                memory = await threat_memory.lookup(
+                                    AsyncSessionLocal, fp, model_name=model_name, prompt_version=prompt_version,
+                                    allow_exact=use_memory)
+                            if memory is not None and memory.source == threat_memory.EXACT:
+                                verdict = self._reuse(memory, fp, context)
+                                if verdict is not None:
+                                    source, memory_id = threat_memory.EXACT, memory.entry["id"]
+                            if verdict is None:
+                                extra = threat_memory.references_for(memory.similar) if memory and memory.similar else []
+                                llm_started = monotonic()
+                                verdict = await self._infer(context, decision.route, manual=manual or not use_memory,
+                                                            subject=incident_id, extra_references=extra)
+                                llm_ms = round((monotonic() - llm_started) * 1000, 1)
+                                source = threat_memory.SEMANTIC if extra else threat_memory.FRESH
+                                memory_id = await self._learn(fp, verdict, incident_id, model_name, prompt_version)
                     if decision.shadow_candidate:
                         baseline = fallback_verdict(context)
                         logger.info(
@@ -251,20 +296,75 @@ class AITriageService:
         finally:
             if acquired:
                 slot.release()
+        if status != "ok" or source is None:
+            source = threat_memory.FALLBACK
+        total_ms = round((asyncio.get_running_loop().time() - started) * 1000, 1)
+        info = self._source_info(source, memory, memory_id, llm_ms, total_ms)
+        if memory is not None:
+            await threat_memory.record_event(AsyncSessionLocal, memory, incident_id=incident_id, final_source=source,
+                                             llm_ms=llm_ms, total_ms=total_ms, memory_id=memory_id)
         deadline = started + (decision.deadline_seconds if decision else 120)
         try:
             async with asyncio.timeout_at(deadline):
-                return await self._save(incident_id, version, context, verdict, status)
+                return await self._save(incident_id, version, context, verdict, status, source_info=info)
         except TimeoutError:
             logger.error("Triage DB write deadline exceeded incident=%s", incident_id)
             return None
 
-    async def _infer(self, context, route, *, settings=TRIAGE_SETTINGS, tokenizer=None, references=None, manual=False, subject=None):
+    def _reuse(self, memory, fp, context):
+        """Exact Threat Memory hit → verdict on *this* incident's evidence, or None (then the model runs)."""
+        try:
+            bound = threat_memory.rebind(memory.entry["template"], fp)
+            output = TriageVerdict.model_validate(bound)
+            verdict = validate_verdict(output, context)
+        except (threat_memory.Ineligible, VerdictSchemaError, ValidationError, KeyError, TypeError) as exc:
+            memory.reason, memory.stale_rejected = str(exc)[:64] or type(exc).__name__, True
+            return None
+        baseline = fallback_verdict(context)
+        if baseline.classification in MALICIOUS and verdict.classification not in MALICIOUS:
+            memory.reason, memory.stale_rejected = "contradicted_by_evidence", True
+            asyncio.get_running_loop().create_task(
+                threat_memory.penalize(AsyncSessionLocal, memory.entry["id"], "contradicted_by_evidence"))
+            return None
+        asyncio.get_running_loop().create_task(threat_memory.mark_used(AsyncSessionLocal, memory.entry["id"]))
+        return verdict
+
+    @staticmethod
+    async def _learn(fp, verdict, incident_id, model_name, prompt_version):
+        """Store only a validated model verdict that cites evidence with unambiguous roles."""
+        if fp is None or verdict is None or verdict.classification == "insufficient_telemetry":
+            return None
+        try:
+            template = threat_memory.make_template(verdict, fp)
+        except threat_memory.Ineligible:
+            return None
+        return await threat_memory.store(AsyncSessionLocal, fp, template, model_name=model_name,
+                                         prompt_version=prompt_version, incident_id=incident_id)
+
+    @staticmethod
+    def _source_info(source, memory, memory_id, llm_ms, total_ms):
+        entry = (memory.entry if memory else None) or {}
+        keep = ("id", "attack_pattern", "validation_status", "reviewer", "updated_at", "platform", "mitre_techniques")
+        return {
+            "analysis_source": source, "model_called": llm_ms is not None,
+            "memory": {k: entry.get(k) for k in keep} if source == threat_memory.EXACT and entry else None,
+            "learned_memory_id": memory_id if source in (threat_memory.FRESH, threat_memory.SEMANTIC) else None,
+            "similar_cases": [{k: s.get(k) for k in (*keep, "similarity")} for s in (memory.similar if memory else [])],
+            "cache_reason": memory.reason if memory else None,
+            "fingerprint": memory.fingerprint.short if memory and memory.fingerprint else None,
+            "latency_ms": {"lookup": memory.lookup_ms if memory else None, "llm": llm_ms, "total": total_ms},
+            "request_id": memory.request_id if memory else None,
+        }
+
+    async def _infer(self, context, route, *, settings=TRIAGE_SETTINGS, tokenizer=None, references=None, manual=False,
+                     subject=None, extra_references=()):
         tokenizer = tokenizer or await asyncio.to_thread(load_tokenizer)
         if references is None:
             retrieval_start = monotonic()
             references = retrieve_references(context, tokenizer)
             logger.info("Triage knowledge_retrieval_ms=%.2f", (monotonic() - retrieval_start) * 1000)
+        if extra_references:
+            references = [*references, *extra_references]  # similar patterns: context only, never evidence
         is_complex = route == Route.MULTI_PHASE
         assessment = None
         if is_complex:
@@ -327,7 +427,7 @@ class AITriageService:
         except Exception:
             logger.exception("Triage L1 cache write failed")
 
-    async def _save(self, incident_id, expected_version, context, verdict, status):
+    async def _save(self, incident_id, expected_version, context, verdict, status, source_info=None):
         async with AsyncSessionLocal() as session, session.begin():
             incident = await session.get(Incident, incident_id, with_for_update=True)
             if incident is None:
@@ -351,6 +451,15 @@ class AITriageService:
                 context = build_alert_context(incident)
             verdict = verdict or fallback_verdict(context)
             data = _analysis_fields(context, verdict, status, version)
+            if source_info is not None:
+                if status != "ok":  # evidence changed, model failed or deterministic route: label honestly
+                    source_info = {**source_info, "analysis_source": threat_memory.FALLBACK, "memory": None,
+                                   "learned_memory_id": None}
+                raw = json.loads(data["raw_response"])
+                raw.update(source_info)
+                data["raw_response"] = json.dumps(raw, ensure_ascii=False, allow_nan=False)
+                if source_info["analysis_source"] == threat_memory.EXACT:
+                    data["model_name"] = "threat-memory"  # no model was called for this analysis
             row = AIAnalysis(incident_id=incident_id, analysis_type="triage", **data)
             session.add(row)
             await session.flush()

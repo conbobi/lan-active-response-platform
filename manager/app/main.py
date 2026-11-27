@@ -128,6 +128,7 @@ OWN_AUTHORIZATION = [re.compile(p) for p in (
     rf"{_V1}/response-actions/{_ID}/(approve|reject|execute|rollback)/?",
     rf"{_V1}/response-actions/batch/(approve|reject)/?",
     rf"{_V1}/access-control/.*",
+    rf"{_V1}/ai/.*",
 )]
 # Only these candidate mutations grant write access to scoped SOC operators.
 _AI_RULES = r"/api/(?:v1/)?rules"
