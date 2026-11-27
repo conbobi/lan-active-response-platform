@@ -131,6 +131,8 @@ class AlertContext:
     conflict: bool = False
     chain_count: int = 0
     mapped_techniques: tuple[str, ...] = ()
+    # Correlated web-compromise chain (incident evidence), for the deterministic report; not prompt data.
+    chain: dict = field(default_factory=dict)
 
     @property
     def by_id(self) -> dict:
@@ -416,7 +418,8 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
         result.facts.append(fact)
         result.mandatory.add(fact["id"])
 
-    for factor in _records(evidence.get("factors")):
+    # A correlated chain lists its conditions as factors; they are projected once, as chain stages.
+    for factor in ([] if _mapping(evidence.get("chain")) else _records(evidence.get("factors"))):
         name = _value(factor.get("rule"))
         fact = {
             "id": f"F{len(result.facts) + 1}", "source": "incident_snapshot",
@@ -457,6 +460,8 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
             "window_start": _time(auth.get("window_start")), "window_end": _time(auth.get("window_end")),
         })
 
+    _project_chain(result, evidence)
+
     if not result.facts and not result.flows and not result.processes and incident.description:
         result.facts.append({
             "id": "F1", "source": "incident_description", "kind": "unstructured",
@@ -475,6 +480,77 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
         result.missing.append("incident_evidence")
     result.mandatory.update(fact["id"] for fact in result.facts if fact["kind"] in {"fim", "authentication"})
     return result
+
+
+SHELL_NAMES = {"sh", "bash", "dash", "zsh", "ksh", "ash", "fish"}
+
+
+def _project_chain(result: AlertContext, evidence) -> None:
+    """Expose a web_compromise_chain incident's correlated processes, sockets and stages as evidence items."""
+    chain = _mapping(evidence.get("chain"))
+    if not chain or result.processes or result.flows:
+        return
+    result.chain = chain
+    procs = [p for p in _records(chain.get("process_tree")) if p.get("pid")]
+    ids = {}
+    for proc in procs:
+        ids[(proc.get("pid"), proc.get("process_start_time"))] = f"P{len(ids) + 1}"
+    by_pid = {}
+    for proc in procs:
+        by_pid.setdefault(proc.get("pid"), []).append(proc)
+    for proc in procs:
+        key = (proc.get("pid"), proc.get("process_start_time"))
+        parents = [p for p in by_pid.get(proc.get("parent_pid"), [])
+                   if (p.get("process_start_time") or 0) <= (proc.get("process_start_time") or 0)]
+        parent = ids.get((parents[0].get("pid"), parents[0].get("process_start_time"))) if len(parents) == 1 else None
+        item = {
+            "id": ids[key], "source": "correlated_chain", "pid": proc.get("pid"),
+            "process_start_time": _value(proc.get("process_start_time")), "ppid": _value(proc.get("parent_pid")),
+            "name": _value(proc.get("name")), "path": _value(proc.get("exe")), "cmdline": _value(proc.get("cmdline")),
+            "parent": parent or NA,
+        }
+        if type(proc.get("euid")) is int:
+            item["euid"] = proc["euid"]
+        if proc.get("exited_at"):
+            item["exited_at"] = _time(proc.get("exited_at"))
+        result.processes.append(item)
+        result.mandatory.add(item["id"])
+    for net in _records(chain.get("network")):
+        src_ip, _, src_port = str(net.get("src", "")).rpartition(":")
+        dst_ip, _, dst_port = str(net.get("dst", "")).rpartition(":")
+        holder = next((ids[k] for k in ids if k[0] == net.get("pid")), None)
+        flow_id = f"N{len(result.flows) + 1}"
+        stdio = net.get("socket_stdio") is True
+        result.flows.append({
+            "id": flow_id, "source": "correlated_chain",
+            "tuple": {"protocol": "TCP", "src_ip": src_ip or NA, "src_port": int(src_port) if src_port.isdigit() else NA,
+                      "dst_ip": dst_ip or NA, "dst_port": int(dst_port) if dst_port.isdigit() else NA},
+            "state": "ESTABLISHED", "direction": _value(net.get("direction")), "observed_at": _time(net.get("first_seen")),
+            "inode": NA, "socket_id": NA, "attribution": "inode_verified",
+            "holders": [{"process": holder, "pid": net.get("pid"), "socket_fds": [],
+                         "stdio_fds": [0, 1, 2] if stdio else []}] if holder else [],
+            "originator_pid": NA, "primary_process": NA,
+        })
+        result.mandatory.add(flow_id)
+        if stdio and holder and net.get("direction") in ("outbound", None):
+            # stdin/stdout of the holder are the socket itself: an interactive shell driven over the network.
+            result.verified_shell = result.verified_shell or flow_id
+    for cond in _records(chain.get("conditions")):
+        if cond.get("status") in ("OBSERVED", "CORRELATED"):
+            result.facts.append({
+                "id": f"F{len(result.facts) + 1}", "source": "correlated_chain", "kind": "chain_stage",
+                "stage": cond.get("id"), "status": cond.get("status"), "detail": str(cond.get("detail") or "")[:300],
+                "evidence_refs": list(cond.get("evidence_ids") or [])[:5],
+            })
+        else:
+            result.missing.append(f"chain_stage:{cond.get('id')}")
+    names = {str(p.get("name") or "").rstrip("0123456789.") for p in procs}
+    techniques = set(result.mapped_techniques)
+    if names & SHELL_NAMES:
+        techniques.add("T1059.004")
+    if "python" in names:
+        techniques.add("T1059.006")
+    result.mapped_techniques = tuple(sorted(techniques))
 
 
 async def load_alert_context(session, incident) -> AlertContext:

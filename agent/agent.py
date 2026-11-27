@@ -140,7 +140,10 @@ def collect_stats():
         "disk": get_container_disk_percent(),
         "ip_address": get_ip_address(),
         "mac_address": get_mac_address(),
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        # What this Agent can actually execute; the Manager hides actions that are not listed.
+        "capabilities": sorted([*COMMAND_HANDLERS, "kill_process_tree_verified", "kill_process_verified",
+                                *(["proc_events"] if PROC_EVENTS is not None and PROC_EVENTS.available else [])]),
     }
 
 SUSPICIOUS_PATTERNS = [
@@ -518,7 +521,7 @@ async def send_ws_json_no_wait(websocket, message):
 async def execute_command(websocket, cmd):
     action = cmd.get("action")
     params = cmd.get("payload", {})
-    if action in {"isolate", "auto_isolate", "quarantine", "block_ip", "unblock_ip", "remove_registry", "suspend_process"} and params.get("confirmed") is not True:
+    if action in {"isolate", "auto_isolate", "quarantine", "block_ip", "unblock_ip", "quarantine_file", "restore_file", "remove_registry", "suspend_process"} and params.get("confirmed") is not True:
         return {"status": "failed", "message": "Explicit operator confirmation required"}
     if action in {"kill_process_verified", "kill_process_tree_verified"}:
         action = action.removesuffix("_verified")

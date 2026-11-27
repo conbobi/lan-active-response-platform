@@ -14,6 +14,7 @@ import { useAgents } from '../../hooks/useAgents';
 
 import ResponseAssist from './ResponseAssist';
 import AccessControlPanel from '../access/AccessControlPanel';
+import ContainmentPanel from './ContainmentPanel';
 import AIAnalysisTab from './AIAnalysisTab';
 
 const STORYBOARD_TABS = [
@@ -263,6 +264,7 @@ export default function IncidentDetailModal({
 
           {tab === 'assist' && (
             <>
+              <ContainmentPanel key={`ct-${incident.id}`} incidentId={incident.id} />
               <AccessControlPanel key={`ac-${incident.id}`} incident={detailedIncident || incident} />
               <ResponseAssist key={incident.id} incidentId={incident.id} incident={detailedIncident} />
             </>

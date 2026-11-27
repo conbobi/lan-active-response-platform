@@ -152,6 +152,7 @@ class Chain:
     network: List[Dict[str, Any]] = field(default_factory=list)
     source_ips: List[str] = field(default_factory=list)
     request_ids: List[str] = field(default_factory=list)
+    inferred_requests: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class Evidence:
@@ -165,6 +166,7 @@ class Evidence:
         self.web_pids: Dict[int, float] = {}
         self.instances: List[ProcessInstance] = []
         self.flows: List[Flow] = []
+        self.http: List[WebAccessLog] = []
         self.has_process_history = False
 
 
@@ -203,6 +205,8 @@ async def load(session, agent_id: str, now: datetime) -> Evidence:
                                 "source_ip": auth.source_ip if auth else None,
                                 "at": _ts(auth.timestamp) if auth else _ts(row.created_at),
                                 "payload_indicators": details.get("payload_indicators") or []})
+    ev.http = list((await session.scalars(select(WebAccessLog).where(
+        WebAccessLog.agent_id == agent_id, WebAccessLog.timestamp >= since).order_by(WebAccessLog.timestamp).limit(1000))).all())
     ev.instances = list((await session.scalars(select(ProcessInstance).where(
         ProcessInstance.agent_id == agent_id, ProcessInstance.last_seen >= since))).all())
     ev.has_process_history = bool(ev.instances)
@@ -282,10 +286,42 @@ def build_chains(ev: Evidence) -> List[Chain]:
             chain.request_ids.append(item["request_id"])
 
     for chain in chains.values():
+        _infer_requests(chain, ev)
         _http_conditions(chain, ev)
         _execution_conditions(chain, ev)
         _network_condition(chain, ev)
     return [c for c in chains.values() if any(c.conditions[s].matched for s in STAGES)]
+
+
+def _infer_requests(chain: Chain, ev: Evidence):
+    """Requests that probably caused a spawned shell when the web app reports no child PID.
+
+    Same Agent + same web service + the request finished while/just after the shell ran. This is an
+    INFERRED link: shown to the analyst, never scored and never used to pick an IP to block.
+    """
+    linked = {c.get("evidence_id") for c in ev.commands}
+    for inst in chain.processes.values():
+        if chain.anchor and inst.id == chain.anchor.id or _proc_kind(inst) != "shell" or not inst.process_start_time:
+            continue
+        if any(c.get("child_pid") == inst.pid for c in ev.commands):
+            continue  # a stronger (CORRELATED) link exists
+        start = inst.process_start_time
+        for log in ev.http:
+            at = _ts(log.timestamp)
+            if log.id in linked or at is None or not (start - 2 <= at <= start + 15):
+                continue
+            try:
+                raw = json.loads(log.raw_message or "{}")
+            except ValueError:
+                raw = {}
+            if raw.get("service") not in (None, "flask_web"):
+                continue
+            item = {"evidence_id": log.id, "request_id": raw.get("request_id"), "path": log.path, "method": log.method,
+                    "status": log.status_code, "source_ip": log.src_ip, "at": _iso(at), "shell_pid": inst.pid,
+                    "link": "INFERRED",
+                    "basis": "Cùng Agent và web service; request kết thúc trong lúc shell chạy. Web app chưa báo PID tiến trình con nên không xác nhận được."}
+            if item not in chain.inferred_requests:
+                chain.inferred_requests.append(item)
 
 
 def _instance_for_pid(pid: int, at: Optional[float], ev: Evidence) -> Optional[ProcessInstance]:
@@ -400,7 +436,7 @@ def _network_condition(chain: Chain, ev: Evidence):
             chain.network.append({"flow_id": flow.id, "src": f"{flow.src_ip}:{flow.src_port}",
                                   "dst": f"{flow.dst_ip}:{flow.dst_port}", "direction": socket.get("direction"),
                                   "process_id": inst.id, "pid": inst.pid, "socket_stdio": stdio,
-                                  "first_seen": socket.get("first_seen"), "last_seen": socket.get("observed_at")})
+                                  "first_seen": socket.get("first_seen")})
             chain.conditions["outbound_connection"].hit(
                 "OBSERVED", flow.id, _ts(socket.get("first_seen")) or _ts(flow.created_at),
                 f"PID {inst.pid} giữ socket tới {flow.dst_ip}:{flow.dst_port} (xác minh qua inode)"
@@ -466,14 +502,31 @@ async def _related_incidents(session, agent_id: str, chain: Chain, since: dateti
         Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED]),
     ))).all()
     related = []
+    inferred = {r["request_id"]: r for r in chain.inferred_requests if r.get("request_id")}
     for inc in rows:
-        if inc.id == exclude:
+        if inc.id == exclude or (inc.detection_evidence or {}).get("rule_id") == RULE_ID:
             continue
         behavior = (inc.detection_evidence or {}).get("behavior") or {}
         if behavior.get("request_id") in chain.request_ids or (
                 behavior.get("source_ip") in chain.source_ips and behavior.get("evidence_type") == "http"):
-            related.append({"id": inc.id, "title": inc.title, "link": "cùng request_id/source IP"})
+            related.append({"id": inc.id, "title": inc.title, "link": "CORRELATED", "basis": "cùng request_id/source IP"})
+        elif behavior.get("request_id") in inferred:
+            related.append({"id": inc.id, "title": inc.title, "link": "INFERRED",
+                            "basis": "request của incident này có thể đã khởi chạy shell trong chuỗi"})
     return related[:20]
+
+
+async def _cross_link(session, chain_incident_id: str, related: List[Dict[str, Any]]):
+    """Point each related per-request incident at the chain incident (its own severity is untouched)."""
+    for item in related:
+        inc = await session.get(Incident, item["id"])
+        if inc is None:
+            continue
+        evidence = dict(inc.detection_evidence or {})
+        link = {"incident_id": chain_incident_id, "link": item["link"], "basis": item["basis"]}
+        if evidence.get("correlated_chain") != link:
+            evidence["correlated_chain"] = link
+            inc.detection_evidence = evidence
 
 
 async def correlate(session, agent_id: str, now: Optional[datetime] = None) -> List[Incident]:
@@ -511,7 +564,10 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
         "process_tree": [_proc(p) for p in processes], "network": chain.network[:20],
         "first_activity_at": _iso(min(times)) if times else None, "last_activity_at": _iso(max(times)) if times else None,
         "status_basis": "OBSERVED = một bản ghi telemetry thể hiện trực tiếp; CORRELATED = ghép các nguồn qua khóa liên kết",
+        "inferred_requests": chain.inferred_requests[:10],
     }
+    chain_doc["related_incidents"] = await _related_incidents(session, agent_id, chain, now - WINDOW,
+                                                              existing.id if existing else None)
     digest = hashlib.sha256(json.dumps(chain_doc, sort_keys=True, default=str).encode()).hexdigest()
     factors = [{"rule": c["id"], "score": c["contribution"], "reason": c["detail"], "status": c["status"],
                 "evidence_ids": c["evidence_ids"]} for c in result["conditions"] if c["contribution"]]
@@ -521,7 +577,8 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
         previous = existing.detection_evidence or {}
         if previous.get("chain_digest") == digest:
             return None
-        chain_doc["related_incidents"] = await _related_incidents(session, agent_id, chain, now - WINDOW, existing.id)
+        previous_stages = {c["id"] for c in (previous.get("chain") or {}).get("conditions", []) if c.get("contribution")}
+        await _cross_link(session, existing.id, chain_doc["related_incidents"])
         existing.detection_evidence = {
             **previous, "rule_id": RULE_ID, "rule_version": RULE_VERSION, "factors": factors, "chain": chain_doc,
             "chain_digest": digest, "last_received_at": now.isoformat(),
@@ -532,7 +589,7 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
             existing.risk_score = result["score"]
             existing.severity = result["severity"]
             existing.title = title
-        if escalated:
+        if escalated or set(result["matched"]) != previous_stages:
             # New stages change the threat fingerprint: re-run AI triage so cached analysis is re-evaluated.
             context = getattr(session, "info", {})
             if context.get("defer_incident_events") is True:
@@ -552,12 +609,12 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
         detection_evidence={
             "rule_id": RULE_ID, "rule_version": RULE_VERSION, "risk_calculated_at": now.isoformat(),
             "first_seen": now.isoformat(), "last_received_at": now.isoformat(), "observations": 1,
-            "factors": factors, "chain": {**chain_doc, "related_incidents": await _related_incidents(
-                session, agent_id, chain, now - WINDOW, None)}, "chain_digest": digest,
+            "factors": factors, "chain": chain_doc, "chain_digest": digest,
         },
     )
     session.add(inc)
     await session.flush()
+    await _cross_link(session, inc.id, chain_doc["related_incidents"])
     session.add(IncidentNote(id=f"note_{uuid.uuid4().hex[:12]}", incident_id=inc.id, user="detection_engine",
                              content=f"Tạo bởi {RULE_ID}: {result['severity_reason']}.", created_at=now))
     context = getattr(session, "info", {})

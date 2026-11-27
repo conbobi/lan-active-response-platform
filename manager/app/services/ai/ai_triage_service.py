@@ -306,10 +306,25 @@ class AITriageService:
         deadline = started + (decision.deadline_seconds if decision else 120)
         try:
             async with asyncio.timeout_at(deadline):
-                return await self._save(incident_id, version, context, verdict, status, source_info=info)
+                row = await self._save(incident_id, version, context, verdict, status, source_info=info)
+            if row is not None and json.loads(row.raw_response or "{}").get("status") == "evidence_changed":
+                self._schedule_rerun(incident_id)
+            return row
         except TimeoutError:
             logger.error("Triage DB write deadline exceeded incident=%s", incident_id)
             return None
+
+    _reruns: dict = {}
+
+    def _schedule_rerun(self, incident_id):
+        """Evidence moved on while the model ran: analyse the newer evidence (bounded: 3 per incident per 10 min)."""
+        now = monotonic()
+        recent = [t for t in self._reruns.get(incident_id, []) if now - t < 600]
+        if len(recent) >= 3:
+            logger.warning("Triage re-run limit reached incident=%s", incident_id)
+            return
+        self._reruns[incident_id] = [*recent, now]
+        asyncio.get_running_loop().create_task(self.analyze_incident(incident_id))
 
     def _reuse(self, memory, fp, context):
         """Exact Threat Memory hit → verdict on *this* incident's evidence, or None (then the model runs)."""
@@ -682,7 +697,12 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
     completeness_str = "Đầy đủ cho quan sát" if verdict.evidence_completeness == "complete" else "Một phần"
     status_str = f" | Trạng thái: `{status}`" if status != "ok" else ""
 
-    summary_text = (
+    if context.chain:
+        from app.services.ai import chain_report
+        summary_text = chain_report.render(context, verdict, status, labels=CLASS_LABELS)
+    else:
+        summary_text = None
+    summary_text = summary_text or (
         f"**Đánh giá sơ bộ:** `[{cls}]` — {CLASS_LABELS.get(cls, cls)}\n"
         f"**Risk Score:** {risk:g}/100 | **Độ tin cậy AI:** {conf_pct}% | **Độ đầy đủ chứng cứ:** {completeness_str}{status_str}\n\n"
         f"### Observed Facts\n{sec_facts}\n\n"

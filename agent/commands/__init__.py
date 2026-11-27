@@ -6,6 +6,7 @@ from .kill_process_tree import KillProcessTreeCommand
 from .self_update import SelfUpdateCommand
 from .quarantine import QuarantineCommand, ReleaseQuarantineCommand
 from .yara_scan import YaraScanCommand
+from .file_containment import InspectFileCommand, QuarantineFileCommand, RestoreFileCommand
 from .ip_block import BlockIpCommand, BlocklistStatusCommand, UnblockIpCommand
 
 COMMAND_HANDLERS = {
@@ -21,4 +22,7 @@ COMMAND_HANDLERS = {
     BlockIpCommand.name: BlockIpCommand(),
     UnblockIpCommand.name: UnblockIpCommand(),
     BlocklistStatusCommand.name: BlocklistStatusCommand(),
+    InspectFileCommand.name: InspectFileCommand(),
+    QuarantineFileCommand.name: QuarantineFileCommand(),
+    RestoreFileCommand.name: RestoreFileCommand(),
 }

@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.routers.v1.containment_router import router as containment_router
 from app.routers.v1.threat_memory_router import router as threat_memory_router
 from app.routers.v1.access_control_router import router as access_control_router
 from app.routers.v1.agent_router import router as agent_router
@@ -57,6 +58,7 @@ api_router.include_router(yara_router, prefix="/yara", tags=["YARA Rules"])
 api_router.include_router(network_router)
 api_router.include_router(access_control_router)
 api_router.include_router(threat_memory_router)
+api_router.include_router(containment_router)
 
 __all__ = ["api_router"]
 

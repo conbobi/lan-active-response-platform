@@ -124,6 +124,8 @@ def evidence_role(item: Dict[str, Any], context) -> str:
         return f"behavior:{item.get('classification')}"
     if kind == "risk_factor":
         return f"factor:{item.get('rule') or item.get('name') or 'unknown'}"
+    if kind == "chain_stage":
+        return f"stage:{item.get('stage')}:{item.get('status')}"
     if kind == "fim":
         return f"fim:{str(item.get('operation') or '').lower()}"
     return kind

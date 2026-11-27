@@ -21,7 +21,7 @@ from app.schemas.command_ack import CommandAckDTO
 from app.services.agent.agent_service import AgentService
 from app.services.agent import process_history
 from app.services.detection import web_compromise
-from app.services.response import access_control
+from app.services.response import access_control, containment
 from app.services.agent.activity import process_identity, record_sample
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.detection.risk_assessment_service import RiskAssessmentService
@@ -161,6 +161,9 @@ async def _handle_heartbeat(agent_id: str, data: dict, session: AsyncSession) ->
     payload = data.get("payload", {})
     if not payload.get("agent_id"):
         payload["agent_id"] = agent_id
+    capabilities = payload.pop("capabilities", None)  # newer Agents; older ones simply do not report
+    if capabilities is not None and payload.get("agent_id") == agent_id:
+        containment.record_capabilities(agent_id, capabilities)
     dto = HeartbeatDTO(**payload)
     active_agent_id = dto.agent_id or agent_id
     agent_svc = AgentService(session)
@@ -543,6 +546,12 @@ async def _handle_command_ack(agent_id: str, data: dict, session: AsyncSession) 
     payload = data.get("payload", {})
     from app.models.command import Command as _Command
     access_cmd = await session.get(_Command, payload.get("command_id")) if isinstance(payload.get("command_id"), str) else None
+    if access_cmd is not None and (access_cmd.payload or {}).get("containment_id"):
+        if access_cmd.agent_id != agent_id:
+            return {"status": "error", "message": "Invalid command acknowledgement"}
+        await containment.handle_ack(session, agent_id, access_cmd, payload)  # late receipts after TIMEOUT included
+        await session.flush()
+        return {"status": "ack", "message": "Containment receipt recorded"}
     if access_cmd is not None and access_cmd.action in access_control.ACTIONS:
         if access_cmd.agent_id != agent_id:
             return {"status": "error", "message": "Invalid command acknowledgement"}

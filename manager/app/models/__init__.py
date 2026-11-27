@@ -32,6 +32,7 @@ from app.models.rule_version import RuleVersion
 from app.models.rule_monitor_hit import RuleMonitorHit
 from app.models.process_instance import ProcessInstance
 from app.models.ip_block import IpBlock, IpBlockEvent, IpUnblock
+from app.models.containment import ContainmentAction, ContainmentEvent
 from app.models.web_access_log import WebAccessLog
 from app.models.network_snapshot import NetworkSnapshot
 from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase, ThreatMemory, ThreatMemoryEvent

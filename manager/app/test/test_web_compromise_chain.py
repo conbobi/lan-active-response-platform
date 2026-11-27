@@ -187,3 +187,27 @@ async def test_connection_from_unrelated_process_is_not_attributed(lab):
 def test_score_comes_only_from_the_rule():
     source = (web_compromise.__file__ and open(web_compromise.__file__).read())
     assert "ai_" not in source.split("import")[0] and "ollama" not in source.lower()
+
+
+@pytest.mark.asyncio
+async def test_old_web_app_request_is_linked_as_inferred_and_cross_linked(lab):
+    """Web app without child-PID telemetry: the /ping 500 is linked INFERRED, never scored or used as an IP target."""
+    _, factory = lab
+    legacy_ping = {k: v for k, v in web_log("e" * 32, "GET", "/ping", 500, 77).items()
+                   if k not in ("process_pid", "parent_pid", "event_id", "session_ref")}
+    await send(factory, agent_ws._handle_web_access_log, legacy_ping)  # per-request incident (automated HTTP)
+    await send(factory, agent_ws._handle_process_event, {"available": True, "events": [
+        {"event": "exec", "observed_at": SH["process_start_time"], **SH, "parent": WEB},
+        {"event": "exec", "observed_at": PAYLOAD["process_start_time"], **PAYLOAD, "parent": SH}]})
+    chain, = await chain_incidents(factory)
+    doc = chain.detection_evidence["chain"]
+    inferred, = doc["inferred_requests"]
+    assert inferred["link"] == "INFERRED" and inferred["path"] == "/ping" and inferred["shell_pid"] == 154105
+    assert doc["source_ips"] == []  # an inferred request never selects an IP to block
+    assert condition(chain, "command_injection")["status"] == "NOT_OBSERVED"
+    async with factory() as db:
+        http = [i for i in (await db.scalars(select(Incident))).all()
+                if (i.detection_evidence or {}).get("rule_id") == "automated_http_activity"]
+    assert http and http[0].detection_evidence["correlated_chain"]["incident_id"] == chain.id
+    assert http[0].detection_evidence["correlated_chain"]["link"] == "INFERRED"
+    assert http[0].severity == IncidentSeverity.MEDIUM  # its own severity is untouched
