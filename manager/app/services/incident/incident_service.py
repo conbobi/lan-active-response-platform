@@ -201,7 +201,11 @@ class IncidentService(AbstractService[IncidentRepository]):
             or_(Incident.label.is_(None), Incident.label != "false_positive"),
             Incident.updated_at >= now - timedelta(minutes=5),
         ).order_by(Incident.updated_at.desc())
-        existing = (await self.session.execute(stmt)).scalars().first()
+        # updated_at also moves when another detector links or annotates the incident; only an observation of
+        # this detection keeps it open for merging, otherwise a new attack run 20 minutes later disappears into it.
+        existing = next((row for row in (await self.session.execute(stmt)).scalars()
+                         if (as_utc((row.detection_evidence or {}).get("last_received_at")) or as_utc(row.updated_at))
+                         >= now - timedelta(minutes=5)), None)
 
         severity = IncidentSeverity.CRITICAL if risk_score >= 85.0 else (
             IncidentSeverity.HIGH if risk_score >= 70.0 else IncidentSeverity.MEDIUM

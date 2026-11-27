@@ -211,3 +211,62 @@ async def test_old_web_app_request_is_linked_as_inferred_and_cross_linked(lab):
     assert http and http[0].detection_evidence["correlated_chain"]["incident_id"] == chain.id
     assert http[0].detection_evidence["correlated_chain"]["link"] == "INFERRED"
     assert http[0].severity == IncidentSeverity.MEDIUM  # its own severity is untouched
+
+
+LONG_RUNNING_WEB = {**WEB, "process_start_time": round(time.time() - 7200, 2)}  # up for hours, never restarted
+
+
+def _shell_episode(base, sh_pid, payload_pid, port):
+    """Kernel exec events and the stdio-bound socket of one exploitation of the same web process."""
+    sh = {**SH, "pid": sh_pid, "process_start_time": round(base, 2)}
+    payload = {**PAYLOAD, "pid": payload_pid, "parent_pid": sh_pid, "process_start_time": round(base + 0.1, 2)}
+    at = datetime.fromtimestamp(base + 20, timezone.utc).isoformat()
+    conn = {"protocol": "TCP", "src_ip": "100.112.146.63", "src_port": port, "dst_ip": ATTACKER, "dst_port": 4444,
+            "status": "ESTABLISHED", "direction": "outbound", "direction_basis": "no_local_listener",
+            "attribution": "inode_verified", "observed_at": at, "first_seen": at, "pid": payload_pid,
+            "holders": [{"pid": payload_pid, "parent_pid": 1, "process_start_time": payload["process_start_time"],
+                         "process_name": "python3", "exe_path": "/usr/bin/python3.13", "cmdline": payload["cmdline"],
+                         "uid": 0, "euid": 0, "socket_stdio": True, "ancestry": []}]}
+    events = {"available": True, "events": [
+        {"event": "exec", "observed_at": sh["process_start_time"], **sh, "parent": LONG_RUNNING_WEB},
+        {"event": "exec", "observed_at": payload["process_start_time"], **payload, "parent": sh}]}
+    return events, conn
+
+
+@pytest.mark.asyncio
+async def test_second_exploitation_of_the_same_web_process_is_a_new_incident(lab):
+    """2026-11-27 07:13: the web PID had served an earlier compromise; the new reverse shell was merged
+    into the hours-old incident and nothing new appeared. The running web app was the old build, so
+    only the access log, the SQLi login, the processes and the socket were recorded."""
+    _, factory = lab
+    first, second = time.time() - 3000, time.time() - 300   # 45 minutes apart, same web PID
+    events, conn = _shell_episode(first, 160001, 160002, 40001)
+    await send(factory, agent_ws._handle_process_event, events)
+    await send(factory, agent_ws._handle_telemetry_risk, {"network_connections": [conn], "process_list": []})
+    old, = await chain_incidents(factory)
+
+    stamp = lambda offset: datetime.fromtimestamp(second + offset, timezone.utc).isoformat()  # noqa: E731
+    await send(factory, agent_ws._handle_web_access_log, {   # old app: no app_event, no process_pid
+        "client_ip": ATTACKER, "method": "POST", "path": "/login", "status_code": 302, "user_agent": "curl/8.14.1",
+        "request_id": "25722b0b23a34604b9e353006bbab7c6", "timestamp": stamp(-30), "service": "flask_web",
+        "payload_indicators": ["sql_boolean_expression"]})
+    events, conn = _shell_episode(second, 170001, 170002, 42528)
+    await send(factory, agent_ws._handle_process_event, events)
+    await send(factory, agent_ws._handle_web_access_log, {
+        "client_ip": ATTACKER, "method": "GET", "path": "/ping", "status_code": 500, "user_agent": "curl/8.14.1",
+        "request_id": "917e6b76015c42e98b6295e5874f1356", "timestamp": stamp(10), "service": "flask_web"})
+    await send(factory, agent_ws._handle_telemetry_risk, {"network_connections": [conn], "process_list": []})
+
+    incidents = await chain_incidents(factory)
+    assert len(incidents) == 2
+    new = next(i for i in incidents if i.id != old.id)
+    assert new.title.startswith(f"Web Application Compromise: reverse shell to {ATTACKER}:4444")
+    assert new.severity == IncidentSeverity.CRITICAL
+    chain = new.detection_evidence["chain"]
+    assert {p["pid"] for p in chain["process_tree"]} == {WEB["pid"], 170001, 170002}
+    assert [r["path"] for r in chain["inferred_requests"]] == ["/ping"]
+    linked = {r["link"] for r in chain["related_incidents"]}
+    assert "CORRELATED" in linked and any("đích của reverse shell" in r["basis"] for r in chain["related_incidents"])
+    async with factory() as db:
+        previous = await db.get(Incident, old.id)
+    assert {p["pid"] for p in previous.detection_evidence["chain"]["process_tree"]} == {WEB["pid"], 160001, 160002}

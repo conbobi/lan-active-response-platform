@@ -45,6 +45,9 @@ RULE_ID = "web_compromise_chain"
 RULE_VERSION = "chain:1"
 WINDOW = timedelta(minutes=int(os.getenv("WEB_CHAIN_WINDOW_MINUTES", "60")))
 INCIDENT_REUSE = timedelta(hours=24)
+# A long-running web service can be exploited many times. Activity of one web PID more than this far
+# apart is a new episode (a new incident), not an update of an hours-old one.
+EPISODE_GAP = float(os.getenv("WEB_CHAIN_EPISODE_GAP_SECONDS", "600"))
 
 SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish", "busybox"}
 INTERPRETERS = {"python", "python2", "python3", "perl", "php", "ruby", "node", "nodejs", "lua", "java", "pwsh"}
@@ -153,6 +156,21 @@ class Chain:
     source_ips: List[str] = field(default_factory=list)
     request_ids: List[str] = field(default_factory=list)
     inferred_requests: List[Dict[str, Any]] = field(default_factory=list)
+    first_at: Optional[float] = None        # earliest member activity (process start or request time)
+    last_at: Optional[float] = None
+    exec_start: Optional[float] = None      # first web-spawned shell/interpreter of this episode
+
+    def covers(self, at: Optional[float]) -> bool:
+        return (at is None or self.first_at is None
+                or self.first_at - EPISODE_GAP <= at <= self.last_at + EPISODE_GAP)
+
+    def extend(self, at: Optional[float], execution: bool = False):
+        if at is None:
+            return
+        self.first_at = at if self.first_at is None else min(self.first_at, at)
+        self.last_at = at if self.last_at is None else max(self.last_at, at)
+        if execution:
+            self.exec_start = at if self.exec_start is None else min(self.exec_start, at)
 
 
 class Evidence:
@@ -168,6 +186,7 @@ class Evidence:
         self.flows: List[Flow] = []
         self.http: List[WebAccessLog] = []
         self.has_process_history = False
+        self.by_parent: Optional[Dict[Any, List[ProcessInstance]]] = None
 
 
 async def load(session, agent_id: str, now: datetime) -> Evidence:
@@ -221,76 +240,89 @@ def _is_web(inst: ProcessInstance, ev: Evidence) -> bool:
 
 
 def _children(inst: ProcessInstance, ev: Evidence) -> List[ProcessInstance]:
+    if ev.by_parent is None:  # built once per evaluation: thousands of instances, many lookups
+        ev.by_parent = {}
+        for item in ev.instances:
+            ev.by_parent.setdefault(item.parent_pid, []).append(item)
     start = inst.process_start_time or 0
-    return [c for c in ev.instances if c.parent_pid == inst.pid and c.id != inst.id
+    return [c for c in ev.by_parent.get(inst.pid, ()) if c.id != inst.id
             and (c.process_start_time or 0) >= start - 0.01]
 
 
 def build_chains(ev: Evidence) -> List[Chain]:
-    chains: Dict[Any, Chain] = {}
+    chains: List[Chain] = []
     webs = [i for i in ev.instances if _is_web(i, ev)]
 
-    def chain_for(inst: Optional[ProcessInstance], pid: Optional[int]) -> Chain:
+    def chain_for(inst: Optional[ProcessInstance], pid: Optional[int], at: Optional[float]) -> Chain:
         key = inst.pid if inst else pid
-        if key not in chains:
-            chains[key] = Chain(anchor=inst, anchor_pid=key)
-        elif inst is not None and chains[key].anchor is None:
-            chains[key].anchor = inst
-        return chains[key]
+        chain = next((c for c in chains if c.anchor_pid == key and c.covers(at)), None)
+        if chain is None:
+            chain = Chain(anchor=inst, anchor_pid=key)
+            chains.append(chain)
+        elif inst is not None and chain.anchor is None:
+            chain.anchor = inst
+        return chain
 
-    # Process stages: unexpected shell/interpreter children of a web service process and their descendants.
-    for web in webs:
-        for child in _children(web, ev):
-            kind = _proc_kind(child)
-            if kind is None:
-                continue
-            command = next((c for c in ev.commands if c.get("child_pid") == child.pid and c.get("child_spawned_at")
-                            and child.process_start_time
-                            and abs(c["child_spawned_at"] - child.process_start_time) <= 3), None)
-            descendants = _descendants(child, ev)
-            chained = kind == "shell" and bool(SHELL_CHAIN.search(_shell_command(child.cmdline)))
-            injected = bool(command and command.get("shell_indicators"))
-            # A web app that legitimately runs `sh -c ping ...` is not a stage; injection, chaining or
-            # further program execution from the spawned process is.
-            if not (chained or injected or kind == "interpreter" or any(_proc_kind(d) for d in descendants)):
-                continue
-            chain = chain_for(web, web.pid)
-            chain.processes[web.id] = web
-            chain.processes[child.id] = child
-            for d in descendants:
-                chain.processes[d.id] = d
-            reason = ("dòng lệnh shell chứa ký tự nối lệnh" if chained else
-                      "liên kết với request có chỉ báo injection" if injected else
-                      "web process sinh interpreter" if kind == "interpreter" else
-                      "shell tiếp tục thực thi chương trình khác")
-            chain.conditions["web_spawned_shell"].hit(
-                "OBSERVED", child.id, child.process_start_time,
-                f"{web.name or _base(web.exe)} (PID {web.pid}) → {child.name} (PID {child.pid}): {reason}",
-                link="process_history: parent PID + start time")
-            if command:
-                chain.conditions["command_injection"].hit(
-                    "CORRELATED", command["evidence_id"], command["at"],
-                    f"Request {command['path']} sinh shell PID {child.pid}",
-                    link="child_pid + spawn time (±3 s)")
+    # Process stages: unexpected shell/interpreter children of a web service process and their descendants,
+    # in start order so that episodes of one web PID form chronologically.
+    spawned = sorted(((web, child) for web in webs for child in _children(web, ev)),
+                     key=lambda pair: pair[1].process_start_time or 0)
+    for web, child in spawned:
+        kind = _proc_kind(child)
+        if kind is None:
+            continue
+        command = next((c for c in ev.commands if c.get("child_pid") == child.pid and c.get("child_spawned_at")
+                        and child.process_start_time
+                        and abs(c["child_spawned_at"] - child.process_start_time) <= 3), None)
+        descendants = _descendants(child, ev)
+        chained = kind == "shell" and bool(SHELL_CHAIN.search(_shell_command(child.cmdline)))
+        injected = bool(command and command.get("shell_indicators"))
+        # A web app that legitimately runs `sh -c ping ...` is not a stage; injection, chaining or
+        # further program execution from the spawned process is.
+        if not (chained or injected or kind == "interpreter" or any(_proc_kind(d) for d in descendants)):
+            continue
+        chain = chain_for(web, web.pid, child.process_start_time)
+        chain.extend(child.process_start_time, execution=True)
+        chain.processes[web.id] = web
+        chain.processes[child.id] = child
+        for d in descendants:
+            chain.processes[d.id] = d
+        reason = ("dòng lệnh shell chứa ký tự nối lệnh" if chained else
+                  "liên kết với request có chỉ báo injection" if injected else
+                  "web process sinh interpreter" if kind == "interpreter" else
+                  "shell tiếp tục thực thi chương trình khác")
+        chain.conditions["web_spawned_shell"].hit(
+            "OBSERVED", child.id, child.process_start_time,
+            f"{web.name or _base(web.exe)} (PID {web.pid}) → {child.name} (PID {child.pid}): {reason}",
+            link="process_history: parent PID + start time")
+        if command:
+            chain.conditions["command_injection"].hit(
+                "CORRELATED", command["evidence_id"], command["at"],
+                f"Request {command['path']} sinh shell PID {child.pid}",
+                link="child_pid + spawn time (±3 s)")
 
     # HTTP stages: attach to the chain of the web process that served them.
-    for item in ev.commands + ev.uploads + ev.bypasses:
+    # Logins carry no web PID: they join an episode in _http_conditions (time window + session/IP), never start one.
+    for item in sorted(ev.commands + ev.uploads + [b for b in ev.bypasses if b.get("web_pid")],
+                       key=lambda i: i.get("at") or 0):
         pid = item.get("web_pid")
         anchor = _instance_for_pid(pid, item.get("at"), ev) if pid else None
         if anchor is None and pid is None:
-            anchor = next(iter(c.anchor for c in chains.values() if c.anchor), None)
-        chain = chain_for(anchor, pid if pid else (anchor.pid if anchor else None))
+            anchor = next((c.anchor for c in chains if c.anchor and c.covers(item.get("at"))), None)
+        chain = chain_for(anchor, pid if pid else (anchor.pid if anchor else None), item.get("at"))
+        chain.extend(item.get("at"))
+        item["episode"] = id(chain)
         if item.get("source_ip") and item["source_ip"] not in chain.source_ips and item["source_ip"] != "unknown":
             chain.source_ips.append(item["source_ip"])
         if item.get("request_id") and item["request_id"] not in chain.request_ids:
             chain.request_ids.append(item["request_id"])
 
-    for chain in chains.values():
+    for chain in chains:
         _infer_requests(chain, ev)
         _http_conditions(chain, ev)
         _execution_conditions(chain, ev)
         _network_condition(chain, ev)
-    return [c for c in chains.values() if any(c.conditions[s].matched for s in STAGES)]
+    return [c for c in chains if any(c.conditions[s].matched for s in STAGES)]
 
 
 def _infer_requests(chain: Chain, ev: Evidence):
@@ -320,8 +352,11 @@ def _infer_requests(chain: Chain, ev: Evidence):
                     "status": log.status_code, "source_ip": log.src_ip, "at": _iso(at), "shell_pid": inst.pid,
                     "link": "INFERRED",
                     "basis": "Cùng Agent và web service; request kết thúc trong lúc shell chạy. Web app chưa báo PID tiến trình con nên không xác nhận được."}
-            if item not in chain.inferred_requests:
+            known = next((r for r in chain.inferred_requests if r["evidence_id"] == log.id), None)
+            if known is None:
                 chain.inferred_requests.append(item)
+            elif inst.pid not in known.setdefault("shell_pids", [known["shell_pid"]]):
+                known["shell_pids"].append(inst.pid)  # one request, several shells of the same command line
 
 
 def _instance_for_pid(pid: int, at: Optional[float], ev: Evidence) -> Optional[ProcessInstance]:
@@ -350,7 +385,8 @@ def _shell_command(cmdline: str) -> str:
 def _http_conditions(chain: Chain, ev: Evidence):
     sessions = set()
     ips = set(chain.source_ips)
-    commands = [c for c in ev.commands if c.get("web_pid") in (chain.anchor_pid, None)]
+    mine = id(chain)
+    commands = [c for c in ev.commands if c.get("episode") == mine]
     for command in commands:
         if command.get("shell_indicators"):
             chain.conditions["command_injection"].hit(
@@ -360,7 +396,7 @@ def _http_conditions(chain: Chain, ev: Evidence):
                 request_id=command.get("request_id"), execution_result=command.get("execution_result"))
             if command.get("session_ref"):
                 sessions.add(command["session_ref"])
-    for upload in [u for u in ev.uploads if u.get("web_pid") in (chain.anchor_pid, None)]:
+    for upload in [u for u in ev.uploads if u.get("episode") == mine]:
         if upload.get("script_or_binary") or upload.get("outside_upload_dir"):
             chain.conditions["suspicious_upload"].hit(
                 "OBSERVED", upload["evidence_id"], upload["at"],
@@ -370,6 +406,8 @@ def _http_conditions(chain: Chain, ev: Evidence):
             if upload.get("session_ref"):
                 sessions.add(upload["session_ref"])
     for bypass in ev.bypasses:
+        if bypass.get("episode", mine) != mine or not chain.covers(bypass.get("at")):
+            continue
         same_session = bypass.get("session_ref") and bypass["session_ref"] in sessions
         same_source = bypass.get("source_ip") and bypass["source_ip"] in ips
         if not (same_session or same_source):
@@ -385,8 +423,8 @@ def _http_conditions(chain: Chain, ev: Evidence):
 
 
 def _execution_conditions(chain: Chain, ev: Evidence):
-    paths = {u["upload_path"]: u for u in ev.uploads if u.get("upload_path")}
-    names = {n for c in ev.commands for n in (c.get("referenced_upload_files") or [])}
+    paths = {u["upload_path"]: u for u in ev.uploads if u.get("upload_path") and u.get("episode") == id(chain)}
+    names = {n for c in ev.commands if c.get("episode") == id(chain) for n in (c.get("referenced_upload_files") or [])}
     for inst in list(chain.processes.values()):
         if chain.anchor and inst.id == chain.anchor.id:
             continue
@@ -491,28 +529,58 @@ def assess(chain: Chain, ev: Evidence) -> Dict[str, Any]:
 
 
 def _fingerprint(agent_id: str, chain: Chain) -> str:
-    # The web service PID is known from HTTP telemetry before (or without) process history, so it keeps
-    # the chain identity stable while stages arrive; a restarted service gets a new PID and a new chain.
-    return hashlib.sha256(json.dumps([RULE_ID, agent_id, chain.anchor_pid]).encode()).hexdigest()
+    # Web service PID (known from HTTP telemetry before process history) + the episode start: the first
+    # web-spawned process, else the first request of the episode. A later exploitation of the same,
+    # still running service is a new incident.
+    start = chain.exec_start if chain.exec_start is not None else chain.first_at
+    return hashlib.sha256(json.dumps([RULE_ID, "episode", agent_id, chain.anchor_pid,
+                                      round(start) if start is not None else None]).encode()).hexdigest()
+
+
+async def _pending_intrusion(session, agent_id: str, chain: Chain, now: datetime) -> Optional[Incident]:
+    """An open HTTP-only (no execution yet) incident of the same web PID that this episode continues."""
+    if chain.exec_start is None or chain.first_at is None:
+        return None
+    rows = (await session.scalars(select(Incident).where(
+        Incident.agent_id == agent_id, Incident.notes == f"risk_source:{RULE_ID}",
+        Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED]),
+        Incident.updated_at >= now - INCIDENT_REUSE,
+    ).order_by(Incident.updated_at.desc()))).all()
+    for row in rows:
+        doc = (row.detection_evidence or {}).get("chain") or {}
+        last = _ts(doc.get("last_activity_at"))
+        if (not doc.get("execution_observed") and (doc.get("anchor") or {}).get("pid") == chain.anchor_pid
+                and last is not None and chain.first_at - EPISODE_GAP <= last <= chain.last_at + EPISODE_GAP):
+            return row
+    return None
 
 
 async def _related_incidents(session, agent_id: str, chain: Chain, since: datetime, exclude: Optional[str]):
     rows = (await session.scalars(select(Incident).where(
         Incident.agent_id == agent_id, Incident.created_at >= since,
         Incident.status.in_([IncidentStatus.OPEN, IncidentStatus.INVESTIGATING, IncidentStatus.CONTAINED]),
-    ))).all()
+    ).order_by(Incident.created_at.desc()))).all()  # the most recent first: the list is capped
     related = []
     inferred = {r["request_id"]: r for r in chain.inferred_requests if r.get("request_id")}
+    inferred_ips = {r["source_ip"] for r in chain.inferred_requests if r.get("source_ip")}
+    shell_peers = {n["dst"].rsplit(":", 1)[0] for n in chain.network if n.get("socket_stdio")}
     for inc in rows:
         if inc.id == exclude or (inc.detection_evidence or {}).get("rule_id") == RULE_ID:
             continue
         behavior = (inc.detection_evidence or {}).get("behavior") or {}
-        if behavior.get("request_id") in chain.request_ids or (
-                behavior.get("source_ip") in chain.source_ips and behavior.get("evidence_type") == "http"):
+        source = behavior.get("source_ip")
+        is_http = behavior.get("evidence_type") == "http" or behavior.get("source") == "auth_events"
+        if behavior.get("request_id") in chain.request_ids or (source in chain.source_ips and is_http):
             related.append({"id": inc.id, "title": inc.title, "link": "CORRELATED", "basis": "cùng request_id/source IP"})
+        elif source in shell_peers and is_http:
+            related.append({"id": inc.id, "title": inc.title, "link": "CORRELATED",
+                            "basis": "IP nguồn của incident này là đích của reverse shell trong chuỗi"})
         elif behavior.get("request_id") in inferred:
             related.append({"id": inc.id, "title": inc.title, "link": "INFERRED",
                             "basis": "request của incident này có thể đã khởi chạy shell trong chuỗi"})
+        elif source in inferred_ips and is_http:
+            related.append({"id": inc.id, "title": inc.title, "link": "INFERRED",
+                            "basis": "cùng IP nguồn với request có thể đã khởi chạy shell"})
     return related[:20]
 
 
@@ -553,6 +621,10 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
         or_(Incident.label.is_(None), Incident.label != "false_positive"),
         Incident.updated_at >= now - INCIDENT_REUSE,
     ).order_by(Incident.updated_at.desc()))).first()
+    if existing is None:
+        existing = await _pending_intrusion(session, agent_id, chain, now)
+        if existing is not None:
+            existing.fingerprint = fingerprint  # the intrusion became an execution of the same episode
     processes = sorted(chain.processes.values(), key=lambda i: i.process_start_time or 0)
     times = [t for t in (_ts(c["observed_at"]) for c in result["conditions"] if c["observed_at"]) if t]
     chain_doc = {
@@ -573,6 +645,10 @@ async def _upsert(session, agent_id, chain: Chain, result, ev: Evidence, now: da
                 "evidence_ids": c["evidence_ids"]} for c in result["conditions"] if c["contribution"]]
     title_kind = "Web Application Compromise" if result["execution_observed"] else "Web Application Intrusion"
     title = f"{title_kind} on Agent '{agent_id}' (Score: {result['score']:.0f})"
+    shells = [n["dst"] for n in chain.network if n.get("socket_stdio")]
+    if result["execution_observed"] and shells:
+        title = (f"{title_kind}: reverse shell to {', '.join(dict.fromkeys(shells))} "
+                 f"on Agent '{agent_id}' (Score: {result['score']:.0f})")
     if existing is not None:
         previous = existing.detection_evidence or {}
         if previous.get("chain_digest") == digest:

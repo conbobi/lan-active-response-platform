@@ -19,6 +19,7 @@ from dns_sniffer import global_dns_sniffer
 from connection_tracker import global_connection_tracker
 from socket_telemetry import collect_connections
 from web_log_monitor import web_log_monitor_task
+from delivery import AUTH_OUTBOX, WEB_OUTBOX
 from proc_events import ProcEventListener
 from network_channel import NetworkChannel, TOKEN as NETWORK_TOKEN, websocket_auth
 from firewall_control import SAFETY_VERSION
@@ -587,7 +588,22 @@ async def send_risk_telemetry(websocket):
             if os.path.exists("/tmp/lsass.dump"):
                 cred_events.append({"target_object": "lsass.dump", "action": "read"})
 
-            auth_events = global_auth_monitor.get_new_events()
+            AUTH_OUTBOX.add(global_auth_monitor.get_new_events())
+            auth_events = AUTH_OUTBOX.drain()
+            # AUTH_EVENT is the canonical ingestion path for authentication logs. Sent first and kept for
+            # resend: a burst (e.g. hydra) is exactly when the connection may drop.
+            try:
+                for offset in range(0, len(auth_events), 1024):
+                    auth_msg = {
+                        "type": "AUTH_EVENT",
+                        "payload": {"agent_id": AGENT_ID, "events": auth_events[offset:offset + 1024]},
+                        "wait_ack": False
+                    }
+                    await send_ws_json_no_wait(websocket, auth_msg)
+            except BaseException:
+                AUTH_OUTBOX.failed(auth_events)
+                raise
+            AUTH_OUTBOX.sent(auth_events)
             dns_queries = global_dns_sniffer.get_recent_queries()
             conn_hist = global_connection_tracker.get_connection_history()
 
@@ -614,15 +630,6 @@ async def send_risk_telemetry(websocket):
 
             message = {"type": "TELEMETRY_RISK", "payload": payload, "wait_ack": False}
             await send_ws_json_no_wait(websocket, message)
-
-            # AUTH_EVENT is the canonical ingestion path for authentication logs.
-            for offset in range(0, len(auth_events), 1024):
-                auth_msg = {
-                    "type": "AUTH_EVENT",
-                    "payload": {"agent_id": AGENT_ID, "events": auth_events[offset:offset + 1024]},
-                    "wait_ack": False
-                }
-                await send_ws_json_no_wait(websocket, auth_msg)
         except (websockets.exceptions.ConnectionClosed, ConnectionResetError, BrokenPipeError, EOFError, OSError):
             print(f"[{AGENT_ID}] WebSocket connection closed in send_risk_telemetry loop.", flush=True)
             raise
@@ -807,6 +814,8 @@ async def main_agent():
                 **enrollment,
             ) as ws:
                 print(f"[{AGENT_ID}] Successfully connected to {ws_url}", flush=True)
+                for outbox in (AUTH_OUTBOX, WEB_OUTBOX):
+                    outbox.reconnected()  # frames sent just before the last disconnect may be lost
                 retry_delay = 2  # Reset exponential backoff upon successful connection
                 last_heartbeat_ack_time = time.time()  # Reset watchdog timer upon connect
                 workers = [

@@ -21,4 +21,5 @@ RUN pip install --no-cache-dir --no-deps -e .
 EXPOSE 8000
 
 # Launch application via Uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Keep reading (and answering keepalive pings) while a burst of Agent messages is processed.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-queue", "256"]

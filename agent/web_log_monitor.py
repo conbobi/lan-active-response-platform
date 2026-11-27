@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Callable
 
+from delivery import WEB_OUTBOX
+
 if __package__:
     from .vulnerable_web.http_evidence import SQL_PATTERNS, safe_http_target
 else:
@@ -285,10 +287,23 @@ async def send_web_log(ws, log_data: Dict[str, Any], agent_id: Optional[str] = N
     try:
         await ws.send(json.dumps(message))
         logger.debug("Dispatched WEB_ACCESS_LOG for Agent %s", aid)
+        WEB_OUTBOX.sent([log_data])
         return True
     except Exception as e:
+        # Kept for resend after reconnect (the Manager deduplicates on request_id).
+        WEB_OUTBOX.add([log_data])  # after anything still queued: log order is kept
         logger.warning(f"Failed to send WEB_ACCESS_LOG over WebSocket: {e}")
         return False
+
+
+async def flush_web_outbox(ws) -> int:
+    """Resend web logs that did not reach (or may not have reached) the previous connection."""
+    batch = WEB_OUTBOX.drain()
+    for index, log_data in enumerate(batch):
+        if not await send_web_log(ws, log_data):  # send_web_log re-queued this item (queue was empty)
+            WEB_OUTBOX.add(batch[index + 1:])      # the rest follow it, in order; retried next connection
+            return index
+    return len(batch)
 
 
 async def tail_cloudflared_logs(
@@ -428,6 +443,7 @@ async def web_log_monitor_task(ws):
     """
     Task entrypoint for inclusion in agent.py's asyncio.gather loop.
     """
+    await flush_web_outbox(ws)
     tasks = (
         asyncio.create_task(tail_cloudflared_logs(ws=ws, fallback=False)),
         asyncio.create_task(_tail_fallback_files(ws=ws)),

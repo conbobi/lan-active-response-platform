@@ -744,7 +744,9 @@ async def _handle_auth_event(agent_id: str, data: dict, session: AsyncSession) -
             auth_history_before=now,
         )
         score = record.score
-    if fresh:
+    # Only an application-reported auth bypass is a chain stage; plain failures (a hydra burst) are not,
+    # and correlating after every batch is what stalled the socket during bursts.
+    if fresh and any(event.get("suspected_auth_bypass") is True for event in fresh):
         await session.flush()
         await _correlate_web_chain(session, agent_id)
     logger.info("Recorded AUTH_EVENT for Agent %s (risk=%s)", agent_id, score)
@@ -843,7 +845,11 @@ async def _handle_web_access_log(agent_id: str, data: dict, session: AsyncSessio
         agent_id=agent_id, data={"agent_id": agent_id, "web_logs": [normalized]}, trusted_web=True,
     )
     await session.flush()
-    await _correlate_web_chain(session, agent_id)
+    if observation.get("app_event"):
+        # Uploads and shell commands reported by the application are chain stages. Other requests only feed
+        # inferred links, which the next process/socket message re-evaluates; correlating on each request of
+        # a scanner burst blocked this socket long enough for the Agent's keepalive to drop it.
+        await _correlate_web_chain(session, agent_id)
     logger.info("Recorded WEB_ACCESS_LOG for Agent %s (risk=%s)", agent_id, record.score)
     return {"status": "ack", "message": "Web access log processed", "score": record.score} if data.get("wait_ack", False) else None
 
