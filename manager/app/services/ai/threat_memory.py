@@ -371,13 +371,14 @@ async def lookup(session_factory, fp: Fingerprint, *, model_name: str, prompt_ve
     try:
         async with asyncio.timeout(LOOKUP_TIMEOUT):
             async with session_factory() as session:
-                rows = (await session.scalars(select(ThreatMemory).where(
+                scope = select(ThreatMemory).where(
                     ThreatMemory.tenant == tenant, ThreatMemory.platform == fp.platform,
                     ThreatMemory.fingerprint_version == FINGERPRINT_VERSION,
                     ThreatMemory.telemetry_schema_version == TELEMETRY_SCHEMA_VERSION,
-                ).limit(500))).all()
-                exact = [r for r in rows if r.fingerprint == fp.value]
+                )
                 if allow_exact:
+                    exact = (await session.scalars(scope.where(ThreatMemory.fingerprint == fp.value)
+                                                   .order_by(ThreatMemory.updated_at.desc()))).all()
                     for row in exact:
                         reason = usable(row, model_name=model_name, prompt_version=prompt_version)
                         if reason is None:
@@ -390,9 +391,12 @@ async def lookup(session_factory, fp: Fingerprint, *, model_name: str, prompt_ve
                 if decision.source != EXACT:
                     tokens = fp.tokens()
                     scored = []
-                    for row in rows:
-                        if row.fingerprint == fp.value or usable(row, model_name=row.model_name,
-                                                                  prompt_version=row.prompt_version):
+                    candidates = scope.where(ThreatMemory.fingerprint != fp.value,
+                        ThreatMemory.model_name == model_name, ThreatMemory.prompt_version == prompt_version,
+                        ThreatMemory.validation_status.in_(USABLE), ThreatMemory.expires_at > now()
+                    ).order_by(ThreatMemory.updated_at.desc(), ThreatMemory.id).limit(500)
+                    for row in (await session.scalars(candidates)).all():
+                        if usable(row, model_name=model_name, prompt_version=prompt_version):
                             continue
                         score = similarity(tokens, set(_flatten(row.behavioral_features)))
                         if score >= SEMANTIC_MIN_RELEVANCE:

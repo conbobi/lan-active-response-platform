@@ -1,0 +1,246 @@
+{
+ "C1 web app sinh shell (lựa chọn C, không điều kiện lệnh)": {
+  "verdict": "FAILED",
+  "confusion": {
+   "tp": 9,
+   "fp": 3,
+   "fn": 0,
+   "tn": 33
+  },
+  "precision": 0.75,
+  "recall": 1.0,
+  "fpr": 0.0833,
+  "f1": 0.8571,
+  "reason": "Không đạt: FPR 8.33% vượt ngưỡng 5.00%; Precision 75.00% dưới ngưỡng 95.00%",
+  "fp_samples": [
+   "/bin/sh -c ping -c 1 8.8.8.8",
+   "/bin/sh -c ping -c 1 127.0.0.1",
+   "/bin/sh -c ping -c 1 example.com"
+  ],
+  "dataset": {
+   "total": 45,
+   "attack": 9,
+   "benign": 36,
+   "by_source": {
+    "lab_vps_snapshot": {
+     "attack": 0,
+     "benign": 24
+    },
+    "synthetic_lab_code": {
+     "attack": 9,
+     "benign": 12
+    }
+   }
+  },
+  "rule_yaml": "title: App.py spawning sh, bash, dash\nstatus: experimental\ndescription: App.py spawning sh, bash, dash\nlogsource:\n  category: process_creation\n  product: linux\ndetection:\n  selection:\n    ParentCommandLine|contains:\n    - vulnerable_web/app.py\n    Image|endswith:\n    - /sh\n    - /dash\n    - /bash\n    - /zsh\n  condition: selection\nlevel: medium\ntags:\n- attack.t1059.004\n"
+ },
+ "C2 web app sinh shell + nối lệnh": {
+  "verdict": "PASSED",
+  "confusion": {
+   "tp": 9,
+   "fp": 0,
+   "fn": 0,
+   "tn": 36
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "fpr": 0.0,
+  "f1": 1.0,
+  "reason": "Đạt: FPR 0.00%, Precision 100.00%, Recall 100.00% trên 45 mẫu có nhãn.",
+  "fp_samples": [],
+  "dataset": {
+   "total": 45,
+   "attack": 9,
+   "benign": 36,
+   "by_source": {
+    "lab_vps_snapshot": {
+     "attack": 0,
+     "benign": 24
+    },
+    "synthetic_lab_code": {
+     "attack": 9,
+     "benign": 12
+    }
+   }
+  },
+  "rule_yaml": "title: App.py spawning sh, bash, dash with suspicious command line\nstatus: experimental\ndescription: App.py spawning sh, bash, dash with suspicious command line\nlogsource:\n  category: process_creation\n  product: linux\ndetection:\n  selection:\n    ParentCommandLine|contains:\n    - vulnerable_web/app.py\n    Image|endswith:\n    - /sh\n    - /dash\n    - /bash\n    - /zsh\n    CommandLine|re: '[;|&`]|\\$\\('\n  condition: selection\nlevel: medium\ntags:\n- attack.t1059.004\n"
+ },
+ "E1 /bin/sh + whoami (không tiến trình cha)": {
+  "verdict": "INCONCLUSIVE",
+  "confusion": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 0,
+   "tn": 36
+  },
+  "precision": null,
+  "recall": null,
+  "fpr": 0.0,
+  "f1": null,
+  "reason": "Chưa có mẫu tấn công có nhãn cho mục tiêu này nên không đo được Recall/Precision; FPR đo trên 36 mẫu benign là 0.00%. Rule không khớp mẫu nào: kiểm tra điều kiện có xảy ra được trên telemetry thật (xem dry-run 24 giờ) trước khi kích hoạt.",
+  "fp_samples": [],
+  "dataset": {
+   "total": 36,
+   "attack": 0,
+   "benign": 36,
+   "by_source": {
+    "lab_vps_snapshot": {
+     "attack": 0,
+     "benign": 24
+    },
+    "synthetic_lab_code": {
+     "attack": 0,
+     "benign": 12
+    }
+   }
+  },
+  "rule_yaml": "title: Sh with suspicious command line\nstatus: experimental\ndescription: Sh with suspicious command line\nlogsource:\n  category: process_creation\n  product: linux\ndetection:\n  selection:\n    Image|endswith:\n    - /sh\n    - /dash\n    CommandLine|re: (?<![\\w-])whoami(?![\\w-])\n  condition: selection\nlevel: medium\ntags:\n- attack.t1059.004\n"
+ },
+ "X1 mọi /bin/sh (viết tay)": {
+  "verdict": "INCONCLUSIVE",
+  "confusion": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 0,
+   "tn": 36
+  },
+  "precision": null,
+  "recall": null,
+  "fpr": 0.0,
+  "f1": null,
+  "reason": "Chưa có mẫu tấn công có nhãn cho mục tiêu này nên không đo được Recall/Precision; FPR đo trên 36 mẫu benign là 0.00%. Rule không khớp mẫu nào: kiểm tra điều kiện có xảy ra được trên telemetry thật (xem dry-run 24 giờ) trước khi kích hoạt.",
+  "fp_samples": [],
+  "dataset": {
+   "total": 36,
+   "attack": 0,
+   "benign": 36,
+   "by_source": {
+    "lab_vps_snapshot": {
+     "attack": 0,
+     "benign": 24
+    },
+    "synthetic_lab_code": {
+     "attack": 0,
+     "benign": 12
+    }
+   }
+  },
+  "rule_yaml": "detection:\n  condition: selection\n  selection:\n    Image|endswith:\n    - /sh\nlogsource:\n  category: process_creation\n  product: linux\ntags:\n- attack.t1059.004\ntitle: Any sh\n"
+ },
+ "X1b mọi shell /sh /dash /bash (viết tay)": {
+  "verdict": "INCONCLUSIVE",
+  "confusion": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 0,
+   "tn": 36
+  },
+  "precision": null,
+  "recall": null,
+  "fpr": 0.0,
+  "f1": null,
+  "reason": "Chưa có mẫu tấn công có nhãn cho mục tiêu này nên không đo được Recall/Precision; FPR đo trên 36 mẫu benign là 0.00%. Rule không khớp mẫu nào: kiểm tra điều kiện có xảy ra được trên telemetry thật (xem dry-run 24 giờ) trước khi kích hoạt.",
+  "fp_samples": [],
+  "dataset": {
+   "total": 36,
+   "attack": 0,
+   "benign": 36,
+   "by_source": {
+    "lab_vps_snapshot": {
+     "attack": 0,
+     "benign": 24
+    },
+    "synthetic_lab_code": {
+     "attack": 0,
+     "benign": 12
+    }
+   }
+  },
+  "rule_yaml": "detection:\n  condition: selection\n  selection:\n    Image|endswith:\n    - /sh\n    - /dash\n    - /bash\nlogsource:\n  category: process_creation\n  product: linux\ntags:\n- attack.t1059.004\ntitle: Any shell\n"
+ },
+ "X2 từ ngữ CTI (viết tay)": {
+  "verdict": "FAILED",
+  "confusion": null,
+  "precision": null,
+  "recall": null,
+  "fpr": null,
+  "f1": null,
+  "reason": "Rule không hợp lệ: Chỉ khớp từ ngữ mô tả CTI (Adversaries, exploit), không phải dấu hiệu quan sát được",
+  "fp_samples": [],
+  "dataset": {
+   "total": null,
+   "attack": null,
+   "benign": null,
+   "by_source": null
+  },
+  "rule_yaml": "detection:\n  condition: selection\n  selection:\n    CommandLine|contains:\n    - Adversaries\n    - exploit\nlogsource:\n  category: process_creation\n  product: linux\ntitle: Adversaries exploit\n"
+ },
+ "X3 product windows + điều kiện Linux (viết tay)": {
+  "verdict": "FAILED",
+  "confusion": null,
+  "precision": null,
+  "recall": null,
+  "fpr": null,
+  "f1": null,
+  "reason": "Rule không hợp lệ: logsource.product 'windows' nhưng giá trị thuộc nền tảng khác: /bin/sh",
+  "fp_samples": [],
+  "dataset": {
+   "total": null,
+   "attack": null,
+   "benign": null,
+   "by_source": null
+  },
+  "rule_yaml": "detection:\n  condition: selection\n  selection:\n    Image|endswith:\n    - /bin/sh\nlogsource:\n  category: process_creation\n  product: windows\ntags:\n- attack.t1059.004\ntitle: sh on windows\n"
+ },
+ "X4 field Agent không thu thập (viết tay)": {
+  "verdict": "UNSUPPORTED_BY_ENGINE",
+  "confusion": null,
+  "precision": null,
+  "recall": null,
+  "fpr": null,
+  "f1": null,
+  "reason": "Trường 'targetobject' không có trong telemetry của Agent",
+  "fp_samples": [],
+  "dataset": {
+   "total": null,
+   "attack": null,
+   "benign": null,
+   "by_source": null
+  },
+  "rule_yaml": "detection:\n  condition: selection\n  selection:\n    TargetObject|contains:\n    - Run\nlogsource:\n  category: process_creation\n  product: linux\ntitle: registry\n"
+ },
+ "X5 operator không hỗ trợ (viết tay)": {
+  "verdict": "UNSUPPORTED_BY_ENGINE",
+  "confusion": null,
+  "precision": null,
+  "recall": null,
+  "fpr": null,
+  "f1": null,
+  "reason": "Modifier không được hỗ trợ: base64offset (trường commandline)",
+  "fp_samples": [],
+  "dataset": {
+   "total": null,
+   "attack": null,
+   "benign": null,
+   "by_source": null
+  },
+  "rule_yaml": "detection:\n  condition: selection\n  selection:\n    CommandLine|base64offset|contains:\n    - id\nlogsource:\n  category: process_creation\n  product: linux\ntitle: base64\n"
+ },
+ "X6 điều kiện tham chiếu selection không tồn tại": {
+  "verdict": "UNSUPPORTED_BY_ENGINE",
+  "confusion": null,
+  "precision": null,
+  "recall": null,
+  "fpr": null,
+  "f1": null,
+  "reason": "Detection Engine chỉ hỗ trợ condition 'selection', không hỗ trợ 'selection and filter'",
+  "fp_samples": [],
+  "dataset": {
+   "total": null,
+   "attack": null,
+   "benign": null,
+   "by_source": null
+  },
+  "rule_yaml": "detection:\n  condition: selection and filter\n  selection:\n    Image|endswith:\n    - /sh\nlogsource:\n  category: process_creation\n  product: linux\ntitle: bad cond\n"
+ }
+}

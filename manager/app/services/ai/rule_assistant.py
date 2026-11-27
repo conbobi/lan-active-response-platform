@@ -145,6 +145,8 @@ def ground(intent: Dict[str, Any], text: str) -> List[str]:
         intent["chaining"] = False
     if not intent["child"] and re.search(r"\bshells?\b", lowered):
         intent["child"] = ["shell"]  # a generic "shell" is expanded to the platform's shells at compile time
+    if not (WINDOWS_HINT.search(text) or LINUX_HINT.search(text)):
+        intent["platform"] = None
     if intent["platform"] is None:
         if WINDOWS_HINT.search(text) and not LINUX_HINT.search(text):
             intent["platform"] = "windows"
@@ -183,8 +185,26 @@ def _broad_child(intent: Dict[str, Any]) -> bool:
     return bool(names) and names <= (SHELLS | INTERPRETERS | WINDOWS_BROAD | {n.removesuffix(".exe") for n in WINDOWS_BROAD})
 
 
+def _runtime_ignored(intent: Dict[str, Any]) -> bool:
+    """The runtime safe-process policy drops these children unless the rule pins the parent, so a rule
+    without a parent would be stored, validated and never fire."""
+    if intent["parent"] or not intent["child"]:
+        return False
+    safe = {p.lower() for p in sigma_runtime.SAFE_PROCESSES}
+    return any(_base(c) in safe or (_base(c) == "dash" and "sh" in safe) for c in _children(intent))
+
+
 def _bare_parent(intent: Dict[str, Any]) -> List[str]:
     return [p for p in intent["parent"] if _base(p) in INTERPRETERS or _base(p) in SHELLS]
+
+
+def _foreign_children(intent: Dict[str, Any]) -> List[str]:
+    """Process names that cannot occur on the chosen platform (a /bin/sh rule with product: windows)."""
+    if intent["platform"] == "windows":
+        return [c for c in intent["child"] if c.startswith("/") or _base(c) in SHELLS]
+    if intent["platform"] == "linux":
+        return [c for c in intent["child"] if "\\" in c or _base(c).endswith(".exe")]
+    return []
 
 
 def questions(intent: Dict[str, Any], observed: Dict[str, List[str]] | None = None) -> List[Dict[str, Any]]:
@@ -192,8 +212,22 @@ def questions(intent: Dict[str, Any], observed: Dict[str, List[str]] | None = No
     observed = observed or {}
     asks: List[Dict[str, Any]] = []
     if intent["platform"] is None:
-        asks.append({"slot": "platform", "text": "Rule áp dụng cho máy Linux hay Windows?",
-                     "options": ["linux", "windows"], "allow_text": False})
+        seen = observed.get("platforms") or []
+        text = "Rule áp dụng cho máy Linux hay Windows?"
+        if len(seen) == 1:
+            text += (f" Telemetry tiến trình 24 giờ qua chỉ có máy {seen[0].capitalize()}; "
+                     "đây là gợi ý, cần bạn xác nhận.")
+        asks.append({"slot": "platform", "text": text,
+                     "options": seen + [p for p in ("linux", "windows") if p not in seen], "allow_text": False})
+    foreign = _foreign_children(intent)
+    if foreign:
+        asks.append({"slot": "child", "replace": foreign,
+                     "text": f"'{', '.join(foreign)}' không phải tiến trình của {intent['platform'].capitalize()}. "
+                             "Chọn tiến trình đúng nền tảng hoặc đổi nền tảng.",
+                     "options": DEFAULT_SHELLS[intent["platform"]], "allow_text": True})
+        other = "linux" if intent["platform"] == "windows" else "windows"
+        asks.append({"slot": "platform", "text": f"Hoặc đổi nền tảng của rule sang {other.capitalize()}?",
+                     "options": [other, intent["platform"]], "allow_text": False})
     bare = _bare_parent(intent)
     if bare:
         asks.append({"slot": "parent", "replace": bare,
@@ -206,6 +240,12 @@ def questions(intent: Dict[str, Any], observed: Dict[str, List[str]] | None = No
     if not intent["child"] and not intent["command"] and not intent["chaining"]:
         asks.append({"slot": "child", "text": "Cần phát hiện tiến trình nào được chạy (ví dụ bash, sh, powershell.exe)?",
                      "options": [], "allow_text": True})
+    elif _runtime_ignored(intent) and not any(a["slot"] == "parent" for a in asks):
+        asks.append({"slot": "parent",
+                     "text": f"Detection Engine bỏ qua '{', '.join(intent['child'])}' nếu rule không nêu tiến trình cha "
+                             "(chính sách safe-process: shell và interpreter chạy liên tục trên máy). "
+                             "Tiến trình cha nào sinh ra nó? Chọn tiến trình Agent đang thấy hoặc gõ tên.",
+                     "options": observed.get("parents", []), "allow_text": True})
     elif _broad_child(intent) and not intent["command"] and not intent["chaining"] and not intent["parent"] \
             and not any(a["slot"] == "parent" for a in asks):
         asks.append({"slot": "command",
@@ -351,8 +391,13 @@ async def recent_process_rows(db, hours: int = 24, limit: int = 20000) -> List[P
 async def observed_options(db, hours: int = 24) -> Dict[str, List[str]]:
     """Real processes the Agents reported recently, offered as answers (never auto-selected)."""
     rows = await recent_process_rows(db, hours, 5000)
-    scripts, parents = [], []
+    scripts, parents, platforms = [], [], set()
     for row in rows:
+        path = str(row.exe or row.exe_path or "")
+        if path.startswith("/"):
+            platforms.add("linux")
+        elif re.match(r"^[A-Za-z]:\\", path):
+            platforms.add("windows")
         name = _base(row.name or "")
         cmd = str(row.cmdline or "")
         if name.rstrip("0123456789.") in INTERPRETERS or name in INTERPRETERS:
@@ -363,7 +408,7 @@ async def observed_options(db, hours: int = 24) -> Dict[str, List[str]]:
                     parents.append(script)
         elif any(name.startswith(w) for w in WEB_SERVERS) and name not in parents:
             parents.append(name)
-    return {"scripts": scripts[:8], "parents": parents[:10]}
+    return {"scripts": scripts[:8], "parents": parents[:10], "platforms": sorted(platforms)}
 
 
 async def preview_recent(rule: Dict[str, Any], db, hours: int = 24) -> Dict[str, Any]:
@@ -392,5 +437,58 @@ async def preview_recent(rule: Dict[str, Any], db, hours: int = 24) -> Dict[str,
             "matches": len(seen), "samples": samples, "labelled": False}
 
 
-__all__ = ["GenerationError", "apply_answer", "blank_intent", "compile_rule", "extract", "ground", "merge",
+# Behaviours offered when the analyst names none. Only the first compiles to a process_creation Sigma rule;
+# the others need file/flow events joined to a process, which the built-in Web Compromise Chain does.
+SCENARIOS: Dict[str, Optional[Dict[str, Any]]] = {
+    "Web process sinh shell": {"child": ["shell"], "parent_hint": "web server"},
+    "Upload được thực thi": None,
+    "Web process kết nối outbound": None,
+}
+CHAIN_ONLY = ("Sigma process_creation không ghép được sự kiện file hoặc kết nối mạng với tiến trình. "
+              "Hành vi này do bộ phát hiện Web Compromise Chain (có sẵn) theo dõi; không tạo Sigma cho nó.")
+SIGMA_PRIMER = ("Sigma là một quy tắc mô tả điều kiện trên sự kiện, ví dụ: tiến trình cha là web app và tiến trình con là shell. "
+                "Agent LARP gửi tên tiến trình, tiến trình cha và dòng lệnh (process_creation). "
+                "Shell do quản trị viên hoặc tác vụ hợp lệ của ứng dụng chạy có thể gây báo động nhầm.")
+NO_GUARANTEE = ("Không bộ phát hiện nào bắt được 100% tấn công, và không có log thì không có gì để đánh giá. "
+                "Hãy bật telemetry tiến trình, HTTP hoặc xác thực trên máy cần giám sát, rồi kiểm tra coverage "
+                "bằng một sự kiện kiểm thử đã biết.")
+
+
+def request_constraints(message: str) -> Tuple[Optional[str], List[str]]:
+    """Classify what a request asks for before any model call. Returns (classification or None, notices)."""
+    notices: List[str] = []
+    if re.search(r"\bsigma\b", message, re.I) and re.search(r"không biết|là gì|what is|unfamiliar", message, re.I):
+        notices.append(SIGMA_PRIMER)
+    if re.search(r"(không (?:có |cần |thu thập )?(?:log|nhật ký|telemetry)|without (?:any )?(?:logs?|telemetry))",
+                 message, re.I):
+        return "INSUFFICIENT_TELEMETRY", notices + [NO_GUARANTEE]
+    if WINDOWS_HINT.search(message) and LINUX_HINT.search(message):
+        return "NEEDS_CLARIFICATION", notices + ["Yêu cầu nhắc cả Windows và Linux. Chọn một nền tảng trước khi tạo rule."]
+    if re.search(r"\b(?:dns|registry|network_connection|file_creation)\b", message, re.I) and not re.search(
+            r"process.creation|tiến trình|sinh shell|spawn", message, re.I):
+        return "UNSUPPORTED_REQUIREMENT", notices + ["Bộ biên dịch chỉ hỗ trợ process_creation. Chọn hành vi tiến trình "
+                                                     "hoặc dùng bộ phát hiện chuyên biệt."]
+    return None, notices
+
+
+def scenario_question(message: str, intent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A menu of supported behaviours when a server/web request names no process or command."""
+    if intent["child"] or intent["command"] or intent["chaining"]:
+        return None
+    if not re.search(r"web|máy chủ|server|chiếm quyền|xâm nhập|hacker", message, re.I):
+        return None
+    return {"slot": "scenario", "text": "Bạn muốn phát hiện hành vi nào trên máy chủ?",
+            "options": list(SCENARIOS), "allow_text": False}
+
+
+def apply_scenario(intent: Dict[str, Any], value: str) -> Tuple[Dict[str, Any], Optional[str], List[str]]:
+    if value not in SCENARIOS:
+        raise ValueError("Chọn một hành vi trong danh sách.")
+    fields = SCENARIOS[value]
+    if fields is None:
+        return intent, "UNSUPPORTED_REQUIREMENT", [CHAIN_ONLY]
+    return {**intent, **fields}, None, []
+
+
+__all__ = ["apply_scenario", "request_constraints", "scenario_question", "GenerationError", "apply_answer", "blank_intent", "compile_rule", "extract", "ground", "merge",
            "observed_options", "preview_recent", "questions", "sanitize"]

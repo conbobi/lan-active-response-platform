@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FiSend, FiCpu, FiUser, FiPlay, FiCheckCircle, FiExternalLink } from 'react-icons/fi';
@@ -27,9 +27,19 @@ const chip = {
   color: '#93c5fd', fontSize: '0.8rem', cursor: 'pointer',
 };
 
+// Backend classification of the latest turn, shown in words with the raw code for traceability.
+const CLASSIFICATION = {
+  READY_TO_GENERATE: ['Đủ thông tin: rule đã được biên dịch', '#3fb950'],
+  NEEDS_CLARIFICATION: ['Cần bạn trả lời thêm trước khi tạo rule', '#d29922'],
+  UNSUPPORTED_REQUIREMENT: ['Sigma process_creation không biểu diễn được yêu cầu này', '#f85149'],
+  INSUFFICIENT_TELEMETRY: ['Thiếu nguồn dữ liệu để phát hiện', '#f85149'],
+};
+
 export default function RuleAssistant() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
+  const [conversation, setConversation] = useState(null);
+  const [classification, setClassification] = useState('');
   const [input, setInput] = useState('');
   const [intent, setIntent] = useState(emptyIntent);
   const [questions, setQuestions] = useState([]);
@@ -44,10 +54,15 @@ export default function RuleAssistant() {
   const say = (text, role = 'assistant') => setMessages((prev) => [...prev, { role, text }]);
 
   const apply = (res) => {
+    if (res.conversation_id) {
+      setConversation({ conversation_id: res.conversation_id, revision: res.revision });
+      sessionStorage.setItem('harvest-conversation', res.conversation_id);
+    }
+    setClassification(res.classification);
     setIntent(res.intent);
     setQuestions(res.questions || []);
     setSigmaYaml(res.sigma_yaml);
-    if (res.model_used) setModelUsed(true);
+    setModelUsed(Boolean(res.has_model_input || res.model_used));
     const lines = [];
     if (res.error) lines.push(res.error);
     (res.notices || []).forEach((n) => lines.push(n));
@@ -56,10 +71,33 @@ export default function RuleAssistant() {
     if (lines.length) say(lines.join('\n'));
   };
 
+  useEffect(() => {
+    const id = sessionStorage.getItem('harvest-conversation');
+    if (!id) return;
+    let mounted = true;
+    setLoading(true);
+    api.post('/rules/assistant', { conversation_id: id, resume: true })
+      .then(res => {
+        if (mounted) {
+          setMessages(res.context ? [{ role: 'user', text: res.context }] : []);
+          apply(res);
+        }
+      })
+      .catch(err => { if (mounted) say(err.message); })
+      .finally(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
+  }, []);
+
+  const reset = () => {
+    sessionStorage.removeItem('harvest-conversation');
+    setConversation(null); setMessages([]); setQuestions([]); setIntent(emptyIntent);
+    setClassification(''); setSigmaYaml(null); setCreated(null); setModelUsed(false); setAnswerText(''); setInput('');
+  };
+
   const call = async (body) => {
     setLoading(true);
     try {
-      apply(await api.post('/rules/assistant', body));
+      apply(await api.post('/rules/assistant', { ...body, ...conversation }));
     } catch (err) {
       say(`Lỗi: ${err.message}`);
     } finally {
@@ -92,7 +130,7 @@ export default function RuleAssistant() {
     setLoading(true);
     try {
       const res = await api.post('/rules/assistant/create', {
-        intent, description: userTexts.join('\n'), model_used: modelUsed,
+        ...conversation, intent, description: userTexts.join('\n'), model_used: modelUsed,
       });
       setCreated(res);
       say(`Đã tạo rule "${res.rule_name}" ở chế độ giám sát. ${res.promotion?.reason || ''}`);
@@ -122,6 +160,13 @@ export default function RuleAssistant() {
       {/* Conversation */}
       <div style={{ ...box, display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: '28rem' }}>
         <div style={{ color: '#e6edf3', fontWeight: 600 }}>Mô tả rule bằng lời</div>
+        {conversation && <button disabled={loading} onClick={reset} className="harvest-btn-secondary">Yêu cầu mới</button>}
+        {classification && (
+          <div data-testid="harvest-classification"
+               style={{ fontSize: '0.8rem', color: (CLASSIFICATION[classification] || [])[1] || '#8b949e' }}>
+            {(CLASSIFICATION[classification] || [classification])[0]} <code style={{ color: '#8b949e' }}>({classification})</code>
+          </div>
+        )}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '26rem' }}>
           {messages.length === 0 && (
             <div style={{ color: '#8b949e', fontSize: '0.85rem' }}>

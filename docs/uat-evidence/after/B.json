@@ -1,0 +1,67 @@
+{
+  "input": "Tạo luật phát hiện hacker vào server.",
+  "response": {
+    "conversation_id": "4d37a74675fd48539d6605cf5f7f0860",
+    "revision": 1,
+    "context": "Tạo luật phát hiện hacker vào server.",
+    "intent": {
+      "platform": null,
+      "parent": [],
+      "parent_hint": "web server",
+      "child": [],
+      "command": [],
+      "chaining": false,
+      "severity": "medium",
+      "mitre": [
+        "T1059.004"
+      ],
+      "title": "Web server compromise attempt"
+    },
+    "classification": "NEEDS_CLARIFICATION",
+    "questions": [
+      {
+        "slot": "scenario",
+        "text": "Bạn muốn phát hiện hành vi nào trên máy chủ?",
+        "options": [
+          "Web process sinh shell",
+          "Upload được thực thi",
+          "Web process kết nối outbound"
+        ],
+        "allow_text": false
+      },
+      {
+        "slot": "platform",
+        "text": "Rule áp dụng cho máy Linux hay Windows?",
+        "options": [
+          "linux",
+          "windows"
+        ],
+        "allow_text": false
+      },
+      {
+        "slot": "parent",
+        "text": "Tiến trình cha (web server) cụ thể là gì? Chọn tiến trình Agent đang thấy hoặc gõ tên.",
+        "options": [],
+        "allow_text": true
+      },
+      {
+        "slot": "child",
+        "text": "Cần phát hiện tiến trình nào được chạy (ví dụ bash, sh, powershell.exe)?",
+        "options": [],
+        "allow_text": true
+      }
+    ],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [
+      "AI đoán tiến trình 'bash' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán tiến trình 'sh' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'whoami' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "Yêu cầu chưa nêu hành vi cụ thể. Chọn một hành vi bên dưới thay vì tạo một rule bao quát mọi tiến trình."
+    ],
+    "model_used": true,
+    "has_model_input": true,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

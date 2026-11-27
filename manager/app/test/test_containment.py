@@ -265,6 +265,11 @@ async def test_chain_report_is_evidence_based_and_labels_timeout(env):
     assert "KHÔNG phải phân tích AI" in summary and "PID `5002`" in summary and "100.67.222.3:4444" in summary
     assert "Quyền root: **có bằng chứng**" in summary and str(payload) in summary
     assert "/srv/vulnerable_web/app.py` — SHA" not in summary  # the web service is the victim, not a suspicious file
+    # No request carried injection indicators, but the web-spawned shell command is chained: not "no evidence".
+    gaps = summary.split("### Bằng chứng còn thiếu")[1]
+    assert "Command injection: chưa có bằng chứng" not in gaps and "chứa ký tự nối lệnh" in gaps
+    budget = _analysis_fields(context, fallback_verdict(context), "budget_exceeded", "v")["summary"]
+    assert "KHÔNG phải phân tích AI" in budget and "budget_exceeded" not in budget
 
 
 @pytest.mark.asyncio

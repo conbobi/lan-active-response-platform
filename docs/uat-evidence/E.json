@@ -1,0 +1,42 @@
+{
+  "status": 200,
+  "input": "Tạo luật Windows để phát hiện /bin/sh chạy trên Linux.",
+  "response": {
+    "intent": {
+      "platform": "linux",
+      "parent": [],
+      "parent_hint": null,
+      "child": [
+        "sh"
+      ],
+      "command": [],
+      "chaining": false,
+      "severity": "medium",
+      "mitre": [
+        "T1059.004"
+      ],
+      "title": "Detect /bin/sh on Linux"
+    },
+    "questions": [
+      {
+        "slot": "command",
+        "text": "'sh' chạy rất thường xuyên. Cần thêm tiến trình cha hoặc dấu hiệu lệnh. Lệnh nào là đáng ngờ (ví dụ whoami, id, curl)? Hoặc chọn 'nối lệnh' để bắt ; | && $().",
+        "options": [
+          "whoami",
+          "id",
+          "curl",
+          "wget",
+          "nối lệnh (; | && $())"
+        ],
+        "allow_text": true,
+        "multi": true
+      }
+    ],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [],
+    "model_used": true,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

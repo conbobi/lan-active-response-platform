@@ -1,0 +1,39 @@
+{
+  "status": 200,
+  "input": "Phát hiện mọi hacker, kể cả khi không có log.",
+  "response": {
+    "intent": {
+      "platform": "linux",
+      "parent": [],
+      "parent_hint": null,
+      "child": [],
+      "command": [],
+      "chaining": false,
+      "severity": "critical",
+      "mitre": [
+        "T1059.004"
+      ],
+      "title": "Detect all hackers"
+    },
+    "questions": [
+      {
+        "slot": "child",
+        "text": "Cần phát hiện tiến trình nào được chạy (ví dụ bash, sh, powershell.exe)?",
+        "options": [],
+        "allow_text": true
+      }
+    ],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [
+      "AI đoán tiến trình 'bash' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán tiến trình 'sh' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán tiến trình 'powershell.exe' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'whoami' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'curl' nhưng bạn chưa nêu; cần bạn xác nhận."
+    ],
+    "model_used": true,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

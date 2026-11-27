@@ -25,8 +25,11 @@ SOURCE_LABEL = {
     "schema_invalid": "⚠ Mô hình AI trả kết quả không hợp lệ — báo cáo tổng hợp xác định từ bằng chứng",
     "model_error": "⚠ Không gọi được mô hình AI — báo cáo tổng hợp xác định từ bằng chứng",
     "deterministic": "Báo cáo xác định từ bằng chứng (không cần gọi mô hình)",
+    "budget_exceeded": "⚠ Bằng chứng vượt giới hạn ngữ cảnh của mô hình nên không gửi cho AI — báo cáo tổng hợp xác định từ bằng chứng, KHÔNG phải phân tích AI",
     "evidence_changed": "⚠ Bằng chứng thay đổi trong lúc phân tích — đang chờ phân tích lại; nội dung dưới đây theo bằng chứng mới nhất",
 }
+SHELL_CHAIN = re.compile(r"[;|&`]|\$\(")
+SHELL_NAMES = ("sh", "bash", "dash", "zsh")
 PATH = re.compile(r"(?<![\w/])(/(?:tmp|var/tmp|dev/shm|home|var/www|srv|opt)/[^\s;|&`'\"]+)")
 TZ = timezone(timedelta(hours=7))
 
@@ -98,10 +101,24 @@ def render(context, verdict, status: str, *, labels: dict) -> str:
     if not summary:
         summary.append("Chưa có bằng chứng thực thi mã trên máy; chỉ ghi nhận các dấu hiệu ở tầng ứng dụng web.")
 
+    # The command_injection stage needs a request with injection indicators. Without one, a chained shell
+    # command spawned by the web process is still evidence of injection; say so instead of "not observed".
+    chained = None
+    if "command_injection" not in seen and "web_spawned_shell" in seen:
+        anchor_pid = (chain.get("anchor") or {}).get("pid")
+        chained = next((p for p in procs if str(p.get("name")) in SHELL_NAMES and p.get("ppid") == anchor_pid
+                        and SHELL_CHAIN.search(str(p.get("cmdline") or "").split(" -c ", 1)[-1])), None)
+    injection_note = (f"chưa có request HTTP mang chỉ báo injection; dòng lệnh shell [{chained['id']}] do web process sinh ra "
+                      "chứa ký tự nối lệnh, phù hợp command injection nhưng chưa liên kết được với request cụ thể"
+                      if chained else None)
+
     timeline = []
     for key in STAGE_ORDER:
         cond = stages.get(key) or {}
         state = cond.get("status", "NOT_OBSERVED")
+        if key == "command_injection" and injection_note:
+            timeline.append(f"- **{STAGE_LABEL[key]}** — {injection_note}")
+            continue
         refs = ", ".join((cond.get("evidence_ids") or [])[:3])
         when = f" lúc {_vn_time(cond.get('observed_at'))}" if cond.get("observed_at") else ""
         timeline.append(f"- **{STAGE_LABEL[key]}** — {STATUS.get(state, state)}{when}"
@@ -168,7 +185,9 @@ def render(context, verdict, status: str, *, labels: dict) -> str:
     recs.append("5. **Khắc phục**: vá SQL injection/command injection, kiểm tra persistence (cron, systemd, SSH keys), đổi thông tin xác thực"
                 + ("; máy đã bị chiếm quyền root nên cần tái tạo từ nguồn sạch." if root else "."))
 
-    gaps = [f"- {STAGE_LABEL.get(m.split(':', 1)[1], m)}: chưa có bằng chứng." for m in context.missing if m.startswith("chain_stage:")]
+    gaps = [f"- {STAGE_LABEL.get(m.split(':', 1)[1], m)}: "
+            + (injection_note + "." if m == "chain_stage:command_injection" and injection_note else "chưa có bằng chứng.")
+            for m in context.missing if m.startswith("chain_stage:")]
     if not any(f.get("sha256") for f in suspicious_files(chain)) and suspicious_files(chain):
         gaps.append("- SHA-256 và chủ sở hữu của file đáng ngờ: chưa thu thập.")
     if not any(isinstance(p.get("euid"), int) for p in procs):

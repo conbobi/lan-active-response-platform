@@ -1,11 +1,13 @@
 import logging
+import re
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Request, Depends, Query, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, desc, asc
+from sqlalchemy import select, func, desc, asc, update
+from app.models.rule_conversation import RuleConversation
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -60,6 +62,9 @@ class AssistantAnswer(BaseModel):
 
 
 class AssistantRequest(BaseModel):
+    conversation_id: Optional[uuid.UUID] = None
+    revision: Optional[int] = Field(None, ge=1)
+    resume: bool = False
     message: Optional[str] = Field(None, max_length=2000, description="Analyst's natural-language request")
     context: Optional[str] = Field("", max_length=8000, description="Earlier analyst messages, for grounding")
     intent: Optional[Dict[str, Any]] = None
@@ -67,6 +72,8 @@ class AssistantRequest(BaseModel):
 
 
 class AssistantCreateRequest(BaseModel):
+    conversation_id: Optional[uuid.UUID] = None
+    revision: Optional[int] = Field(None, ge=1)
     intent: Dict[str, Any]
     description: Optional[str] = Field("", max_length=8000)
     model_used: bool = False
@@ -123,45 +130,122 @@ async def harvest_rule(
             "created_at": candidate.created_at.isoformat() if candidate.created_at else None
         }
     except GenerationError as exc:
+        if str(exc).startswith("Invalid generated Sigma"):
+            # The model answered; its rule failed the quality checks every time. Not a server fault.
+            raise HTTPException(status_code=422, detail=(
+                "AI đã sinh rule nhưng rule không qua kiểm tra chất lượng nên không được lưu: "
+                f"{str(exc).removeprefix('Invalid generated Sigma: ')}")) from exc
         raise HTTPException(status_code=502, detail=f"Sigma generation failed: {exc}") from exc
     except Exception as e:
         logger.error(f"Error in /harvest: {e}", exc_info=True)
         return {"error": f"Failed to harvest rule: {str(e)}"}
 
 
+async def owned_conversation(db, key, actor):
+    row = await db.scalar(select(RuleConversation).where(RuleConversation.id == key.hex,
+                                                         RuleConversation.owner == actor))
+    if row is None:
+        raise HTTPException(404, "Conversation unavailable")
+    return row
+
+
 @router.post("/assistant")
-async def rule_assistant_turn(body: AssistantRequest, db: AsyncSession = Depends(get_db)):
-    """One conversation turn: the model fills a grounded intent; missing pieces become questions."""
-    intent, _ = rule_assistant.sanitize(body.intent or {})
-    notices: List[str] = []
+async def rule_assistant_turn(request: Request, body: AssistantRequest, db: AsyncSession = Depends(get_db)):
+    actor = request.state.operator
+    row = await owned_conversation(db, body.conversation_id, actor) if body.conversation_id else None
+    state = row.state if row else {}
+    if body.resume and row:
+        return state
+    if row and body.revision != row.revision:
+        raise HTTPException(409, "Conversation changed; reload the latest turn")
+    editing = not body.answer and not body.message and body.intent is not None
+    intent, _ = rule_assistant.sanitize(body.intent if editing else state.get("intent", body.intent or {}))
+    message = (body.message or "").strip()
+    context = state.get("context", body.context or "")
+    if len(context) + len(message) > 8000:
+        raise HTTPException(422, "Start a new conversation for this request")
     error = None
     model_used = False
+    # Deterministic requirement check first: requests that cannot become a process_creation rule never
+    # reach the model, and a platform conflict is asked back instead of resolved by the model.
+    restriction, notices = rule_assistant.request_constraints(message)
+    if row and not message and state.get("classification") in {"UNSUPPORTED_REQUIREMENT", "INSUFFICIENT_TELEMETRY"}:
+        restriction, notices = state["classification"], list(state["notices"])
     if body.answer is not None:
+        if row and body.answer.slot not in {q["slot"] for q in state["questions"]}:
+            raise HTTPException(422, "Answer does not correspond to an open question")
         try:
-            intent = rule_assistant.apply_answer(intent, body.answer.slot, body.answer.value, body.answer.replace)
+            if body.answer.slot == "scenario":
+                intent, restriction, extra = rule_assistant.apply_scenario(intent, str(body.answer.value))
+                notices.extend(extra)
+            else:
+                intent = rule_assistant.apply_answer(intent, body.answer.slot, body.answer.value, body.answer.replace)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    elif body.message and body.message.strip():
+        context = (context + "\n" + str(body.answer.value))[-8000:]
+    elif message and restriction in (None, "NEEDS_CLARIFICATION"):
         try:
-            intent, notices = await rule_assistant.extract(body.message, intent, context=body.context or "")
+            if row:  # release the read transaction before waiting for inference
+                await db.commit()
+            intent, extracted = await rule_assistant.extract(message, intent, context=context)
+            notices.extend(extracted)
             model_used = True
         except rule_assistant.GenerationError as exc:
             error = f"AI không phản hồi được ({exc}). Bạn có thể điền trực tiếp các ô bên dưới."
+    if restriction == "NEEDS_CLARIFICATION":
+        intent["platform"] = None
+    context = (context + "\n" + message).strip()
     observed = await rule_assistant.observed_options(db)
     asks = rule_assistant.questions(intent, observed)
+    scenario = rule_assistant.scenario_question(message, intent) if message and not restriction else None
+    if scenario:
+        asks.insert(0, scenario)
+        notices.append("Yêu cầu chưa nêu hành vi cụ thể. Chọn một hành vi bên dưới thay vì tạo một rule bao quát "
+                       "mọi tiến trình.")
+    if restriction in {"INSUFFICIENT_TELEMETRY", "UNSUPPORTED_REQUIREMENT"}:
+        asks = []
+    if message and re.search(r"\bhttp\b", message, re.I):
+        notices.append("Sigma process_creation chỉ thấy tiến trình, không thấy request HTTP. Việc nối request với "
+                       "tiến trình do Web Compromise Chain làm (theo request ID và thời gian).")
     sigma_yaml = None
-    if not asks:
+    if not asks and not restriction and not error:
         try:
-            sigma_yaml, _ = rule_assistant.compile_rule(intent, body.context or body.message or "")
+            sigma_yaml, _ = rule_assistant.compile_rule(intent, context)
         except ValueError as exc:
             asks = [{"slot": "child", "text": f"Chưa tạo được rule: {exc}", "options": [], "allow_text": True}]
-    return {"intent": intent, "questions": asks, "ready": not asks, "sigma_yaml": sigma_yaml,
-            "notices": notices, "model_used": model_used, "model": rule_assistant.DEFAULT_MODEL, "error": error}
+    if sigma_yaml:
+        notices.append("Rule khớp khi mọi điều kiện trong detection.selection cùng đúng. Tác vụ quản trị hợp lệ vẫn "
+                       "có thể khớp; xem mẫu benign và false positive trong kết quả kiểm định Agent B.")
+    revision = row.revision + 1 if row else 1
+    key = row.id if row else uuid.uuid4().hex
+    result = {"conversation_id": key, "revision": revision, "context": context, "intent": intent,
+              "classification": restriction or ("READY_TO_GENERATE" if sigma_yaml else "NEEDS_CLARIFICATION"),
+              "questions": asks, "ready": bool(sigma_yaml), "sigma_yaml": sigma_yaml, "notices": notices,
+              "model_used": model_used, "has_model_input": model_used or state.get("has_model_input", False),
+              "model": rule_assistant.DEFAULT_MODEL, "error": error}
+    if row:
+        changed = await db.execute(update(RuleConversation).where(RuleConversation.id == key,
+            RuleConversation.owner == actor, RuleConversation.revision == body.revision).values(state=result, revision=revision))
+        if not changed.rowcount:
+            raise HTTPException(409, "Conversation changed; reload the latest turn")
+    else:
+        db.add(RuleConversation(id=key, owner=actor, revision=revision, state=result))
+    await db.flush()
+    return result
 
 
 @router.post("/assistant/create")
 async def rule_assistant_create(request: Request, body: AssistantCreateRequest, db: AsyncSession = Depends(get_db)):
     """Compile the confirmed intent, validate it, dry-run it on recent telemetry and start monitoring."""
+    if body.conversation_id:
+        conversation = await owned_conversation(db, body.conversation_id, request.state.operator)
+        if conversation.revision != body.revision or not conversation.state["ready"]:
+            raise HTTPException(409, "Confirm a current, complete conversation before creating a rule")
+        body.intent = conversation.state["intent"]
+        body.description = conversation.state["context"]
+        body.model_used = conversation.state["has_model_input"]
+    else:
+        body.model_used = False
     intent, _ = rule_assistant.sanitize(body.intent)
     try:
         rule_yaml, rule = rule_assistant.compile_rule(intent, body.description or "")

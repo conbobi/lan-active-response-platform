@@ -131,6 +131,44 @@ async def test_too_little_labelled_data_is_inconclusive(monkeypatch):
     assert result["fpr"] is None and result["precision"] is None
 
 
+def linux_rule(selection, product="linux", title="UAT rule"):
+    return yaml.safe_dump({"title": title, "logsource": {"category": "process_creation", "product": product},
+                           "detection": {"selection": selection, "condition": "selection"},
+                           "tags": ["attack.t1059.004"]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rule, problem", [
+    (linux_rule({"Image|endswith": ["/bin/sh"]}, product="windows"), "nền tảng khác"),
+    (linux_rule({"Image|endswith": ["\\cmd.exe"]}), "nền tảng khác"),
+    (linux_rule({"CommandLine|contains": ["Adversaries", "exploit"]}), "từ ngữ mô tả"),
+])
+async def test_defective_rules_fail_without_a_dataset(rule, problem):
+    result = await validation_module.ValidationService().validate_rule(rule)
+    assert result["verdict"] == "FAILED" and problem in result["reason"] and result["confusion"] is None
+
+
+@pytest.mark.asyncio
+async def test_without_relevant_attacks_benign_fpr_is_still_measured_and_can_only_fail(monkeypatch):
+    service = validation_module.ValidationService()
+    # Children of the LARP Agent: the labelled collector commands (and real VPS rows) match, no attack scenario does.
+    noisy = await service.validate_rule(linux_rule({"ParentCommandLine|contains": ["larp-agent/agent.py"]},
+                                                   title="agent child"))
+    assert noisy["verdict"] == "FAILED" and noisy["confusion"]["fp"] >= 4 and noisy["confusion"]["tp"] == 0
+    assert noisy["precision"] is None and noisy["recall"] is None and noisy["fpr"] > 0.05
+    # A parent-less shell is dropped by the runtime safe-process policy: validator says it never matched.
+    silent = await service.validate_rule(linux_rule({"Image|endswith": ["/sh", "/dash", "/bash"]}))
+    assert silent["verdict"] == "INCONCLUSIVE" and silent["confusion"]["fp"] == 0
+    assert "không khớp mẫu nào" in silent["reason"] and silent["fpr"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_passing_on_synthetic_attacks_states_its_limits():
+    result = await validation_module.ValidationService().validate_rule(WEB_SHELL_RULE)
+    assert result["verdict"] == "PASSED" and "production" in result["dataset"]["limitations"]
+    assert result["f1"] == 1.0
+
+
 @pytest.mark.asyncio
 async def test_generate_save_validate_activate_detect(lab, monkeypatch):
     client, factory = lab
@@ -208,7 +246,10 @@ async def test_generation_failure_saves_nothing(lab, monkeypatch, output):
     monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", model)
     monkeypatch.setattr(harvest_module, "AsyncSessionLocal", factory)
     response = client.post(RULES + "/harvest", headers=ADMIN, json={"cti_text": WEB_CTI})
-    assert response.status_code == 502 and "generation failed" in response.json()["detail"]
+    if output == "" or output.startswith("```"):  # no usable model output
+        assert response.status_code == 502 and "generation failed" in response.json()["detail"]
+    else:  # the model produced a rule and the quality checks rejected it: a client-visible refusal
+        assert response.status_code == 422 and "kiểm tra chất lượng" in response.json()["detail"]
     assert client.get(RULES).json()["total"] == 0
 
 
@@ -236,7 +277,7 @@ async def test_generation_retries_are_bounded_and_carry_the_rejection(lab, monke
         return bad
     monkeypatch.setattr(harvest_module.harvest_service, "_call_llm_for_sigma", always_bad)
     response = client.post(RULES + "/harvest", headers=ADMIN, json={"cti_text": WEB_CTI})
-    assert response.status_code == 502 and "after 2 model attempt" in response.json()["detail"]
+    assert response.status_code == 422 and "after 2 model attempt" in response.json()["detail"]
     assert len(calls) == 2 and client.get(RULES).json()["total"] == 1
 
 

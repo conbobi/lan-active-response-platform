@@ -78,8 +78,11 @@ def test_narrative_words_and_bare_interpreters_never_become_observables():
 
 def test_broad_shell_alone_needs_more_evidence_and_compiles_deterministically():
     intent, _ = ra.sanitize({"platform": "linux", "child": ["shell"]})
-    assert [a["slot"] for a in ra.questions(intent)] == ["command"]
+    # The runtime ignores shells unless the parent is pinned: a parent-less shell rule would never fire.
+    assert [a["slot"] for a in ra.questions(intent)] == ["parent"]
     intent = ra.apply_answer(intent, "command", ["whoami", "nối lệnh (; | && $())"])
+    assert [a["slot"] for a in ra.questions(intent)] == ["parent"]
+    intent = ra.apply_answer(intent, "parent", "vulnerable_web/app.py")
     assert intent["chaining"] and intent["command"] == ["whoami"]
     text, rule = ra.compile_rule(intent)
     selection = rule["detection"]["selection"]
@@ -101,19 +104,19 @@ async def test_conversation_create_monitor_then_promote_and_detect(lab, monkeypa
     stub_model(monkeypatch, model_answer(platform="linux", parent=["python3"], child=["shell"], chaining=True,
                                          mitre=["T1059.004"], title="Web app spawning shell with injected command"))
     first = client.post(RULES + "/assistant", headers=ADMIN, json={
-        "message": "Báo khi python3 của web app sinh shell và có chèn lệnh (; hoặc &&)"}).json()
+        "message": "Báo trên Linux khi python3 của web app sinh shell và có chèn lệnh (; hoặc &&)"}).json()
     assert first["model_used"] and not first["ready"]
     ask = first["questions"][0]
     assert ask["slot"] == "parent" and ask["replace"] == ["python3"]
 
     second = client.post(RULES + "/assistant", headers=ADMIN, json={
-        "intent": first["intent"], "answer": {"slot": "parent", "value": "vulnerable_web/app.py",
+        "conversation_id": first["conversation_id"], "revision": first["revision"], "answer": {"slot": "parent", "value": "vulnerable_web/app.py",
                                               "replace": ask["replace"]}}).json()
     assert second["ready"] and not second["model_used"]
     assert "ParentCommandLine|contains" in second["sigma_yaml"]
 
     created = client.post(RULES + "/assistant/create", headers=ADMIN, json={
-        "intent": second["intent"], "description": "web app sinh shell có chèn lệnh", "model_used": True}).json()
+        "conversation_id": second["conversation_id"], "revision": second["revision"], "intent": {}, "description": "web app sinh shell có chèn lệnh", "model_used": True}).json()
     assert created["status"] == "monitoring", created
     assert created["validation_result"]["confusion"] == {"tp": 9, "fp": 0, "fn": 0, "tn": 36}
     assert created["recent_telemetry"]["labelled"] is False

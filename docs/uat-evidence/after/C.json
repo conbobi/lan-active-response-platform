@@ -1,0 +1,69 @@
+{
+  "input": "Tôi không biết Sigma là gì. Tôi muốn phát hiện ai đó chiếm quyền web server.",
+  "response": {
+    "conversation_id": "3a3bf0be2327470a8bd07264fe0dba33",
+    "revision": 1,
+    "context": "Tôi không biết Sigma là gì. Tôi muốn phát hiện ai đó chiếm quyền web server.",
+    "intent": {
+      "platform": null,
+      "parent": [],
+      "parent_hint": "web server",
+      "child": [],
+      "command": [],
+      "chaining": false,
+      "severity": "medium",
+      "mitre": [
+        "T1059.004"
+      ],
+      "title": "Web server compromise via shell"
+    },
+    "classification": "NEEDS_CLARIFICATION",
+    "questions": [
+      {
+        "slot": "scenario",
+        "text": "Bạn muốn phát hiện hành vi nào trên máy chủ?",
+        "options": [
+          "Web process sinh shell",
+          "Upload được thực thi",
+          "Web process kết nối outbound"
+        ],
+        "allow_text": false
+      },
+      {
+        "slot": "platform",
+        "text": "Rule áp dụng cho máy Linux hay Windows?",
+        "options": [
+          "linux",
+          "windows"
+        ],
+        "allow_text": false
+      },
+      {
+        "slot": "parent",
+        "text": "Tiến trình cha (web server) cụ thể là gì? Chọn tiến trình Agent đang thấy hoặc gõ tên.",
+        "options": [],
+        "allow_text": true
+      },
+      {
+        "slot": "child",
+        "text": "Cần phát hiện tiến trình nào được chạy (ví dụ bash, sh, powershell.exe)?",
+        "options": [],
+        "allow_text": true
+      }
+    ],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [
+      "Sigma là một quy tắc mô tả điều kiện trên sự kiện, ví dụ: tiến trình cha là web app và tiến trình con là shell. Agent LARP gửi tên tiến trình, tiến trình cha và dòng lệnh (process_creation). Shell do quản trị viên hoặc tác vụ hợp lệ của ứng dụng chạy có thể gây báo động nhầm.",
+      "AI đoán tiến trình 'bash' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán tiến trình 'sh' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'curl' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'wget' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "Yêu cầu chưa nêu hành vi cụ thể. Chọn một hành vi bên dưới thay vì tạo một rule bao quát mọi tiến trình."
+    ],
+    "model_used": true,
+    "has_model_input": true,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

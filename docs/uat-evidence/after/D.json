@@ -1,0 +1,30 @@
+{
+  "input": "Phát hiện mọi hacker, kể cả khi không có log.",
+  "response": {
+    "conversation_id": "bd77cbe27b934a758623fb39d7197361",
+    "revision": 1,
+    "context": "Phát hiện mọi hacker, kể cả khi không có log.",
+    "intent": {
+      "platform": null,
+      "parent": [],
+      "parent_hint": null,
+      "child": [],
+      "command": [],
+      "chaining": false,
+      "severity": "medium",
+      "mitre": [],
+      "title": null
+    },
+    "classification": "INSUFFICIENT_TELEMETRY",
+    "questions": [],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [
+      "Không bộ phát hiện nào bắt được 100% tấn công, và không có log thì không có gì để đánh giá. Hãy bật telemetry tiến trình, HTTP hoặc xác thực trên máy cần giám sát, rồi kiểm tra coverage bằng một sự kiện kiểm thử đã biết."
+    ],
+    "model_used": false,
+    "has_model_input": false,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

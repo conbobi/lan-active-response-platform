@@ -1,0 +1,11 @@
+{
+  "status": 502,
+  "input": "Built-in Web Server Spawning Shell report",
+  "response": {
+    "error": "Sigma generation failed: Invalid generated Sigma: Web shell rule needs web parent, child shell and command evidence in one selection: ParentImage|endswith: '/python3' also matches benign '/usr/bin/python3' (after 2 model attempt(s))",
+    "detail": "Sigma generation failed: Invalid generated Sigma: Web shell rule needs web parent, child shell and command evidence in one selection: ParentImage|endswith: '/python3' also matches benign '/usr/bin/python3' (after 2 model attempt(s))",
+    "status_code": 502,
+    "request_id": "req_563538fa5107",
+    "outcome_code": "INTERNAL_ERROR"
+  }
+}

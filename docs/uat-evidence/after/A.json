@@ -1,0 +1,46 @@
+{
+  "input": "Phát hiện web server Linux sinh tiến trình shell sau khi nhận request HTTP đáng ngờ.",
+  "response": {
+    "conversation_id": "70cbd14bfb2b45c68d93c166529235d7",
+    "revision": 1,
+    "context": "Phát hiện web server Linux sinh tiến trình shell sau khi nhận request HTTP đáng ngờ.",
+    "intent": {
+      "platform": "linux",
+      "parent": [],
+      "parent_hint": "web server",
+      "child": [
+        "shell"
+      ],
+      "command": [],
+      "chaining": false,
+      "severity": "medium",
+      "mitre": [
+        "T1059.004"
+      ],
+      "title": "Web server spawning shell after suspicious HTTP request"
+    },
+    "classification": "NEEDS_CLARIFICATION",
+    "questions": [
+      {
+        "slot": "parent",
+        "text": "Tiến trình cha (web server) cụ thể là gì? Chọn tiến trình Agent đang thấy hoặc gõ tên.",
+        "options": [],
+        "allow_text": true
+      }
+    ],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [
+      "AI đoán tiến trình cha 'nginx' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán tiến trình 'bash' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán tiến trình 'sh' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'whoami' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "AI đoán từ khóa lệnh 'curl' nhưng bạn chưa nêu; cần bạn xác nhận.",
+      "Sigma process_creation chỉ thấy tiến trình, không thấy request HTTP. Việc nối request với tiến trình do Web Compromise Chain làm (theo request ID và thời gian)."
+    ],
+    "model_used": true,
+    "has_model_input": true,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

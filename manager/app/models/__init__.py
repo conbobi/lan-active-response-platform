@@ -36,6 +36,7 @@ from app.models.containment import ContainmentAction, ContainmentEvent
 from app.models.web_access_log import WebAccessLog
 from app.models.network_snapshot import NetworkSnapshot
 from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase, ThreatMemory, ThreatMemoryEvent
+from app.models.rule_conversation import RuleConversation
 from app.models.soc_auth import SocUser, SocUserAgentScope, SocRefreshSession, SocAuthAuditLog
 
 __all__ = [

@@ -1,0 +1,57 @@
+{
+  "input": "Tạo luật Windows để phát hiện /bin/sh chạy trên Linux.",
+  "response": {
+    "conversation_id": "a8ed432489f84ee7bc50d565ae06e9c7",
+    "revision": 1,
+    "context": "Tạo luật Windows để phát hiện /bin/sh chạy trên Linux.",
+    "intent": {
+      "platform": null,
+      "parent": [],
+      "parent_hint": null,
+      "child": [
+        "sh"
+      ],
+      "command": [],
+      "chaining": false,
+      "severity": "medium",
+      "mitre": [
+        "T1059.004"
+      ],
+      "title": "Detect /bin/sh on Linux"
+    },
+    "classification": "NEEDS_CLARIFICATION",
+    "questions": [
+      {
+        "slot": "platform",
+        "text": "Rule áp dụng cho máy Linux hay Windows?",
+        "options": [
+          "linux",
+          "windows"
+        ],
+        "allow_text": false
+      },
+      {
+        "slot": "command",
+        "text": "'sh' chạy rất thường xuyên. Cần thêm tiến trình cha hoặc dấu hiệu lệnh. Lệnh nào là đáng ngờ (ví dụ whoami, id, curl)? Hoặc chọn 'nối lệnh' để bắt ; | && $().",
+        "options": [
+          "whoami",
+          "id",
+          "curl",
+          "wget",
+          "nối lệnh (; | && $())"
+        ],
+        "allow_text": true,
+        "multi": true
+      }
+    ],
+    "ready": false,
+    "sigma_yaml": null,
+    "notices": [
+      "Yêu cầu nhắc cả Windows và Linux. Chọn một nền tảng trước khi tạo rule."
+    ],
+    "model_used": true,
+    "has_model_input": true,
+    "model": "sec-q5:latest",
+    "error": null
+  }
+}

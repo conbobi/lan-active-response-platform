@@ -108,7 +108,9 @@ def labelled_dataset(rule: dict) -> Tuple[List[dict], Dict[str, Any]]:
     else:
         return [], {**meta, "reason": "No labelled dataset for this platform"}
     if not any(r["label"] for r in records):
+        # Recall cannot be measured, but the false-positive rate only needs benign samples.
         meta["reason"] = "No labelled attack scenario corresponds to the rule target"
+        meta["benign_only"] = True
     return records, meta
 
 
@@ -140,6 +142,32 @@ def _sample(record: dict) -> Dict[str, Any]:
     return {"event_id": record["event_id"], "scenario": record["scenario"], "source": record["source"],
             "process": e.get("name"), "exe": e.get("exe"), "cmdline": e.get("cmdline"),
             "parent": e.get("parent_name"), "parent_cmdline": e.get("parent_cmdline")}
+
+
+NARRATIVE_VALUE = re.compile(r"\b(adversar(?:y|ies)|attackers?|exploit\w*|malicious|suspicious|threat actors?|hackers?)\b", re.I)
+LINUX_VALUE = re.compile(r"^/(?:usr/)?s?bin/|^/(?:usr/)?(?:ba|da|z|k)?sh$|^/sh$", re.I)
+WINDOWS_VALUE = re.compile(r"\.exe\b|^[a-z]:\\|\\windows\\", re.I)
+SAMPLE_NOTE = ("Bộ dữ liệu nhỏ và mẫu tấn công là synthetic: kết quả cho biết rule chạy đúng trên các kịch bản đã biết, "
+               "không chứng minh rule sẵn sàng cho production.")
+
+
+def quality_problems(rule: dict) -> List[str]:
+    """Rule defects that need no dataset: a platform the values cannot occur on, or narrative-only values."""
+    product = str((rule.get("logsource") or {}).get("product") or "").lower()
+    problems = []
+    values = []
+    for field, value in rule["detection"]["selection"].items():
+        for item in value if isinstance(value, list) else [value]:
+            values.append((str(field), str(item)))
+    foreign = WINDOWS_VALUE if product == "linux" else LINUX_VALUE if product == "windows" else None
+    mismatched = [v for f, v in values if foreign and f.lower().split("|")[0] in
+                  ("image", "parentimage", "exe", "parent_exe") and foreign.search(v)]
+    if mismatched:
+        problems.append(f"logsource.product '{product}' nhưng giá trị thuộc nền tảng khác: {', '.join(mismatched[:3])}")
+    narrative = [v for _, v in values if NARRATIVE_VALUE.search(v)]
+    if narrative and len(narrative) == len(values):
+        problems.append(f"Chỉ khớp từ ngữ mô tả CTI ({', '.join(narrative[:3])}), không phải dấu hiệu quan sát được")
+    return problems
 
 
 def _failure(verdict, reason, **extra):
@@ -176,6 +204,10 @@ class ValidationService:
         if not supported:
             return _failure("UNSUPPORTED_BY_ENGINE", support_reason, engine_supported=False)
 
+        problems = quality_problems(rule)
+        if problems:
+            return _failure("FAILED", "Rule không hợp lệ: " + "; ".join(problems), quality_problems=problems)
+
         if historical_logs_df is not None and ground_truth is not None:
             records = records_from_dataframe(historical_logs_df, ground_truth)
             meta = {"datasets": [{"name": "caller_supplied", "sha256": None}], "product": "caller"}
@@ -188,10 +220,10 @@ class ValidationService:
             except (OSError, ValueError, KeyError) as exc:
                 return _failure("INCONCLUSIVE", f"Dataset unavailable: {exc}")
         dataset = summarize(records, meta)
-        if meta.get("reason"):
+        if meta.get("reason") and not (meta.get("benign_only") and dataset["benign"] >= MIN_BENIGN):
             return _failure("INCONCLUSIVE", meta["reason"], dataset=dataset)
-        if dataset["attack"] < MIN_ATTACK or dataset["benign"] < MIN_BENIGN:
-            if historical_logs_df is None:
+        if not meta.get("benign_only") and (dataset["attack"] < MIN_ATTACK or dataset["benign"] < MIN_BENIGN):
+            if historical_logs_df is None or not dataset["attack"] or not dataset["benign"]:
                 return _failure("INCONCLUSIVE", f"Chưa đủ dữ liệu: cần ít nhất {MIN_ATTACK} mẫu tấn công và "
                                 f"{MIN_BENIGN} mẫu benign có nhãn cho nền tảng này.", dataset=dataset)
 
@@ -216,29 +248,47 @@ class ValidationService:
         fpr = fp / benign if benign else 0.0
         precision = tp / (tp + fp) if (tp + fp) else None
         recall = tp / attack if attack else None
-        f1 = (2 * precision * recall / (precision + recall)) if precision and recall else 0.0
+        f1 = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else None
 
-        # Relevant labelled attacks are present here, so matching nothing is a measured miss (recall 0).
-        passed = tp > 0 and fpr <= fpr_threshold and (precision or 0) >= precision_threshold
-        verdict = "PASSED" if passed else "FAILED"
-        if passed:
-            reason = f"Đạt: FPR {fpr:.2%}, Precision {precision:.2%}, Recall {recall:.2%} trên {len(records)} mẫu có nhãn."
-        else:
-            reasons = []
-            if tp == 0:
-                reasons.append(f"không phát hiện mẫu nào trong {attack} mẫu tấn công liên quan (Recall 0%)")
+        if meta.get("benign_only"):
+            # Benign samples only: a measured false-positive rate can fail the rule; it can never pass it.
             if fpr > fpr_threshold:
-                reasons.append(f"FPR {fpr:.2%} vượt ngưỡng {fpr_threshold:.2%}")
-            if precision is not None and precision < precision_threshold:
-                reasons.append(f"Precision {precision:.2%} dưới ngưỡng {precision_threshold:.2%}")
-            reason = "Không đạt: " + "; ".join(reasons)
+                verdict, reason = "FAILED", (f"Không đạt: khớp {fp}/{benign} mẫu benign (FPR {fpr:.2%} vượt ngưỡng "
+                                             f"{fpr_threshold:.2%}). Không có mẫu tấn công tương ứng để đo Recall.")
+            else:
+                verdict, reason = "INCONCLUSIVE", (f"Chưa có mẫu tấn công có nhãn cho mục tiêu này nên không đo được "
+                                                   f"Recall/Precision; FPR đo trên {benign} mẫu benign là {fpr:.2%}.")
+                if fp == 0:
+                    reason += (" Rule không khớp mẫu nào: kiểm tra điều kiện có xảy ra được trên telemetry thật "
+                               "(xem dry-run 24 giờ) trước khi kích hoạt.")
+            precision = recall = f1 = None
+            passed = False
+        else:
+            # Relevant labelled attacks are present here, so matching nothing is a measured miss (recall 0).
+            passed = tp > 0 and fpr <= fpr_threshold and (precision or 0) >= precision_threshold
+            verdict = "PASSED" if passed else "FAILED"
+            if passed:
+                reason = (f"Đạt: FPR {fpr:.2%}, Precision {precision:.2%}, Recall {recall:.2%} trên "
+                          f"{len(records)} mẫu có nhãn.")
+            else:
+                reasons = []
+                if tp == 0:
+                    reasons.append(f"không phát hiện mẫu nào trong {attack} mẫu tấn công liên quan (Recall 0%)")
+                if fpr > fpr_threshold:
+                    reasons.append(f"FPR {fpr:.2%} vượt ngưỡng {fpr_threshold:.2%}")
+                if precision is not None and precision < precision_threshold:
+                    reasons.append(f"Precision {precision:.2%} dưới ngưỡng {precision_threshold:.2%}")
+                reason = "Không đạt: " + "; ".join(reasons)
+        synthetic = all(r["source"].startswith("synthetic") for r in records if r["label"])
+        if synthetic and any(r["label"] for r in records):
+            dataset["limitations"] = SAMPLE_NOTE
 
         result: Dict[str, Any] = {
             "passed": passed, "verdict": verdict, "reason": reason, "engine_supported": True,
-            "fpr": None if verdict == "INCONCLUSIVE" else round(fpr, 4),
+            "fpr": round(fpr, 4) if benign else None,
             "precision": None if precision is None or verdict == "INCONCLUSIVE" else round(precision, 4),
             "recall": None if recall is None or verdict == "INCONCLUSIVE" else round(recall, 4),
-            "f1": None if verdict == "INCONCLUSIVE" else round(f1, 4),
+            "f1": None if f1 is None or verdict == "INCONCLUSIVE" else round(f1, 4),
             "confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
             "fp_samples": fp_samples[:20], "fn_samples": fn_samples[:20],
             "thresholds": {"fpr": fpr_threshold, "precision": precision_threshold},
