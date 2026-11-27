@@ -26,7 +26,11 @@ from app.services.core.base import AbstractService
 from app.services.core.command_dispatcher import command_dispatcher
 from app.services.common.notification_service import NotificationService
 from app.services.detection.network_reputation_service import NetworkReputationService
-from app.services.detection.behavior_evidence import SQLI
+from app.services.detection.behavior_evidence import SQLI, SQLI_TOOL, AUTOMATED_HTTP
+from app.services.detection.http_scan import scan_title, source_activity
+
+# Tool-tagged HTTP activity is grouped per source and service, not per path: one scan is one incident.
+SOURCE_GROUPED_HTTP = {AUTOMATED_HTTP, SQLI_TOOL}
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +148,23 @@ class IncidentService(AbstractService[IncidentRepository]):
 
         return created
 
+    async def _with_source_activity(self, agent_id: str, evidence: dict, now: datetime) -> dict:
+        """Attach the stored request activity of this source (whole scan, not one request) to the evidence."""
+        behavior = dict(evidence.get("behavior") or {})
+        start = as_utc(evidence.get("first_seen")) or now
+        first_attempt = as_utc(behavior.get("first_attempt_at"))
+        if first_attempt and first_attempt < start:
+            start = first_attempt
+        summary = await source_activity(self.session, agent_id, behavior.get("source_ip"), start, now)
+        if not summary:
+            return evidence
+        ids = summary.pop("event_ids")
+        behavior.update(
+            activity_summary=summary, source_event_ids=ids,
+            first_attempt_at=summary["first_request_at"], last_attempt_at=summary["last_request_at"],
+        )
+        return {**evidence, "behavior": behavior}
+
     async def create_from_risk(
         self,
         agent_id: str,
@@ -170,6 +191,8 @@ class IncidentService(AbstractService[IncidentRepository]):
             ]
             if source == SQLI and behavior.get("request_path"):
                 identity = [source, behavior.get("service"), behavior.get("source_ip"), behavior["request_path"]]
+            elif source in SOURCE_GROUPED_HTTP and behavior.get("evidence_type") == "http":
+                identity = [source, "http", behavior.get("service"), behavior.get("source_ip")]
         fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
         await self.session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
         stmt = select(Incident).where(
@@ -232,6 +255,12 @@ class IncidentService(AbstractService[IncidentRepository]):
             if risk_score > existing.risk_score:
                 existing.risk_score = risk_score
                 existing.severity = severity
+            if source in SOURCE_GROUPED_HTTP and behavior:
+                existing.detection_evidence = await self._with_source_activity(
+                    agent_id, existing.detection_evidence, now)
+                summary = existing.detection_evidence.get("behavior", {}).get("activity_summary") or {}
+                if summary.get("is_service_scan"):
+                    existing.title = scan_title(summary, behavior.get("source_ip"), agent_id, existing.risk_score)
             await self.session.flush()
             logger.info(f"Updated existing incident '{existing.id}' for agent '{agent_id}' with score {risk_score}.")
             return existing
@@ -243,6 +272,11 @@ class IncidentService(AbstractService[IncidentRepository]):
             else f"High Risk Threat Spike on Agent '{agent_id}' (Score: {risk_score})"
         )
         desc = f"Automated incident generated due to risk score {risk_score}.\nFactors: {factors}"
+        if source in SOURCE_GROUPED_HTTP and behavior:
+            evidence = await self._with_source_activity(agent_id, evidence, now)
+            summary = evidence["behavior"].get("activity_summary") or {}
+            if summary.get("is_service_scan"):
+                title = scan_title(summary, behavior.get("source_ip"), agent_id, risk_score)
 
         inc = Incident(
             id=inc_id,

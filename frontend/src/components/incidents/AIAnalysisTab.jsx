@@ -191,11 +191,29 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       });
     }
     if (behavior.first_attempt_at) {
+      const scan = behavior.activity_summary;
+      const firstLabel =
+        behavior.evidence_type === 'authentication'
+          ? 'Xác thực thất bại đầu tiên'
+          : behavior.evidence_type === 'network'
+            ? 'Kết nối đầu tiên từ nguồn'
+            : 'Request đầu tiên từ nguồn';
       entries.push({
         time: behavior.first_attempt_at,
-        label: 'Xác thực thất bại đầu tiên',
-        title: `Bắt đầu chuỗi truy cập bất thường từ ${sourceIp || 'nguồn chưa rõ'}`,
+        label: firstLabel,
+        title: scan?.is_service_scan
+          ? `Bắt đầu quét dịch vụ web bằng ${(scan.tools || []).join(', ') || 'công cụ tự động'} từ ${sourceIp || 'nguồn chưa rõ'}`
+          : `Bắt đầu chuỗi truy cập bất thường từ ${sourceIp || 'nguồn chưa rõ'}`,
         detail: { source_ip: sourceIp, service: serviceName },
+        severity: 'warning',
+      });
+    }
+    if (behavior.activity_summary?.last_request_at && behavior.activity_summary.last_request_at !== behavior.first_attempt_at) {
+      const scan = behavior.activity_summary;
+      entries.push({
+        time: scan.last_request_at,
+        label: 'Request cuối cùng từ nguồn',
+        title: `Tổng cộng ${scan.request_count} request tới ${scan.distinct_path_count} đường dẫn trong ${scan.duration_seconds} giây`,
         severity: 'warning',
       });
     }
@@ -246,12 +264,36 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
     }
     deduped.sort((a, b) => new Date(a.time) - new Date(b.time));
     return deduped;
-  }, [timelineEvents, behavior.first_attempt_at, sourceIp, serviceName, incident, analysis, assistState]);
+  }, [timelineEvents, behavior.first_attempt_at, behavior.evidence_type, behavior.activity_summary, sourceIp, serviceName, incident, analysis, assistState]);
 
   // Observed evidence cards (distinguishing confirmed facts vs inferences vs missing evidence).
   const observedFacts = useMemo(() => {
     const facts = [];
-    if (Array.isArray(investigation?.observed_facts)) {
+    const scan = behavior.activity_summary;
+    if (scan) {
+      const answered = (scan.answered || []).map((a) => `${a.method} ${a.path} → ${a.http_status}`).join(', ');
+      facts.push({
+        kind: 'confirmed',
+        title: scan.is_service_scan ? 'Quét dịch vụ web (tổng hợp từ nhật ký truy cập)' : 'Hoạt động HTTP tự động (tổng hợp)',
+        summary: [
+          `${scan.request_count} request · ${scan.distinct_path_count} đường dẫn · ${scan.duration_seconds} giây`,
+          sourceIp ? `Nguồn: ${sourceIp}` : null,
+          scan.tools?.length ? `Công cụ: ${scan.tools.join(', ')}` : null,
+          scan.target_ports?.length ? `Cổng: ${scan.target_ports.join(', ')}` : null,
+          `${scan.not_found_path_count} đường dẫn 404 bị dò`,
+          answered ? `Dịch vụ đã trả lời: ${answered}` : null,
+          ...(scan.successful_logins_from_source || []).map(
+            (l) => `Cùng nguồn đã đăng nhập thành công: ${l.username} (${l.service})`,
+          ),
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        observedAt: scan.last_request_at,
+        evidenceIds: behavior.source_event_ids || [],
+        raw: scan,
+      });
+    }
+    if (!scan && Array.isArray(investigation?.observed_facts)) {
       for (const f of investigation.observed_facts) {
         facts.push({
           kind: 'confirmed',

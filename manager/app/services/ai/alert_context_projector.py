@@ -382,7 +382,7 @@ def build_alert_context(incident, *, hostname=None, processes=(), flows=(), fim=
             "http_status", "request_id", "http_event_id", "user_agent", "payload_indicators",
             "exploitation_outcome", "brute_force_criteria", "protocol", "direction",
             "destination_ip", "connection_count", "automation_hint", "legacy_duplicate_status",
-            "timestamp_resolution", "indicator_event_count",
+            "timestamp_resolution", "indicator_event_count", "activity_summary",
         )
         fact = {field: behavior[field] for field in fields if behavior.get(field) is not None}
         event_ids = behavior["source_event_ids"]

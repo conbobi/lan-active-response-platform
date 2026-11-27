@@ -279,7 +279,8 @@ async def investigate(db, incident):
         "confidence": confidence, "confidence_source": "detection rule", "risk_score": incident.risk_score,
         "potential_impact": "Unauthorized session granted." if cls == "sqli_exploitation_confirmed" else "Application impact undetermined.",
         "mitre_techniques": ["T1190"] if cls in {"sqli_probe_observed", "sqli_exploitation_confirmed", "sqli_exploitation_suspected"} else [],
-        "missing_evidence": ([] if cls == "sqli_exploitation_confirmed" else ["Verified application-side credential mismatch"])
+        "missing_evidence": ([] if cls in ("sqli_exploitation_confirmed", "automated_http_activity", "sqli_tool_indicator")
+                             else ["Verified application-side credential mismatch"])
                             + ([] if any(p.action_type in TRAFFIC for p in proposals) else ["Verified enforcement point"]),
         "recommended_investigation": ["Correlate request, authentication and endpoint observations."],
         "recommended_responses": [p.model_dump(mode="json") for p in proposals],

@@ -7,10 +7,12 @@ import os
 from dataclasses import dataclass
 from math import isfinite
 from time import monotonic
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import select
 
+from app.core.agent_health import as_utc
 from app.core.database import AsyncSessionLocal
 from app.models.ai_analysis import AIAnalysis
 from app.models.incident import Incident
@@ -482,6 +484,45 @@ class AITriageService:
         return row
 
 
+SQLI_CLASSES = {"sqli_probing", "sqli_probe_observed", "sqli_exploitation_suspected", "sqli_exploitation_confirmed",
+                "sqli_tool_indicator"}
+
+
+def _vn_time(value) -> str:
+    stamp = as_utc(value)
+    if stamp is None:
+        return "N/A"
+    return (stamp + timedelta(hours=7)).strftime("%d/%m/%Y %H:%M:%S") + " (GMT+7)"
+
+
+def _activity_fact(key: str, src_ip: str, service: str, activity: dict) -> str:
+    """Every request this source sent in the activity window, counted from web_access_logs."""
+    ports = ", ".join(map(str, activity.get("target_ports") or [])) or "không ghi trong log"
+    methods = ", ".join(f"{m} ×{n}" for m, n in (activity.get("methods") or {}).items())
+    statuses = ", ".join(f"{c} ×{n}" for c, n in (activity.get("status_counts") or {}).items())
+    tools = ", ".join(activity.get("tools") or []) or "không có"
+    answered = "; ".join(f"`{a['method']} {a['path']}` → {a['http_status']}" for a in activity.get("answered") or [])
+    missing = ", ".join(f"`{p}`" for p in (activity.get("not_found_paths") or [])[:10])
+    lines = [
+        f"- **[{key}] Hoạt động HTTP của nguồn `{src_ip}`** tới dịch vụ `{service}` (cổng {ports}): "
+        f"**{activity['request_count']} request** trong {activity['duration_seconds']} giây, "
+        f"từ {_vn_time(activity.get('first_request_at'))} đến {_vn_time(activity.get('last_request_at'))}.",
+        f"  - **Công cụ (theo User-Agent)**: `{tools}` ({activity['tool_request_count']} request); "
+        f"{activity['untagged_request_count']} request không có User-Agent công cụ trong cùng khoảng thời gian.",
+        f"  - **Phương thức**: {methods}. **Mã phản hồi**: {statuses}.",
+        f"  - **Đường dẫn khác nhau**: {activity['distinct_path_count']}; "
+        f"{activity['not_found_path_count']} đường dẫn không tồn tại (404) bị dò" + (f", ví dụ {missing}." if missing else "."),
+    ]
+    if answered:
+        lines.append(f"  - **Dịch vụ đã trả lời công cụ quét**: {answered}.")
+    for login in activity.get("successful_logins_from_source") or []:
+        lines.append(
+            f"  - **Liên quan**: cùng nguồn `{src_ip}` đã đăng nhập **thành công** tài khoản `{login['username']}` "
+            f"trên `{login['service']}` (gần nhất {_vn_time(login['last_success_at'])})."
+        )
+    return "\n".join(lines)
+
+
 def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: str, version: str) -> dict:
     by_id = context.by_id
     facts = []
@@ -559,6 +600,11 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
                 payload_ind = item.get("payload_indicators")
                 outcome = item.get("exploitation_outcome", "undetermined")
 
+                activity = item.get("activity_summary") if isinstance(item.get("activity_summary"), dict) else None
+                if activity:
+                    facts.append(_activity_fact(key, src_ip, item.get("service", "web"), activity))
+                    evidence_summary[key] = item
+                    continue
                 payload_desc = ", ".join(payload_ind) if payload_ind else "Không ghi nhận cú pháp SQLi trong URL path/query (payload nằm trong body hoặc không có)"
                 tool_str = f" (Công cụ nhận diện: `{tool}`)" if tool else ""
                 facts.append(
@@ -578,6 +624,8 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
     cls = verdict.classification
     conf_pct = int(round(verdict.confidence * 100))
     http_facts = [by_id[k] for k in verdict.evidence_ids if by_id.get(k, {}).get("evidence_type") == "http"]
+    scan = next((item["activity_summary"] for item in http_facts
+                 if isinstance(item.get("activity_summary"), dict) and item["activity_summary"].get("is_service_scan")), None)
 
     # 1. Observed Facts
     sec_facts = "\n".join(facts) if facts else "Không có dữ kiện telemetry cụ thể được tham chiếu."
@@ -603,6 +651,13 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
         sec_interp = (
             "Đã xác nhận hành vi khai thác SQL Injection thành công dựa trên kiểm chứng ứng dụng đối chứng hoặc vượt qua kiểm soát truy cập."
         )
+    elif scan:
+        sec_interp = (
+            f"Trinh sát dịch vụ web: một nguồn dùng công cụ `{', '.join(scan.get('tools') or ['tự động'])}` gửi "
+            f"{scan['request_count']} request tới {scan['distinct_path_count']} đường dẫn khác nhau trong "
+            f"{scan['duration_seconds']} giây. Mẫu này là dò dịch vụ/phiên bản và chạy script kiểm tra mặc định, "
+            "không phải truy cập của người dùng."
+        )
     elif cls == "automated_http_activity":
         sec_interp = "Ghi nhận lưu lượng HTTP mang dấu hiệu của client tự động hóa hoặc công cụ quét bảo mật thông thường."
     elif cls == "likely_malicious":
@@ -623,6 +678,14 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
             f"- **Giả thuyết**: Hoạt động thăm dò SQL Injection nhằm xác định cấu trúc cơ sở dữ liệu backend và kiểm tra các điểm tiêm lệnh.\n"
             f"- **Mức chắc chắn**: {conf_pct}% (Đã xác nhận sự hiện diện của mẫu cú pháp injection trong request)."
         )
+    elif scan:
+        answered = len(scan.get("answered") or [])
+        sec_hypo = (
+            f"- **Giả thuyết**: Kẻ tấn công đang trinh sát dịch vụ web để tìm phiên bản phần mềm và điểm yếu trước khi khai thác "
+            f"(Mức chắc chắn: {conf_pct}%).\n"
+            f"- **Quét có thành công không**: Có. Dịch vụ đã trả lời công cụ quét ({answered} loại phản hồi 2xx/3xx), "
+            "nên công cụ biết cổng đang mở và đọc được nội dung phản hồi."
+        )
     elif cls == "likely_malicious":
         sec_hypo = f"- **Giả thuyết**: Thiết lập reverse shell thành công từ tiến trình bị xâm nhập ra máy chủ điều khiển C2 (Mức chắc chắn: {conf_pct}%)."
     else:
@@ -641,7 +704,12 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
 
     # 5. Evidence Gaps
     gaps = []
-    if http_facts:
+    if scan:
+        gaps.append("Nhật ký truy cập không lưu header phản hồi (ví dụ `Server`), nên không xác nhận được chính xác "
+                    "phiên bản phần mềm mà công cụ quét đọc được.")
+        if not scan.get("successful_logins_from_source"):
+            gaps.append("Chưa ghi nhận đăng nhập thành công nào từ nguồn này trong 24 giờ.")
+    elif http_facts and cls in SQLI_CLASSES:
         item = http_facts[0]
         if item.get("request_method") == "POST" and not item.get("payload_indicators"):
             gaps.append("Thiếu nội dung trích xuất an toàn của HTTP POST request body (các tham số form dữ liệu như username/password chưa được quét signature).")
@@ -667,6 +735,11 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
     # 7. Root Cause
     if cls in ("confirmed_malicious", "likely_malicious", "sqli_exploitation_confirmed"):
         sec_root = f"Đã xác nhận nguyên nhân gốc: {CLASS_LABELS.get(cls, cls)}"
+    elif scan:
+        sec_root = (
+            "Dịch vụ web đang mở và trả lời mọi nguồn có thể kết nối tới cổng của nó; chưa có giới hạn truy cập theo nguồn "
+            "hoặc chặn công cụ quét. Bản thân việc quét chưa phải là xâm nhập."
+        )
     elif cls == "sqli_tool_indicator":
         sec_root = "Chưa xác định nguyên nhân gốc xâm nhập thành công. Ghi nhận công cụ dò quét từ bên ngoài nhắm vào endpoint xác thực công khai."
     elif cls in ("sqli_probe_observed", "sqli_probing"):
@@ -676,7 +749,15 @@ def _analysis_fields(context: AlertContext, verdict: ValidatedVerdict, status: s
 
     # 8. Recommended Investigation
     recs = []
-    if http_facts:
+    if scan:
+        item = http_facts[0] if http_facts else {}
+        src_ip = item.get("source_ip", "nguồn")
+        recs.append(f"Xác minh `{src_ip}` có thuộc đợt kiểm thử được phê duyệt hay không; nếu không, đề xuất chặn IP trong Access Control.")
+        if scan.get("successful_logins_from_source"):
+            recs.append(f"Ưu tiên điều tra: `{src_ip}` cũng đã đăng nhập thành công (xem dữ kiện trên). Kiểm tra các sự cố khác của cùng nguồn.")
+        recs.append("Ẩn header `Server`/phiên bản của dịch vụ web và giới hạn cổng dịch vụ chỉ cho nguồn cần thiết.")
+        recs.append(f"Theo dõi request tiếp theo từ `{src_ip}`: sau trinh sát thường là dò mật khẩu hoặc thử khai thác.")
+    elif http_facts and cls in SQLI_CLASSES:
         item = http_facts[0]
         src_ip = item.get("source_ip", "nguồn")
         time_str = item.get("first_attempt_at", "thời điểm cảnh báo")

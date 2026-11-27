@@ -254,6 +254,9 @@
   "T1489": {
     "name": "Service Stop",
     "tactic": "impact"
+  },
+  "T1595": {
+    "name": "Active Scanning",
+    "tactic": "reconnaissance"
   }
 }
-

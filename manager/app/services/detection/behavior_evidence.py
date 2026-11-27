@@ -124,6 +124,12 @@ def technique_for(evidence: dict) -> str | None:
     ports = {port for port in port_values if type(port) is int and 0 < port <= 65535} if isinstance(port_values, list) else set()
     if kind == SCAN and evidence.get("direction") == "inbound" and len(ports) >= 8:
         return "T1046"
+    activity = evidence.get("activity_summary")
+    if (kind in (AUTOMATED_HTTP, SQLI_TOOL) and isinstance(activity, dict)
+            and type(activity.get("tool_request_count")) is int and activity["tool_request_count"] > 0
+            and type(activity.get("distinct_path_count")) is int
+            and activity["distinct_path_count"] >= activity.get("scan_threshold_paths", 5) >= 5):
+        return "T1595"
     path = evidence.get("request_path")
     method = evidence.get("request_method")
     payload_ind = valid_indicators(evidence.get("payload_indicators"))

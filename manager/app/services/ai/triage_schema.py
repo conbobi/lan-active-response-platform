@@ -109,10 +109,10 @@ def behavior_verdict(context: AlertContext) -> ValidatedVerdict | None:
                 REPEATED: 0.9, BRUTE_FORCE: 0.85, SCAN: 0.85,
                 SQLI: 0.85 if tech else 0.7,
                 SQLI_PROBE: 0.85 if tech else 0.7,
-                SQLI_TOOL: 0.60,
+                SQLI_TOOL: 0.80 if tech else 0.60,
                 SQLI_SUSPECTED: 0.85,
                 SQLI_CONFIRMED: 0.95,
-                AUTOMATED_HTTP: 0.50,
+                AUTOMATED_HTTP: 0.80 if tech else 0.50,  # tech = T1595, a verified multi-path scan
                 UNKNOWN: 0.45,
             }
             confidence = confidence_map.get(classification, 0.5)
