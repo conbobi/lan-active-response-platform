@@ -45,6 +45,14 @@ inc_ref = {
 }
 seen_auth = []
 active_refresh_cookie = {"value": None}
+trace_state = {"run_calls": 0, "inc9094_done": False, "inc9094_events": []}
+
+
+def _make_sse_body(events):
+    return "".join(
+        f"id: {ev['sequence']}\nevent: {ev['event_type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        for ev in events
+    )
 
 
 def backend(route):
@@ -55,7 +63,222 @@ def backend(route):
     headers = {}
     status = 200
 
-    if path.endswith("/auth/login"):
+    if path.endswith("/ai/incidents/inc_90940e8f23fb/analysis/runs"):
+        if trace_state["inc9094_done"]:
+            body = {
+                "incident_id": "inc_90940e8f23fb",
+                "runs": [
+                    {
+                        "analysis_run_id": "run_demo_9094",
+                        "incident_id": "inc_90940e8f23fb",
+                        "mode": "fresh",
+                        "status": "COMPLETED",
+                        "model_name": "sec-q5:latest",
+                        "started_at": "2026-11-26T09:32:00Z",
+                        "completed_at": "2026-11-26T09:32:04Z",
+                        "created_at": "2026-11-26T09:32:00Z",
+                    }
+                ],
+            }
+        else:
+            body = {"incident_id": "inc_90940e8f23fb", "runs": []}
+    elif path.endswith("/ai/incidents/inc_90940e8f23fb/analysis/run"):
+        trace_state["run_calls"] += 1
+        trace_state["inc9094_done"] = True
+        trace_state["inc9094_events"] = [
+            {
+                "event_id": "tr_1",
+                "analysis_run_id": "run_demo_9094",
+                "incident_id": "inc_90940e8f23fb",
+                "sequence": 1,
+                "event_type": "analysis_started",
+                "stage": "INCIDENT_LOADED",
+                "status": "RUNNING",
+                "source_type": "DETERMINISTIC",
+                "duration_ms": 5,
+                "summary": "Khởi tạo phiên phân tích sự cố inc_90940e8f23fb",
+                "evidence_refs": ["inc_90940e8f23fb"],
+                "rule_refs": [],
+            },
+            {
+                "event_id": "tr_2",
+                "analysis_run_id": "run_demo_9094",
+                "incident_id": "inc_90940e8f23fb",
+                "sequence": 2,
+                "event_type": "stage_completed",
+                "stage": "RISK_RULE_EXPLANATION",
+                "status": "COMPLETED",
+                "source_type": "DETERMINISTIC",
+                "duration_ms": 18,
+                "summary": "Phân rã điểm rủi ro 75/100 theo rule brute_force",
+                "evidence_refs": ["auth-rec-1"],
+                "rule_refs": ["brute_force"],
+                "safe_result": {
+                    "breakdown_available": True,
+                    "final_score": 75.0,
+                    "raw_score": 75.0,
+                    "previous_smoothed": 15.0,
+                    "ema_applied": False,
+                    "security_attack_bypass": True,
+                    "rule_breakdown": [
+                        {
+                            "rule_id": "brute_force",
+                            "matched": True,
+                            "raw_score": 75.0,
+                            "debounced_score": 75.0,
+                            "weight": 1.0,
+                            "weighted_contribution": 75.0,
+                            "evidence_ids": ["auth-rec-1"],
+                            "reason": "16 auth failures from 100.67.222.3",
+                        }
+                    ],
+                },
+            },
+            {
+                "event_id": "tr_3",
+                "analysis_run_id": "run_demo_9094",
+                "incident_id": "inc_90940e8f23fb",
+                "sequence": 3,
+                "event_type": "stage_skipped",
+                "stage": "PROCESS_NETWORK_CORRELATION",
+                "status": "SKIPPED",
+                "source_type": "ENDPOINT_AGENT",
+                "duration_ms": 2,
+                "summary": "Không có telemetry tiến trình cho brute-force HTTP; bỏ qua liên kết PID.",
+                "evidence_refs": [],
+                "rule_refs": [],
+                "safe_result": {"status": "UNKNOWN", "matched_pids": []},
+            },
+            {
+                "event_id": "tr_4",
+                "analysis_run_id": "run_demo_9094",
+                "incident_id": "inc_90940e8f23fb",
+                "sequence": 4,
+                "event_type": "stage_completed",
+                "stage": "CLAIM_VERIFICATION",
+                "status": "COMPLETED",
+                "source_type": "DETERMINISTIC",
+                "duration_ms": 9,
+                "summary": "Đạt 6/6 kiểm chứng bằng chứng",
+                "evidence_refs": ["auth-rec-1"],
+                "rule_refs": [],
+                "safe_result": {
+                    "passed": True,
+                    "checks": [
+                        {
+                            "check_id": "evidence_ids_exist",
+                            "label": "Mã bằng chứng trích dẫn tồn tại",
+                            "passed": True,
+                            "certainty": "OBSERVED",
+                            "detail": "Tất cả mã bằng chứng đều thuộc ngữ cảnh sự cố.",
+                        }
+                    ],
+                },
+            },
+            {
+                "event_id": "tr_5",
+                "analysis_run_id": "run_demo_9094",
+                "incident_id": "inc_90940e8f23fb",
+                "sequence": 5,
+                "event_type": "analysis_completed",
+                "stage": "RESPONSE_RECOMMENDATION",
+                "status": "COMPLETED",
+                "source_type": "DETERMINISTIC",
+                "duration_ms": 14,
+                "summary": "Hoàn tất phân tích sự cố inc_90940e8f23fb",
+                "safe_result": {"analysis_id": "ana_9094"},
+            },
+        ]
+        status = 202
+        body = {
+            "status": "analyzing",
+            "mode": "fresh",
+            "analysis_run_id": "run_demo_9094",
+            "reused_active_run": False,
+            "stream_url": "/api/v1/ai/runs/run_demo_9094/stream",
+        }
+    elif path.endswith("/ai/runs/run_demo_9094/trace"):
+        body = {
+            "run": {
+                "analysis_run_id": "run_demo_9094",
+                "incident_id": "inc_90940e8f23fb",
+                "mode": "fresh",
+                "status": "COMPLETED",
+                "model_name": "sec-q5:latest",
+                "started_at": "2026-11-26T09:32:00Z",
+                "completed_at": "2026-11-26T09:32:04Z",
+                "created_at": "2026-11-26T09:32:00Z",
+            },
+            "events": trace_state["inc9094_events"],
+        }
+    elif path.endswith("/ai/runs/run_demo_9094/stream"):
+        assert auth in ("Bearer jwt-access-1", "Bearer jwt-access-2"), f"Missing JWT header on SSE: {auth}"
+        route.fulfill(
+            status=200,
+            headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
+            body=_make_sse_body(trace_state["inc9094_events"]),
+        )
+        return
+    elif path.endswith("/ai/incidents/inc_chain_demo/analysis/runs"):
+        body = {
+            "incident_id": "inc_chain_demo",
+            "runs": [
+                {
+                    "analysis_run_id": "run_chain_timeout",
+                    "incident_id": "inc_chain_demo",
+                    "mode": "fresh",
+                    "status": "TIMEOUT",
+                    "model_name": "sec-q5:latest",
+                    "started_at": "2026-11-26T10:00:00Z",
+                    "completed_at": "2026-11-26T10:02:00Z",
+                    "created_at": "2026-11-26T10:00:00Z",
+                }
+            ],
+        }
+    elif path.endswith("/ai/runs/run_chain_timeout/trace"):
+        body = {
+            "run": {
+                "analysis_run_id": "run_chain_timeout",
+                "incident_id": "inc_chain_demo",
+                "mode": "fresh",
+                "status": "TIMEOUT",
+                "model_name": "sec-q5:latest",
+                "started_at": "2026-11-26T10:00:00Z",
+                "completed_at": "2026-11-26T10:02:00Z",
+                "created_at": "2026-11-26T10:00:00Z",
+            },
+            "events": [
+                {
+                    "event_id": "tr_c1",
+                    "analysis_run_id": "run_chain_timeout",
+                    "incident_id": "inc_chain_demo",
+                    "sequence": 1,
+                    "event_type": "stage_failed",
+                    "stage": "MODEL_INFERENCE",
+                    "status": "TIMEOUT",
+                    "source_type": "AI_INFERENCE",
+                    "duration_ms": 115000,
+                    "summary": "Mô hình sec-q5:latest vượt ngưỡng thời gian chờ",
+                    "evidence_refs": [],
+                    "rule_refs": [],
+                },
+                {
+                    "event_id": "tr_c2",
+                    "analysis_run_id": "run_chain_timeout",
+                    "incident_id": "inc_chain_demo",
+                    "sequence": 2,
+                    "event_type": "stage_completed",
+                    "stage": "DETERMINISTIC_FALLBACK",
+                    "status": "COMPLETED",
+                    "source_type": "DETERMINISTIC",
+                    "duration_ms": 12,
+                    "summary": "Đã sinh kết luận dự phòng từ web_compromise_chain",
+                    "evidence_refs": ["flow1"],
+                    "rule_refs": ["web_compromise_chain"],
+                },
+            ],
+        }
+    elif path.endswith("/auth/login"):
         payload = json.loads(route.request.post_data or "{}")
         assert payload.get("username") == "soc-admin"
         assert payload.get("password") == "StrongPass123!"
@@ -329,20 +552,41 @@ def check_dashboard(base_url):
 
         page.get_by_role("button", name="🤖 Phân tích AI", exact=True).click()
         expect(page.get_by_text("Tóm tắt điều tra")).to_be_visible()
+        expect(page.get_by_test_id("decision-trace-panel")).to_be_visible()
+        expect(page.get_by_text("Sự cố này chưa có lịch sử Decision Trace")).to_be_visible()
+        page.get_by_role("button", name="Phân tích lại bằng AI").first.click()
+        expect(page.get_by_test_id("trace-stage-RISK_RULE_EXPLANATION")).to_be_visible()
+        expect(page.get_by_test_id("trace-stage-CLAIM_VERIFICATION")).to_be_visible()
+        expect(page.get_by_text("Bỏ qua EMA (Critical / Security Attack)")).to_be_visible()
+        runs_before_toggle = trace_state["run_calls"]
+        page.get_by_test_id("toggle-trace-details").click()
+        expect(page.get_by_test_id("trace-stage-RISK_RULE_EXPLANATION")).to_be_hidden()
+        assert trace_state["run_calls"] == runs_before_toggle, "Toggle must not re-run analysis"
+        page.get_by_test_id("toggle-trace-details").click()
+        expect(page.get_by_test_id("trace-stage-RISK_RULE_EXPLANATION")).to_be_visible()
+        # Reload persists trace cleanly
+        page.reload()
+        page.get_by_role("button", name="🤖 Phân tích AI", exact=True).click()
+        expect(page.get_by_text("run_demo_90")).to_be_visible()
+        page.get_by_test_id("toggle-trace-details").click()
+        expect(page.get_by_test_id("trace-stage-RISK_RULE_EXPLANATION")).to_be_visible()
         ai_text = page.locator("body").inner_text()
         assert "## " not in ai_text and "**" not in ai_text
 
-        # Verify web_compromise_chain UX (ContainmentPanel + AIAnalysisTab timeout warning)
+        # Verify web_compromise_chain UX (ContainmentPanel + AIAnalysisTab timeout warning + Timeout Fallback Trace)
         page.goto(base_url + "/incidents/inc_chain_demo")
         expect(page.get_by_text("Phát hiện xâm nhập")).to_be_visible()
         expect(page.get_by_text("Đã tương quan upload & thực thi")).to_be_visible()
-        expect(page.get_by_text("PID 154107")).to_be_visible()
-        expect(page.get_by_text("100.67.222.3:4444")).to_be_visible()
+        expect(page.get_by_text("PID 154107").first).to_be_visible()
+        expect(page.get_by_text("100.67.222.3:4444").first).to_be_visible()
         expect(page.get_by_role("button", name="Đề xuất cách ly")).to_be_visible()
         expect(page.get_by_role("button", name="Đề xuất dừng tiến trình")).to_be_visible()
 
         page.get_by_role("button", name="🤖 Phân tích AI", exact=True).click()
         expect(page.get_by_text("Mô hình AI quá thời gian chờ (timeout)")).to_be_visible()
+        page.get_by_test_id("toggle-trace-details").click()
+        expect(page.get_by_test_id("trace-timeout-fallback-banner")).to_be_visible()
+        expect(page.get_by_test_id("trace-stage-DETERMINISTIC_FALLBACK")).to_be_visible()
         chain_ai_text = page.locator("body").inner_text()
         assert "## " not in chain_ai_text and "**" not in chain_ai_text
 

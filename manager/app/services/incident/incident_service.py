@@ -172,6 +172,7 @@ class IncidentService(AbstractService[IncidentRepository]):
         factors: Dict[str, Any],
         *,
         behavior: Optional[dict] = None,
+        risk_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Incident:
         """Deduplicate active risk incidents by agent and detection source."""
         auth_alert = factors.get("brute_force")
@@ -218,6 +219,12 @@ class IncidentService(AbstractService[IncidentRepository]):
         ]}
         if behavior:
             evidence["behavior"] = behavior
+        if risk_snapshot:
+            evidence["risk_snapshot"] = {
+                **risk_snapshot,
+                "final_score": round(float(risk_score), 2),
+                "severity": severity.value if hasattr(severity, "value") else str(severity),
+            }
 
         if existing:
             previous = existing.detection_evidence or {}

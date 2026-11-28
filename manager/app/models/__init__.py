@@ -38,6 +38,7 @@ from app.models.network_snapshot import NetworkSnapshot
 from app.models.ai_cache import AIAnalysisCache, IncidentPatternCase, ThreatMemory, ThreatMemoryEvent
 from app.models.rule_conversation import RuleConversation
 from app.models.soc_auth import SocUser, SocUserAgentScope, SocRefreshSession, SocAuthAuditLog
+from app.models.decision_trace import AIAnalysisRun, AIDecisionTraceEvent
 
 __all__ = [
     "Base",
@@ -86,4 +87,6 @@ __all__ = [
     "SocUserAgentScope",
     "SocRefreshSession",
     "SocAuthAuditLog",
+    "AIAnalysisRun",
+    "AIDecisionTraceEvent",
 ]

@@ -208,31 +208,56 @@ async def get_ai_analysis(incident_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/{incident_id}/ai-analysis/regenerate/", include_in_schema=False)
 async def regenerate_ai_analysis(
     incident_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Trigger AI re-analysis asynchronously — returns immediately with status='analyzing'."""
-    # Validate incident exists (quick DB check)
     from app.models.incident import Incident
+    from app.services.ai.ai_client import ai_client
+    from app.services.ai.alert_context_projector import evidence_version
+    from app.services.ai.decision_trace import trace_broker
+
     incident = await db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
-    async def _run_ai():
-        try:
-            from app.services.ai.ai_triage_service import AITriageService
-            await AITriageService().analyze_incident(incident_id, manual=True)
-            logger.info(f"Background AI triage completed for {incident_id}")
-        except Exception as e:
-            logger.error(f"Background AI triage failed for {incident_id}: {e}", exc_info=True)
-    
-    background_tasks.add_task(_run_ai)
-    
+
+    actor = authenticated_actor(request)
+    run, reused = await trace_broker.get_or_create_run(
+        db,
+        incident_id=incident_id,
+        agent_id=incident.agent_id,
+        requested_by=actor,
+        mode="fresh",
+        model_name=ai_client.model,
+        evidence_version=evidence_version(incident),
+    )
+    await db.commit()
+
+    if not reused:
+        async def _run_ai():
+            try:
+                from app.services.ai.ai_triage_service import AITriageService
+                await AITriageService().analyze_incident(
+                    incident_id,
+                    manual=True,
+                    analysis_run_id=run.id,
+                    requested_by=actor,
+                )
+                logger.info(f"Background AI triage completed for {incident_id} run={run.id}")
+            except Exception as e:
+                logger.error(f"Background AI triage failed for {incident_id}: {e}", exc_info=True)
+
+        background_tasks.add_task(_run_ai)
+
     return {
         "status": "analyzing",
         "incident_id": incident_id,
+        "analysis_run_id": run.id,
+        "reused_active_run": reused,
+        "stream_url": f"/api/v1/ai/runs/{run.id}/stream",
         "estimated_seconds": 200,
-        "message": "AI analysis started. Poll GET /ai-analysis to retrieve result.",
+        "message": "AI analysis started. Poll GET /ai-analysis or subscribe to trace stream.",
     }
 
 

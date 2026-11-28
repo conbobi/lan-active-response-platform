@@ -14,7 +14,8 @@ import { getAIAnalysis, getIncidentTimeline, rateAIAnalysis } from '../../api/in
 import Button from '../ui/Button';
 import AISuggestionPanel from './AISuggestionPanel';
 import AnalysisSourcePanel from './AnalysisSourcePanel';
-import { runAnalysis } from '../../api/threatMemory';
+import DecisionTracePanel from './DecisionTracePanel';
+import { getRunTrace, listAnalysisRuns, runAnalysis, streamRunTrace } from '../../api/threatMemory';
 import { SafeStructuredParagraphs, parseAnalysisSections } from './SafeAnalysisContent';
 import {
   COMPLETENESS_LABELS,
@@ -57,7 +58,118 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
   const [timelineEvents, setTimelineEvents] = useState([]);
   const [assistState, setAssistState] = useState(null);
   const [selectedFactIdx, setSelectedFactIdx] = useState(null);
+  const [traceRuns, setTraceRuns] = useState([]);
+  const [activeRun, setActiveRun] = useState(null);
+  const [traceEvents, setTraceEvents] = useState([]);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceStreaming, setTraceStreaming] = useState(false);
+  const [traceExpanded, setTraceExpanded] = useState(false);
   const pollTimerRef = useRef(null);
+  const streamAbortRef = useRef(null);
+  const factCardRefs = useRef({});
+
+  const stopTraceStream = () => {
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+    setTraceStreaming(false);
+  };
+
+  const appendTraceEvent = (ev) => {
+    if (!ev || typeof ev !== 'object') return;
+    setTraceEvents((prev) => {
+      if (prev.some((item) => item.sequence === ev.sequence)) return prev;
+      return [...prev, ev].sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+    });
+    if (ev.event_type === 'analysis_started') {
+      setActiveRun((prev) => (prev ? { ...prev, status: 'RUNNING', started_at: ev.started_at || prev.started_at } : prev));
+    } else if (ev.event_type === 'analysis_completed' || ev.event_type === 'analysis_failed') {
+      const terminalStatus = ev.status === 'TIMEOUT' ? 'TIMEOUT' : ev.event_type === 'analysis_completed' ? 'COMPLETED' : (ev.status || 'FAILED');
+      setActiveRun((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: terminalStatus,
+              completed_at: ev.completed_at || prev.completed_at,
+              analysis_id: ev.safe_result?.analysis_id || prev.analysis_id,
+            }
+          : prev,
+      );
+    }
+  };
+
+  const connectRunStream = (runId, afterSequence = 0, { refreshOnDone = true } = {}) => {
+    stopTraceStream();
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    setTraceStreaming(true);
+
+    streamRunTrace(runId, {
+      afterSequence,
+      signal: controller.signal,
+      onEvent: (ev) => {
+        appendTraceEvent(ev);
+        if (ev.event_type === 'analysis_completed' || ev.event_type === 'analysis_failed') {
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+          setTraceStreaming(false);
+          setRegenerating(false);
+          if (refreshOnDone) {
+            fetchAnalysis(true);
+            getRunTrace(runId)
+              .then((res) => {
+                if (res?.run) setActiveRun(res.run);
+                if (Array.isArray(res?.events)) setTraceEvents(res.events);
+              })
+              .catch(() => {});
+            listAnalysisRuns(incidentId)
+              .then((res) => setTraceRuns(Array.isArray(res?.runs) ? res.runs : []))
+              .catch(() => {});
+          }
+          if (ev.status === 'TIMEOUT') {
+            toast('AI hết thời gian chờ — đã tạo báo cáo dự phòng xác định.', { icon: '⚠' });
+          } else if (ev.event_type === 'analysis_completed') {
+            toast.success('Đã hoàn tất phân tích AI!');
+          } else {
+            toast.error('Phiên phân tích AI không thành công');
+          }
+        }
+      },
+      onError: () => {
+        setTraceStreaming(false);
+      },
+      onClose: () => {
+        setTraceStreaming(false);
+      },
+    });
+  };
+
+  const loadRunTrace = async (runId, { autoStream = true } = {}) => {
+    if (!runId) return;
+    setTraceLoading(true);
+    try {
+      const res = await getRunTrace(runId);
+      if (res?.run) {
+        setActiveRun(res.run);
+        const evs = Array.isArray(res.events) ? res.events : [];
+        setTraceEvents(evs);
+        const isLive = res.run.status === 'CREATED' || res.run.status === 'RUNNING';
+        if (autoStream && isLive) {
+          setTraceExpanded(true);
+          setRegenerating(true);
+          const maxSeq = evs.reduce((acc, item) => Math.max(acc, item.sequence || 0), 0);
+          connectRunStream(runId, maxSeq);
+        }
+      }
+    } catch {
+      // Ignore trace load errors so analysis panel remains usable
+    } finally {
+      setTraceLoading(false);
+    }
+  };
 
   const fetchAnalysis = async (isRetry = false) => {
     try {
@@ -79,14 +191,30 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
 
   useEffect(() => {
     if (!incidentId) return undefined;
+    stopTraceStream();
+    setTraceRuns([]);
+    setActiveRun(null);
+    setTraceEvents([]);
+    setTraceExpanded(false);
     fetchAnalysis();
     getIncidentTimeline(incidentId).then((items) => setTimelineEvents(Array.isArray(items) ? items : []));
     api
       .get(`/incidents/${encodeURIComponent(incidentId)}/response-proposals`)
       .then((res) => setAssistState(res))
       .catch(() => setAssistState(null));
+    listAnalysisRuns(incidentId)
+      .then((res) => {
+        const runs = Array.isArray(res?.runs) ? res.runs : [];
+        setTraceRuns(runs);
+        const active = runs.find((r) => r.status === 'RUNNING' || r.status === 'CREATED') || runs[0];
+        if (active?.analysis_run_id) {
+          loadRunTrace(active.analysis_run_id, { autoStream: true });
+        }
+      })
+      .catch(() => {});
 
     return () => {
+      stopTraceStream();
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
@@ -99,12 +227,43 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       setRegenerating(true);
       setError(null);
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      stopTraceStream();
 
       const oldAnalysisId = analysis?.id || null;
       const startTime = Date.now();
 
-      await runAnalysis(incidentId, mode);
+      const runRes = await runAnalysis(incidentId, mode);
+      const runId = runRes?.analysis_run_id || null;
       toast(mode === 'fresh' ? 'Đang làm mới bằng AI (~2-4 phút trên CPU).' : 'Đang phân tích lại (có thể dùng mẫu đã kiểm chứng).', { icon: '⏳', duration: 5000 });
+
+      if (runId) {
+        setTraceExpanded(true);
+        setActiveRun({
+          analysis_run_id: runId,
+          incident_id: incidentId,
+          mode,
+          status: 'RUNNING',
+          started_at: new Date().toISOString(),
+        });
+        setTraceEvents([]);
+        listAnalysisRuns(incidentId)
+          .then((res) => {
+            if (Array.isArray(res?.runs)) setTraceRuns(res.runs);
+          })
+          .catch(() => {});
+        const traceSnapshot = await getRunTrace(runId).catch(() => null);
+        const existingEvs = Array.isArray(traceSnapshot?.events) ? traceSnapshot.events : [];
+        if (traceSnapshot?.run) setActiveRun(traceSnapshot.run);
+        if (existingEvs.length > 0) setTraceEvents(existingEvs);
+        const maxSeq = existingEvs.reduce((acc, item) => Math.max(acc, item.sequence || 0), 0);
+        const terminalNow = ['COMPLETED', 'FAILED', 'TIMEOUT', 'CANCELLED'].includes(traceSnapshot?.run?.status);
+        if (terminalNow) {
+          setRegenerating(false);
+          fetchAnalysis(true);
+          return;
+        }
+        connectRunStream(runId, maxSeq);
+      }
 
       let attempts = 0;
       pollTimerRef.current = setInterval(async () => {
@@ -126,11 +285,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
             pollTimerRef.current = null;
             setAnalysis(data);
             setRegenerating(false);
-            if (data.error_message || data.summary === '[AI analysis failed]') {
-              toast.error('Phân tích AI gặp sự cố — xem chi tiết bên dưới');
-            } else {
-              toast.success('Đã hoàn tất phân tích AI!');
-            }
+            if (runId) loadRunTrace(runId, { autoStream: false });
           }
         } catch {
           // 404 while running
@@ -138,6 +293,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       }, 5000);
     } catch (err) {
       setRegenerating(false);
+      stopTraceStream();
       const msg = err.response?.data?.detail || err.message || 'Lỗi khi kích hoạt phân tích AI';
       setError(msg);
       toast.error(msg);
@@ -548,6 +704,27 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
 
       <AnalysisSourcePanel incidentId={incidentId} analysisId={analysis?.id} busy={regenerating} onRun={handleRegenerate} />
 
+      <DecisionTracePanel
+        runs={traceRuns}
+        activeRun={activeRun}
+        events={traceEvents}
+        loading={traceLoading}
+        streaming={traceStreaming}
+        expanded={traceExpanded}
+        onToggleExpand={() => setTraceExpanded((prev) => !prev)}
+        onSelectRun={(selectedRunId) => loadRunTrace(selectedRunId, { autoStream: true })}
+        onSelectEvidenceRef={(eid) => {
+          const idx = observedFacts.findIndex((f) => Array.isArray(f.evidenceIds) && f.evidenceIds.includes(eid));
+          if (idx >= 0) {
+            setSelectedFactIdx(idx);
+            factCardRefs.current[idx]?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+          } else {
+            navigator.clipboard?.writeText?.(eid).catch(() => {});
+            toast(`Mã bằng chứng: ${eid}`, { icon: '🔍' });
+          }
+        }}
+      />
+
       {FALLBACK_STATUS_WARNINGS[rawMeta.status] && (
         <div
           style={{
@@ -623,6 +800,9 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
                 return (
                   <div
                     key={idx}
+                    ref={(el) => {
+                      if (el) factCardRefs.current[idx] = el;
+                    }}
                     style={{
                       padding: '0.65rem 0.8rem',
                       borderRadius: '6px',

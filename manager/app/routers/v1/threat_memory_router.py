@@ -4,11 +4,13 @@ Reads need an authenticated operator (incident reads also need the incident's Ag
 Revoking an entry: operator/admin. Marking an entry SOC-verified: admin only.
 """
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -16,8 +18,18 @@ from app.core.deps import get_db
 from app.core.network_security import authenticate_operator_request
 from app.models.ai_analysis import AIAnalysis
 from app.models.ai_cache import ThreatMemory
+from app.models.decision_trace import AIAnalysisRun
 from app.models.incident import Incident
 from app.services.ai import threat_memory as tm
+from app.services.ai.ai_client import ai_client
+from app.services.ai.alert_context_projector import evidence_version
+from app.services.ai.decision_trace import (
+    list_incident_runs,
+    load_run_trace,
+    serialize_event,
+    serialize_run,
+    trace_broker,
+)
 
 logger = logging.getLogger("larp.ai.threat_memory.api")
 router = APIRouter(prefix="/ai", tags=["AI Threat Memory"])
@@ -124,21 +136,172 @@ async def analysis_source(incident_id: str, authorization: Optional[str] = Heade
     }
 
 
+_TERMINAL_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "TIMEOUT", "CANCELLED"})
+_TERMINAL_EVENT_TYPES = frozenset({"analysis_completed", "analysis_failed"})
+_SSE_HEARTBEAT_SECONDS = 10.0
+
+
+@asynccontextmanager
+async def _short_db_session(app):
+    """Open and immediately close a short-lived DB session without holding a connection during SSE."""
+    override = getattr(app, "dependency_overrides", {}).get(get_db) if app is not None else None
+    if override is not None:
+        gen = override()
+        session = await gen.__anext__()
+        try:
+            yield session
+        finally:
+            await gen.aclose()
+    else:
+        from app.core import database as db_mod
+        async with db_mod.AsyncSessionLocal() as session:
+            yield session
+
+
+def _format_sse_event(ev: dict) -> str:
+    return f"id: {ev['sequence']}\nevent: {ev['event_type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+
 @router.post("/incidents/{incident_id}/analysis/run", status_code=202)
 async def run_analysis(incident_id: str, body: RunBody, background: BackgroundTasks,
                        authorization: Optional[str] = Header(None), db=Depends(get_db)):
     """mode=reuse: normal analysis (Threat Memory allowed). mode=fresh: bypass analysis caches, still validated."""
-    await _incident(db, incident_id, authorization)
+    incident, actor = await _incident(db, incident_id, authorization)
+    run, reused = await trace_broker.get_or_create_run(
+        db,
+        incident_id=incident_id,
+        agent_id=incident.agent_id,
+        requested_by=actor,
+        mode=body.mode,
+        model_name=ai_client.model,
+        evidence_version=evidence_version(incident),
+    )
+    await db.commit()
 
-    async def run():
-        from app.services.ai.ai_triage_service import AITriageService
+    if not reused:
+        async def run_job():
+            from app.services.ai.ai_triage_service import AITriageService
+            from app.services.ai.decision_trace import trace_run_context
+            token = trace_run_context.set((run.id, actor))
+            try:
+                await AITriageService().analyze_incident(
+                    incident_id,
+                    manual=body.mode == "fresh",
+                    use_memory=body.mode == "reuse",
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Analysis run failed incident=%s run=%s", incident_id, run.id)
+            finally:
+                trace_run_context.reset(token)
+        background.add_task(run_job)
+
+    return {
+        "status": "analyzing",
+        "mode": body.mode,
+        "analysis_run_id": run.id,
+        "reused_active_run": reused,
+        "stream_url": f"/api/v1/ai/runs/{run.id}/stream",
+    }
+
+
+@router.get("/incidents/{incident_id}/analysis/runs")
+async def list_runs(incident_id: str, limit: int = 15, authorization: Optional[str] = Header(None), db=Depends(get_db)):
+    await _incident(db, incident_id, authorization)
+    return {"incident_id": incident_id, "runs": await list_incident_runs(db, incident_id, limit=limit)}
+
+
+@router.get("/runs/{run_id}/trace")
+async def get_run_trace(run_id: str, authorization: Optional[str] = Header(None), db=Depends(get_db)):
+    run = await db.get(AIAnalysisRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Không tìm thấy phiên phân tích")
+    await _auth(db, authorization, run.agent_id)
+    payload = await load_run_trace(db, run_id)
+    if payload is None:
+        raise HTTPException(404, "Không tìm thấy phiên phân tích")
+    return payload
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_run_trace(
+    run_id: str,
+    request: Request,
+    after_sequence: Optional[int] = Query(None, ge=0),
+    last_event_id: Optional[str] = Header(None, alias="Last-Event-ID"),
+    authorization: Optional[str] = Header(None),
+):
+    if request.query_params.get("token") or request.query_params.get("access_token"):
+        raise HTTPException(400, "Không truyền token xác thực qua query string; dùng header Authorization.")
+
+    async with _short_db_session(request.app) as db:
+        run = await db.get(AIAnalysisRun, run_id)
+        if run is None:
+            raise HTTPException(404, "Không tìm thấy phiên phân tích")
+        await _auth(db, authorization, run.agent_id)
+
+    cursor = after_sequence or 0
+    if last_event_id is not None:
         try:
-            await AITriageService().analyze_incident(incident_id, manual=body.mode == "fresh",
-                                                     use_memory=body.mode == "reuse")
-        except Exception:  # noqa: BLE001
-            logger.exception("Analysis run failed incident=%s", incident_id)
-    background.add_task(run)
-    return {"status": "analyzing", "mode": body.mode}
+            cursor = max(cursor, int(last_event_id.strip()))
+        except ValueError:
+            pass
+
+    async def event_stream():
+        queue = trace_broker.subscribe(run_id)
+        last_sent = cursor
+        app = request.app
+        try:
+            async with _short_db_session(app) as session:
+                trace = await load_run_trace(session, run_id)
+            if trace is None:
+                return
+            for ev in trace["events"]:
+                if ev["sequence"] > last_sent:
+                    yield _format_sse_event(ev)
+                    last_sent = max(last_sent, ev["sequence"])
+
+            if trace["run"]["status"] in _TERMINAL_RUN_STATUSES:
+                return
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    async with _short_db_session(app) as session:
+                        check = await load_run_trace(session, run_id)
+                    if check is None:
+                        break
+                    done = False
+                    for missed in check["events"]:
+                        if missed["sequence"] > last_sent:
+                            yield _format_sse_event(missed)
+                            last_sent = max(last_sent, missed["sequence"])
+                            if missed["event_type"] in _TERMINAL_EVENT_TYPES:
+                                done = True
+                    if done or check["run"]["status"] in _TERMINAL_RUN_STATUSES:
+                        break
+                    continue
+
+                if ev.get("sequence", 0) > last_sent:
+                    yield _format_sse_event(ev)
+                    last_sent = max(last_sent, ev["sequence"])
+                if ev.get("event_type") in _TERMINAL_EVENT_TYPES:
+                    break
+        finally:
+            trace_broker.unsubscribe(run_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/incidents/{incident_id}/analysis/incorrect")

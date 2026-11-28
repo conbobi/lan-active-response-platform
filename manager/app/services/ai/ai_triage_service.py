@@ -39,6 +39,15 @@ from app.services.ai.triage_schema import (
 )
 from app.services.ai.triage_tokens import load_tokenizer, serialize_data
 from app.services.ai import threat_memory
+from app.services.ai.decision_trace import (
+    TraceRecorder,
+    extract_risk_explanation,
+    inspect_response_policy,
+    summarize_evidence_bundle,
+    trace_broker,
+    trace_run_context,
+    verify_claims,
+)
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
@@ -209,32 +218,99 @@ class _NoFlight:
 
 
 class AITriageService:
-    async def analyze_incident(self, incident_id: str, *, manual: bool = False, use_memory: bool | None = None) -> AIAnalysis | None:
+    async def analyze_incident(
+        self,
+        incident_id: str,
+        *,
+        manual: bool = False,
+        use_memory: bool | None = None,
+        analysis_run_id: str | None = None,
+        requested_by: str = "system",
+    ) -> AIAnalysis | None:
         """manual=True bypasses analysis caches (L1 and Threat Memory reuse) unless use_memory=True;
         validation of the result is never bypassed."""
         started = asyncio.get_running_loop().time()
+        ctx_run = trace_run_context.get()
+        if analysis_run_id is None and ctx_run is not None:
+            analysis_run_id, ctx_actor = ctx_run
+            if requested_by == "system" and ctx_actor:
+                requested_by = ctx_actor
+        effective_use_memory = (not manual) if use_memory is None else use_memory
+        mode = "reuse" if effective_use_memory and not manual else "fresh"
         async with asyncio.timeout_at(started + QUEUE_WAIT_SECONDS):
             async with AsyncSessionLocal() as session:
                 incident = await session.get(Incident, incident_id)
                 if incident is None:
                     return None
                 version = evidence_version(incident)
+                if analysis_run_id is None:
+                    try:
+                        run, _ = await trace_broker.get_or_create_run(
+                            session,
+                            incident_id=incident_id,
+                            agent_id=incident.agent_id,
+                            requested_by=requested_by,
+                            mode=mode,
+                            model_name=ai_client.model,
+                            evidence_version=version,
+                        )
+                        await session.commit()
+                        analysis_run_id = run.id
+                    except Exception:
+                        logger.debug("Could not initialize AIAnalysisRun for %s", incident_id, exc_info=True)
+                        analysis_run_id = None
         task = triage_queue.submit(
             (incident_id, version),
-            lambda slot: self._run(incident_id, version, manual, started, slot,
-                                   use_memory=(not manual) if use_memory is None else use_memory),
+            lambda slot: self._run(
+                incident_id,
+                version,
+                manual,
+                started,
+                slot,
+                use_memory=effective_use_memory,
+                analysis_run_id=analysis_run_id,
+            ),
         )
         if task is None:
+            if analysis_run_id:
+                rec = TraceRecorder(run_id=analysis_run_id, incident_id=incident_id, session_factory=AsyncSessionLocal)
+                async with asyncio.timeout(PERSIST_RESERVE_SECONDS):
+                    row = await self._save(incident_id, version, None, None, "queue_saturated")
+                    await rec.fail_run(
+                        status="FAILED",
+                        stage="MODEL_INFERENCE",
+                        error_code="QUEUE_SATURATED",
+                        error_message="Hàng đợi suy luận AI đang đầy; đã lưu kết quả fallback.",
+                        analysis_id=getattr(row, "id", None),
+                    )
+                    return row
             async with asyncio.timeout(PERSIST_RESERVE_SECONDS):
                 return await self._save(incident_id, version, None, None, "queue_saturated")
         return await asyncio.shield(task)
 
-    async def _run(self, incident_id, version, manual, started, slot, use_memory=True):
+    async def _run(
+        self,
+        incident_id,
+        version,
+        manual,
+        started,
+        slot,
+        use_memory=True,
+        analysis_run_id: str | None = None,
+    ):
         context, verdict, decision = None, None, None
         status = "ok"
         acquired = False
         fp, memory, source, memory_id, llm_ms = None, None, None, None, None
         model_name, prompt_version = memory_versions()
+        run_mode = "reuse" if use_memory and not manual else "fresh"
+        recorder = (
+            TraceRecorder(run_id=analysis_run_id, incident_id=incident_id, session_factory=AsyncSessionLocal)
+            if analysis_run_id
+            else None
+        )
+        incident_ref: Incident | None = None
+        verification_result: dict | None = None
         try:
             async with asyncio.timeout_at(started + QUEUE_WAIT_SECONDS):
                 await slot.acquire()
@@ -244,10 +320,105 @@ class AITriageService:
                 async with AsyncSessionLocal() as session:
                     incident = await session.get(Incident, incident_id)
                     if incident is None:
+                        if recorder:
+                            await recorder.fail_run(
+                                status="FAILED",
+                                stage="INCIDENT_LOADED",
+                                error_code="INCIDENT_NOT_FOUND",
+                                error_message=f"Không tìm thấy incident {incident_id}",
+                            )
                         return None
+                    incident_ref = incident
+                    if recorder:
+                        await recorder.start_run(
+                            agent_id=incident.agent_id,
+                            model_name=ai_client.model,
+                            evidence_version=version,
+                            mode=run_mode,
+                            summary=f"Bắt đầu phân tích sự cố {incident.id} trên agent {incident.agent_id} (risk {incident.risk_score}/100)",
+                        )
+                        await recorder.complete_stage(
+                            "INCIDENT_LOADED",
+                            summary=f"Đã tải sự cố {incident.id} ({getattr(incident.severity, 'value', incident.severity)}, điểm {incident.risk_score}/100).",
+                            source_type="MANAGER_STORE",
+                            evidence_refs=[incident.id],
+                            safe_result={
+                                "incident_id": incident.id,
+                                "agent_id": incident.agent_id,
+                                "risk_score": incident.risk_score,
+                                "severity": getattr(incident.severity, "value", str(incident.severity)),
+                                "status": getattr(incident.status, "value", str(incident.status)),
+                                "evidence_version": version,
+                            },
+                        )
                     if evidence_version(incident) == version:
+                        if recorder:
+                            await recorder.start_stage(
+                                "EVIDENCE_RETRIEVAL",
+                                summary="Đang truy xuất telemetry HTTP, Auth, tiến trình, flow mạng và ghi chú liên quan.",
+                                source_type="ENDPOINT_AGENT",
+                            )
                         context = await load_alert_context(session, incident)
                         await enrich_rule_mapping(session, context)
+                        ev_summary = summarize_evidence_bundle(incident, context)
+                        if recorder:
+                            await recorder.complete_stage(
+                                "EVIDENCE_RETRIEVAL",
+                                summary=(
+                                    f"Đã thu thập bằng chứng ({ev_summary['counts']['http_events']} HTTP, "
+                                    f"{ev_summary['counts']['auth_events']} Auth, {ev_summary['counts']['processes']} process, "
+                                    f"{ev_summary['counts']['network_flows']} flow mạng)."
+                                ),
+                                source_type="ENDPOINT_AGENT",
+                                evidence_refs=ev_summary["evidence_ids"],
+                                safe_result={
+                                    "counts": ev_summary["counts"],
+                                    "provenance": ev_summary["provenance"],
+                                    "missing_data": ev_summary["missing_data"],
+                                    "evidence_version": version,
+                                },
+                            )
+                            await recorder.start_stage(
+                                "RISK_RULE_EXPLANATION",
+                                summary="Đang đối chiếu phân rã điểm rủi ro và ngưỡng cảnh báo theo từng rule.",
+                                source_type="DETERMINISTIC",
+                            )
+                        risk_exp = await extract_risk_explanation(session, incident)
+                        if recorder:
+                            risk_ev_refs = [
+                                eid
+                                for rb in risk_exp.get("rule_breakdown") or []
+                                for eid in (rb.get("evidence_ids") or [])
+                            ][:20]
+                            await recorder.complete_stage(
+                                "RISK_RULE_EXPLANATION",
+                                summary=risk_exp.get("message") or "Đã tổng hợp dữ liệu phân rã điểm rủi ro.",
+                                source_type="DETERMINISTIC",
+                                rule_refs=risk_exp.get("matched_rule_ids") or [],
+                                evidence_refs=risk_ev_refs,
+                                safe_result=risk_exp,
+                            )
+                            corr = ev_summary["correlation"]
+                            if corr["process_count"] == 0 and corr["network_count"] == 0 and not corr["has_web_compromise_chain"]:
+                                await recorder.skip_stage(
+                                    "PROCESS_NETWORK_CORRELATION",
+                                    reason="Không có telemetry tiến trình hoặc kết nối mạng cho sự cố này; bỏ qua liên kết PID/socket.",
+                                    source_type="ENDPOINT_AGENT",
+                                    safe_result=corr,
+                                )
+                            else:
+                                await recorder.start_stage(
+                                    "PROCESS_NETWORK_CORRELATION",
+                                    summary="Đang kiểm tra liên kết giữa request web, tiến trình và flow mạng.",
+                                    source_type="ENDPOINT_AGENT",
+                                )
+                                await recorder.complete_stage(
+                                    "PROCESS_NETWORK_CORRELATION",
+                                    summary=corr["note"],
+                                    source_type="ENDPOINT_AGENT",
+                                    evidence_refs=ev_summary["evidence_ids"],
+                                    safe_result=corr,
+                                )
                         try:
                             fp = threat_memory.build_fingerprint(incident, context)
                         except Exception:  # noqa: BLE001 - memory is optional
@@ -258,12 +429,31 @@ class AITriageService:
                 decision = route_triage(context, manual=manual)
                 if decision.route == Route.SKIP_LLM:
                     status = "deterministic"
+                    if recorder:
+                        await recorder.skip_stage(
+                            "CACHE_LOOKUP",
+                            reason="Sự cố dùng lộ trình deterministic (SKIP_LLM), không tra cứu cache LLM.",
+                            source_type="MANAGER_STORE",
+                            safe_result={"route": "SKIP_LLM"},
+                        )
+                        await recorder.skip_stage(
+                            "MODEL_INFERENCE",
+                            reason="Lộ trình deterministic (SKIP_LLM), không gọi mô hình LLM.",
+                            source_type="AI_INFERENCE",
+                            safe_result={"route": "SKIP_LLM"},
+                        )
                 else:
                     async with asyncio.timeout_at(
                         started + decision.deadline_seconds - PERSIST_RESERVE_SECONDS
                     ):
                         flight = threat_memory.single_flight(fp.value) if fp else _NoFlight()
                         async with flight:
+                            if recorder:
+                                await recorder.start_stage(
+                                    "CACHE_LOOKUP",
+                                    summary="Đang kiểm tra Threat Memory và bộ nhớ đệm theo fingerprint bằng chứng.",
+                                    source_type="MANAGER_STORE",
+                                )
                             if fp is not None:
                                 memory = await threat_memory.lookup(
                                     AsyncSessionLocal, fp, model_name=model_name, prompt_version=prompt_version,
@@ -272,34 +462,206 @@ class AITriageService:
                                 verdict = self._reuse(memory, fp, context)
                                 if verdict is not None:
                                     source, memory_id = threat_memory.EXACT, memory.entry["id"]
+                                    if recorder:
+                                        await recorder.complete_stage(
+                                            "CACHE_LOOKUP",
+                                            summary=(
+                                                f"Khớp Threat Memory ({memory.entry.get('attack_pattern') or memory.entry.get('id')}); "
+                                                "tái sử dụng kết luận sau khi xác nhận khớp bằng chứng."
+                                            ),
+                                            source_type="MANAGER_STORE",
+                                            evidence_refs=verdict.evidence_ids,
+                                            safe_result={
+                                                "cache_hit": True,
+                                                "source": "EXACT",
+                                                "memory_id": memory.entry.get("id"),
+                                                "fingerprint": fp.short if fp else None,
+                                                "lookup_ms": memory.lookup_ms,
+                                            },
+                                        )
+                                        await recorder.skip_stage(
+                                            "MODEL_INFERENCE",
+                                            reason="Tái sử dụng kết luận hợp lệ từ Threat Memory (EXACT); bỏ qua gọi Ollama.",
+                                            source_type="AI_INFERENCE",
+                                            safe_result={"skipped_due_to": "threat_memory_exact_hit"},
+                                        )
                             if verdict is None:
+                                if recorder:
+                                    miss_summary = (
+                                        "Bỏ qua tái sử dụng bộ nhớ cũ do chạy chế độ phân tích mới (fresh)."
+                                        if not use_memory
+                                        else (
+                                            f"Chưa có mẫu khớp chính xác ({memory.reason}); đính kèm {len(memory.similar)} ca tương tự tham khảo."
+                                            if memory
+                                            else "Không có mẫu khớp chính xác trong Threat Memory."
+                                        )
+                                    )
+                                    await recorder.complete_stage(
+                                        "CACHE_LOOKUP",
+                                        summary=miss_summary,
+                                        source_type="MANAGER_STORE",
+                                        safe_result={
+                                            "cache_hit": False,
+                                            "source": memory.source if memory else "miss",
+                                            "similar_count": len(memory.similar) if memory else 0,
+                                            "cache_reason": memory.reason if memory else None,
+                                            "lookup_ms": memory.lookup_ms if memory else None,
+                                        },
+                                    )
                                 extra = threat_memory.references_for(memory.similar) if memory and memory.similar else []
+                                if recorder:
+                                    await recorder.start_stage(
+                                        "MODEL_INFERENCE",
+                                        summary=f"Đang gọi mô hình {ai_client.model} suy luận theo schema JSON có kiểm soát.",
+                                        source_type="AI_INFERENCE",
+                                        evidence_refs=sorted(str(k) for k in context.by_id.keys())[:25],
+                                        safe_result={"model": ai_client.model, "route": decision.route.value, "similar_refs": len(extra)},
+                                    )
                                 llm_started = monotonic()
-                                verdict = await self._infer(context, decision.route, manual=manual or not use_memory,
-                                                            subject=incident_id, extra_references=extra)
+                                verdict = await self._infer(
+                                    context,
+                                    decision.route,
+                                    manual=manual or not use_memory,
+                                    subject=incident_id,
+                                    extra_references=extra,
+                                    recorder=recorder,
+                                )
                                 llm_ms = round((monotonic() - llm_started) * 1000, 1)
                                 source = threat_memory.SEMANTIC if extra else threat_memory.FRESH
                                 memory_id = await self._learn(fp, verdict, incident_id, model_name, prompt_version)
+                                if recorder:
+                                    tech_ids = [
+                                        t["id"] if isinstance(t, dict) else getattr(t, "id", str(t))
+                                        for t in (getattr(verdict, "techniques", None) or [])
+                                    ]
+                                    await recorder.complete_stage(
+                                        "MODEL_INFERENCE",
+                                        summary=(
+                                            f"Mô hình {ai_client.model} trả về phân loại {verdict.classification} "
+                                            f"(độ tin cậy {int(round(verdict.confidence * 100))}%)."
+                                        ),
+                                        source_type="AI_INFERENCE",
+                                        evidence_refs=verdict.evidence_ids,
+                                        rule_refs=tech_ids,
+                                        safe_result={
+                                            "model": ai_client.model,
+                                            "llm_ms": llm_ms,
+                                            "classification": verdict.classification,
+                                            "confidence": verdict.confidence,
+                                            "source": source,
+                                            "learned_memory_id": memory_id,
+                                        },
+                                    )
                     if decision.shadow_candidate:
                         baseline = fallback_verdict(context)
                         logger.info(
                             "Triage shadow incident=%s ai=%s deterministic=%s",
                             incident_id, verdict.classification, baseline.classification,
                         )
+        except asyncio.CancelledError:
+            if acquired:
+                slot.release()
+                acquired = False
+            if recorder:
+                await recorder.fail_run(
+                    status="CANCELLED",
+                    stage="MODEL_INFERENCE",
+                    error_code="CANCELLED",
+                    error_message="Phiên phân tích AI đã bị hủy.",
+                )
+            raise
         except (TimeoutError, httpx.TimeoutException):
             status = "timeout"
+            if recorder:
+                await recorder.fail_stage(
+                    "MODEL_INFERENCE",
+                    status="TIMEOUT",
+                    error_code="OLLAMA_TIMEOUT",
+                    source_type="AI_INFERENCE",
+                    summary=f"Mô hình {ai_client.model} vượt ngưỡng thời gian chờ; chuyển sang bước fallback xác định.",
+                    safe_result={"timeout_seconds": decision.deadline_seconds if decision else 120},
+                )
         except VerdictSchemaError:
             status = "schema_invalid"
+            if recorder:
+                await recorder.fail_stage(
+                    "MODEL_INFERENCE",
+                    status="FAILED",
+                    error_code="SCHEMA_INVALID",
+                    source_type="AI_INFERENCE",
+                    summary="Đầu ra từ mô hình không khớp schema hoặc tham chiếu ID ngoài ngữ cảnh; dùng fallback xác định.",
+                )
         except PromptBudgetError:
             status = "budget_exceeded"
+            if recorder:
+                await recorder.fail_stage(
+                    "MODEL_INFERENCE",
+                    status="FAILED",
+                    error_code="PROMPT_BUDGET_EXCEEDED",
+                    source_type="AI_INFERENCE",
+                    summary="Bằng chứng vượt giới hạn token prompt an toàn; chuyển sang fallback xác định.",
+                )
         except (httpx.HTTPError, ValueError, OSError) as exc:
             logger.warning("Triage model error incident=%s error_type=%s", incident_id, type(exc).__name__)
             status = "model_error"
+            if recorder:
+                await recorder.fail_stage(
+                    "MODEL_INFERENCE",
+                    status="FAILED",
+                    error_code=type(exc).__name__.upper(),
+                    source_type="AI_INFERENCE",
+                    summary=f"Không thể hoàn tất gọi mô hình ({type(exc).__name__}); chuyển sang fallback xác định.",
+                )
         finally:
             if acquired:
                 slot.release()
+
         if status != "ok" or source is None:
             source = threat_memory.FALLBACK
+
+        if verdict is None and context is not None:
+            if recorder:
+                await recorder.start_stage(
+                    "DETERMINISTIC_FALLBACK",
+                    summary="Đang tổng hợp kết luận fallback xác định trực tiếp từ bằng chứng telemetry.",
+                    source_type="DETERMINISTIC",
+                )
+            verdict = fallback_verdict(context)
+            if recorder:
+                await recorder.complete_stage(
+                    "DETERMINISTIC_FALLBACK",
+                    summary=(
+                        f"Đã tạo kết luận fallback xác định: {verdict.classification} "
+                        f"(tin cậy {int(round(verdict.confidence * 100))}%)."
+                    ),
+                    source_type="DETERMINISTIC",
+                    evidence_refs=verdict.evidence_ids,
+                    rule_refs=[t["id"] if isinstance(t, dict) else getattr(t, "id", str(t)) for t in (getattr(verdict, "techniques", None) or [])],
+                    safe_result={
+                        "reason_status": status,
+                        "classification": verdict.classification,
+                        "confidence": verdict.confidence,
+                    },
+                )
+
+        if recorder and incident_ref is not None and context is not None and verdict is not None:
+            await recorder.start_stage(
+                "CLAIM_VERIFICATION",
+                summary="Đang kiểm chứng 6 tiêu chí về bằng chứng, mốc thời gian, phạm vi agent và đặc quyền thực thi.",
+                source_type="DETERMINISTIC",
+            )
+            verification_result = verify_claims(incident_ref, context, verdict)
+            await recorder.complete_stage(
+                "CLAIM_VERIFICATION",
+                summary=(
+                    f"Hoàn tất kiểm chứng {len(verification_result['checks'])} tiêu chí "
+                    f"({'đạt toàn bộ' if verification_result['passed'] else 'có cảnh báo cần kiểm tra'})."
+                ),
+                source_type="DETERMINISTIC",
+                evidence_refs=verdict.evidence_ids,
+                safe_result=verification_result,
+            )
+
         total_ms = round((asyncio.get_running_loop().time() - started) * 1000, 1)
         info = self._source_info(source, memory, memory_id, llm_ms, total_ms)
         if memory is not None:
@@ -308,13 +670,85 @@ class AITriageService:
         deadline = started + (decision.deadline_seconds if decision else 120)
         try:
             async with asyncio.timeout_at(deadline):
+                if recorder:
+                    await recorder.start_stage(
+                        "ANALYSIS_PERSISTENCE",
+                        summary="Đang lưu bản ghi phân tích AI vào PostgreSQL.",
+                        source_type="MANAGER_STORE",
+                    )
                 row = await self._save(incident_id, version, context, verdict, status, source_info=info)
+                if recorder:
+                    await recorder.complete_stage(
+                        "ANALYSIS_PERSISTENCE",
+                        summary=f"Đã lưu phân tích AI ({getattr(row, 'id', 'N/A')}) vào cơ sở dữ liệu.",
+                        source_type="MANAGER_STORE",
+                        safe_result={
+                            "analysis_id": getattr(row, "id", None),
+                            "status": status,
+                            "analysis_source": info.get("analysis_source"),
+                        },
+                    )
+                    await recorder.start_stage(
+                        "RESPONSE_RECOMMENDATION",
+                        summary="Đang đối chiếu Response Policy và mục tiêu IP ứng viên ở chế độ chỉ đọc.",
+                        source_type="DETERMINISTIC",
+                    )
+                    async with AsyncSessionLocal() as pol_session:
+                        fresh_inc = await pol_session.get(Incident, incident_id)
+                        pol_info = (
+                            await inspect_response_policy(pol_session, fresh_inc)
+                            if fresh_inc is not None
+                            else {"read_only": True, "auto_executed": False, "matching_policies": [], "ip_candidates": [], "summary": "Không tìm thấy sự cố."}
+                        )
+                    await recorder.complete_stage(
+                        "RESPONSE_RECOMMENDATION",
+                        summary=pol_info["summary"],
+                        source_type="DETERMINISTIC",
+                        safe_result=pol_info,
+                    )
+                    if status == "timeout":
+                        await recorder.fail_run(
+                            status="TIMEOUT",
+                            stage="MODEL_INFERENCE",
+                            error_code="OLLAMA_TIMEOUT",
+                            error_message="Mô hình Ollama vượt thời gian phản hồi; đã lưu kết quả fallback xác định.",
+                            summary="Hết thời gian gọi AI — đã hoàn tất bằng kết quả fallback xác định.",
+                            analysis_id=getattr(row, "id", None),
+                        )
+                    else:
+                        await recorder.complete_run(
+                            analysis_id=getattr(row, "id", None),
+                            evidence_version=version,
+                            model_name=getattr(row, "model_name", None) or ai_client.model,
+                            summary=f"Hoàn tất phân tích sự cố {incident_id} (nguồn: {info.get('analysis_source')}).",
+                            safe_result={
+                                "analysis_source": info.get("analysis_source"),
+                                "triage_status": status,
+                                "verification_passed": verification_result.get("passed") if verification_result else None,
+                            },
+                        )
             if row is not None and json.loads(row.raw_response or "{}").get("status") == "evidence_changed":
                 self._schedule_rerun(incident_id)
             return row
         except TimeoutError:
             logger.error("Triage DB write deadline exceeded incident=%s", incident_id)
+            if recorder:
+                await recorder.fail_run(
+                    status="TIMEOUT",
+                    stage="ANALYSIS_PERSISTENCE",
+                    error_code="PERSIST_TIMEOUT",
+                    error_message="Quá hạn ghi kết quả phân tích vào cơ sở dữ liệu.",
+                )
             return None
+        except Exception as exc:
+            if recorder:
+                await recorder.fail_run(
+                    status="FAILED",
+                    stage="ANALYSIS_PERSISTENCE",
+                    error_code=type(exc).__name__.upper(),
+                    error_message="Lỗi khi hoàn tất phiên phân tích.",
+                )
+            raise
 
     _reruns: dict = {}
 
@@ -374,7 +808,7 @@ class AITriageService:
         }
 
     async def _infer(self, context, route, *, settings=TRIAGE_SETTINGS, tokenizer=None, references=None, manual=False,
-                     subject=None, extra_references=()):
+                     subject=None, extra_references=(), recorder=None):
         tokenizer = tokenizer or await asyncio.to_thread(load_tokenizer)
         if references is None:
             retrieval_start = monotonic()
@@ -388,11 +822,22 @@ class AITriageService:
             assessment = await self._request(
                 context, tokenizer, EvidenceAssessment, ASSESSMENT_PROMPT, settings, is_complex, manual=manual, subject=subject,
             )
+            if recorder and assessment is not None:
+                await recorder.emit_answer_delta(
+                    f"Đánh giá giai đoạn 1: {len(getattr(assessment, 'relevant_evidence_ids', []) or getattr(assessment, 'evidence_ids', []) or [])} bằng chứng trọng yếu.",
+                    safe_result={"phase": "assessment"},
+                )
         output = await self._request(
             context, tokenizer, TriageVerdict, SYSTEM_PROMPT, settings, is_complex,
             references=references, assessment=assessment, manual=manual, subject=subject,
         )
-        return validate_verdict(output, context)
+        validated = validate_verdict(output, context)
+        if recorder and validated is not None:
+            await recorder.emit_answer_delta(
+                f"Phân loại từ mô hình: {validated.classification} ({int(round(validated.confidence * 100))}%), trích dẫn {len(validated.evidence_ids)} bằng chứng.",
+                safe_result={"phase": "verdict", "classification": validated.classification, "confidence": validated.confidence},
+            )
+        return validated
 
     async def _request(
         self, context, tokenizer, schema, system, settings, complex_case, *, references=(), assessment=None,

@@ -211,12 +211,15 @@ class RiskAssessmentService:
 
         rule_scores: Dict[str, float] = {}
         factors: Dict[str, Any] = {}
+        rule_breakdown: List[Dict[str, Any]] = []
+        self._last_rule_breakdown = rule_breakdown
         agent_counters = self._rule_hit_counter.setdefault(agent_id, {})
 
         # Evaluate each enabled rule in registry
         for rule in self.registry.get_enabled_rules():
             try:
                 rule_score, reason = await rule.evaluate(telemetry, context)
+                weight = float(getattr(rule, "weight", 1.0))
                 if rule_score > 0:
                     # Apply debounce if rule belongs to anomaly/behavioral category
                     if rule.rule_id in ANOMALY_RULES:
@@ -225,7 +228,7 @@ class RiskAssessmentService:
                     else:
                         debounced_score = rule_score
 
-                    weighted_score = max(0.0, debounced_score * getattr(rule, "weight", 1.0))
+                    weighted_score = max(0.0, debounced_score * weight)
                     if rule.rule_id == "c2_communication":
                         weighted_score = min(weighted_score, 20.0)
                     if rule.rule_id == "network_connection":
@@ -233,6 +236,23 @@ class RiskAssessmentService:
                         weighted_score = min(weighted_score, limit)
                     rule_scores[rule.rule_id] = weighted_score
                     factors[rule.rule_id] = reason
+                    rule_ev_ids: List[str] = []
+                    for _, ev in context.get("behavior_findings", {}).get(rule.rule_id, ()):
+                        for eid in (ev.get("source_event_ids") or []):
+                            if eid and eid not in rule_ev_ids:
+                                rule_ev_ids.append(str(eid))
+                        if ev.get("evidence_id") and str(ev["evidence_id"]) not in rule_ev_ids:
+                            rule_ev_ids.append(str(ev["evidence_id"]))
+                    rule_breakdown.append({
+                        "rule_id": rule.rule_id,
+                        "matched": True,
+                        "raw_score": round(float(rule_score), 2),
+                        "debounced_score": round(float(debounced_score), 2),
+                        "weight": round(weight, 4),
+                        "weighted_contribution": round(float(weighted_score), 2),
+                        "evidence_ids": rule_ev_ids[:15],
+                        "reason": str(reason or ""),
+                    })
                     can_publish = (
                         (rule.rule_id == "brute_force" and auth_history_before is not None)
                         or (rule.rule_id == "web_attack" and trusted_web)
@@ -246,6 +266,16 @@ class RiskAssessmentService:
                     logger.info(f"[EVALUATE] Agent {agent_id} - Rule {rule.rule_id}: raw={rule_score}, debounced={debounced_score}, weighted={weighted_score}")
                 else:
                     agent_counters.pop(rule.rule_id, None)
+                    rule_breakdown.append({
+                        "rule_id": rule.rule_id,
+                        "matched": False,
+                        "raw_score": 0.0,
+                        "debounced_score": 0.0,
+                        "weight": round(weight, 4),
+                        "weighted_contribution": 0.0,
+                        "evidence_ids": [],
+                        "reason": "",
+                    })
             except Exception as exc:
                 logger.error(f"Error evaluating rule '{rule.rule_id}' for agent {agent_id}: {exc}", exc_info=True)
 
@@ -253,8 +283,19 @@ class RiskAssessmentService:
             best = max((evidence for _, evidence in shell_evidence), key=lambda item: item["risk_score"])
             rule_scores[NETWORK_SHELL_RULE_ID] = best["risk_score"]
             factors[NETWORK_SHELL_RULE_ID] = best["classification"]
+            rule_breakdown.append({
+                "rule_id": NETWORK_SHELL_RULE_ID,
+                "matched": True,
+                "raw_score": round(float(best["risk_score"]), 2),
+                "debounced_score": round(float(best["risk_score"]), 2),
+                "weight": 1.0,
+                "weighted_contribution": round(float(best["risk_score"]), 2),
+                "evidence_ids": [str(best["evidence_id"])] if best.get("evidence_id") else [],
+                "reason": str(best.get("classification") or ""),
+            })
 
         self._matched_processes = context.get("matched_processes", {})
+        self._last_rule_breakdown = rule_breakdown
         final_score = min(100.0, apply_category_cap(rule_scores))
         if rule_scores:
             factors["_scores"] = {rule_id: round(score, 2) for rule_id, score in rule_scores.items()}
@@ -405,6 +446,26 @@ class RiskAssessmentService:
         # Fetch thresholds
         thresholds = await self.setting_service.get_risk_thresholds()
         incident_creation_th = thresholds.get("incident_creation_threshold", 50.0)
+        security_attack_bypass = bool(raw_score >= CRITICAL_BYPASS_THRESHOLD or (has_security_attack and raw_score >= 50.0))
+        ema_applied = not security_attack_bypass and prev_smoothed is not None
+        risk_snapshot: Dict[str, Any] = {
+            "source": "risk_assessment_service",
+            "raw_score": round(float(raw_score), 2),
+            "smoothed_score": round(float(smoothed), 2),
+            "previous_smoothed": round(float(prev_smoothed), 2) if prev_smoothed is not None else None,
+            "ema_applied": ema_applied,
+            "security_attack_bypass": security_attack_bypass,
+            "has_security_attack": bool(has_security_attack),
+            "thresholds": {
+                "alert": float(thresholds.get("alert", 30.0)),
+                "incident_creation_threshold": float(incident_creation_th),
+                "critical_bypass_threshold": float(CRITICAL_BYPASS_THRESHOLD),
+                "severity_high": 70.0,
+                "severity_critical": 85.0,
+            },
+            "rule_breakdown": list(getattr(self, "_last_rule_breakdown", []) or []),
+        }
+        self._last_risk_snapshot = risk_snapshot
         # The Rule Engine owns incidents for correlated socket sessions.
         incident_score = smoothed
         if NETWORK_SHELL_RULE_ID in factors:
@@ -419,10 +480,17 @@ class RiskAssessmentService:
                 reason = f"{evidence['classification']} from {evidence.get('source_ip') or 'multiple sources'}"
                 if evidence["evidence_type"] == "authentication":
                     reason += f" with {evidence['failed_attempts']} recorded failures"
+                finding_snapshot = {
+                    **risk_snapshot,
+                    "raw_score": round(float(score), 2),
+                    "smoothed_score": round(float(score), 2),
+                    "ema_applied": False,
+                }
                 incident = await incident_service.create_from_risk(
                     agent_id, score,
                     {key: reason, "_scores": {key: score}, "total_score": score},
                     behavior=evidence,
+                    risk_snapshot=finding_snapshot,
                 )
                 if getattr(record, "incident", None) is None:
                     record.incident = incident
@@ -445,7 +513,9 @@ class RiskAssessmentService:
                 logger.info("Process chain factor for agent %s attributed to chain incident %s; remaining score %.1f",
                             agent_id, owner.id, incident_score)
             if incident_score >= incident_creation_th:
-                record.incident = await incident_service.create_from_risk(agent_id, incident_score, incident_factors)
+                record.incident = await incident_service.create_from_risk(
+                    agent_id, incident_score, incident_factors, risk_snapshot=risk_snapshot
+                )
 
         # Telemetry records proposed policy actions in dry-run mode.
         if action != "log":
