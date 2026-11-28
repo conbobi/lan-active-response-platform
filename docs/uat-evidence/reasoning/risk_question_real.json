@@ -1,0 +1,936 @@
+{
+  "run": {
+    "analysis_run_id": "run_3e7e56618ba34d26",
+    "run_id": "run_3e7e56618ba34d26",
+    "task_type": "risk_question",
+    "actor": "reader",
+    "subject_id": null,
+    "question": "Vì sao incident này có risk score 55?",
+    "current_stage": "RESULT_SYNTHESIS",
+    "current_phase": "RESULT_SYNTHESIS",
+    "stage_status": "COMPLETED",
+    "result": {
+      "task_type": "risk_question",
+      "question": "Vì sao incident này có risk score 55?",
+      "conclusion": "Sự cố này có risk score 75.0 theo Detection Engine, không phải 55. Điều này được xác nhận bởi F1 và F2. F3 cho thấy đóng góp +75 điểm từ tấn công SQLi probe, nhưng F4 chỉ ra rằng không có tiến trình hoặc kết nối mạng được ghi nhận trong cửa sổ sự cố. F5 và F6 đều không tìm thấy bằng chứng về tiến trình hoặc kết nối mạng. Do đó, có thể sự cố này chỉ là quét hoặc thử payload không thành công, không phải tấn công thật.",
+      "conclusion_source": "AI_INFERENCE",
+      "risk_score": {
+        "value": 75.0,
+        "severity": "high",
+        "source": "DETECTION_ENGINE",
+        "breakdown_source": "risk_assessment_service"
+      },
+      "observed_facts": [
+        {
+          "fact_id": "F1",
+          "statement": "Detection Engine ghi nhận risk score 75.0/100, mức high.",
+          "certainty": "OBSERVED",
+          "evidence_ids": [
+            "inc_q"
+          ],
+          "source_type": "MANAGER_STORE"
+        },
+        {
+          "fact_id": "F2",
+          "statement": "Câu hỏi nêu điểm 55, nhưng điểm Detection Engine lưu cho sự cố này là 75.0.",
+          "certainty": "OBSERVED",
+          "evidence_ids": [
+            "inc_q"
+          ],
+          "source_type": "MANAGER_STORE"
+        },
+        {
+          "fact_id": "F3",
+          "statement": "Rule Web attack đóng góp +75 điểm: SQLi probe on /login.",
+          "certainty": "OBSERVED",
+          "evidence_ids": [
+            "web_inc_q"
+          ],
+          "source_type": "DETERMINISTIC"
+        },
+        {
+          "fact_id": "F4",
+          "statement": "Đối chiếu phân rã: Tấn công bảo mật nên bỏ qua EMA: điểm cuối bằng điểm gốc.",
+          "certainty": "OBSERVED",
+          "evidence_ids": [
+            "inc_q"
+          ],
+          "source_type": "DETERMINISTIC"
+        },
+        {
+          "fact_id": "F5",
+          "statement": "Bằng chứng trong cửa sổ sự cố: 1 HTTP, 0 xác thực, 0 tiến trình, 0 kết nối mạng.",
+          "certainty": "OBSERVED",
+          "evidence_ids": [
+            "F1",
+            "F2",
+            "ev_inc_q",
+            "web_inc_q"
+          ],
+          "source_type": "ENDPOINT_AGENT"
+        },
+        {
+          "fact_id": "F6",
+          "statement": "Không tìm thấy tiến trình hoặc kết nối mạng tương ứng trong khoảng thời gian sự cố; không tự suy đoán PID hay shell.",
+          "certainty": "UNKNOWN",
+          "evidence_ids": [
+            "F1",
+            "F2",
+            "ev_inc_q",
+            "web_inc_q"
+          ],
+          "source_type": "ENDPOINT_AGENT"
+        }
+      ],
+      "evidence_ids": [
+        "F1",
+        "F2",
+        "ev_inc_q",
+        "inc_q",
+        "web_inc_q"
+      ],
+      "matched_rules": [
+        {
+          "rule_id": "web_attack",
+          "label": "Web attack",
+          "contribution": 75.0,
+          "reason": "SQLi probe on /login",
+          "evidence_ids": [
+            "web_inc_q"
+          ]
+        }
+      ],
+      "alternative_explanations": [
+        {
+          "alt_id": "A1",
+          "explanation": "Có thể chỉ là quét hoặc thử payload không thành công.",
+          "certainty": "INFERRED",
+          "basis": "Có request HTTP nhưng không có tiến trình con nào được ghi nhận trong cửa sổ sự cố.",
+          "evidence_ids": [
+            "F1",
+            "F2",
+            "ev_inc_q",
+            "web_inc_q"
+          ]
+        },
+        {
+          "alt_id": "A2",
+          "explanation": "Hoạt động kiểm thử bảo mật được phép.",
+          "certainty": "UNKNOWN",
+          "basis": "Telemetry không phân biệt kiểm thử được phép với tấn công thật; cần xác nhận với người vận hành.",
+          "evidence_ids": []
+        }
+      ],
+      "missing_evidence": [
+        "Telemetry tiến trình trong cửa sổ sự cố",
+        "Kết nối mạng gắn với tiến trình"
+      ],
+      "validation_results": [
+        {
+          "check_id": "schema",
+          "label": "Đúng schema JSON",
+          "passed": true,
+          "detail": "Có đủ các trường bắt buộc."
+        },
+        {
+          "check_id": "fact_ids_exist",
+          "label": "Chỉ trích dẫn dữ kiện có thật",
+          "passed": true,
+          "detail": "Trích dẫn 6 dữ kiện hợp lệ."
+        },
+        {
+          "check_id": "score_from_engine",
+          "label": "Điểm khớp Detection Engine",
+          "passed": true,
+          "detail": "Mọi con số điểm trong kết luận đều lấy từ Detection Engine."
+        },
+        {
+          "check_id": "evidence_ids_exist",
+          "label": "Mã bằng chứng tồn tại trong sự cố",
+          "passed": true,
+          "detail": "5 mã bằng chứng đều thuộc sự cố."
+        },
+        {
+          "check_id": "no_unproven_execution",
+          "label": "Không khẳng định thực thi khi thiếu bằng chứng",
+          "passed": true,
+          "detail": "Không đồng nhất HTTP failure hoặc scan thành thực thi RCE nếu thiếu tiến trình chứng minh."
+        },
+        {
+          "check_id": "root_privilege_guard",
+          "label": "Không gán quyền root nếu thiếu UID=0",
+          "passed": true,
+          "detail": "Chưa có bằng chứng UID=0; không khẳng định đặc quyền root."
+        },
+        {
+          "check_id": "no_action_claim",
+          "label": "Không tuyên bố đã thực hiện ứng phó",
+          "passed": true,
+          "detail": "Không tuyên bố hành động ứng phó chưa diễn ra."
+        }
+      ],
+      "recommendations": [
+        {
+          "text": "Khuyến nghị: Xác minh với người vận hành về tính chất của các request HTTP và xem có phải là hoạt động kiểm thử bảo mật được phép hay không.",
+          "requires_approval": true
+        }
+      ],
+      "limitations": [
+        "Risk score do Detection Engine tính; AI chỉ giải thích, không thay đổi điểm.",
+        "Khuyến nghị chỉ là đề xuất: mọi hành động ứng phó cần phân tích viên phê duyệt.",
+        "Không thể xác nhận tính xác thực của hoạt động kiểm thử bảo mật vì telemetry không phân biệt được (A2)."
+      ],
+      "model_name": "sec-q5:latest",
+      "attempts": 2
+    },
+    "incident_id": "inc_q",
+    "agent_id": "aws-test",
+    "requested_by": "reader",
+    "mode": "fresh",
+    "status": "COMPLETED",
+    "evidence_version": "acac16e35b884f6f9221df8eceb239caefc7527383ade1e6514fcc35543be78e",
+    "analysis_id": null,
+    "model_name": "sec-q5:latest",
+    "error_code": null,
+    "error_message": null,
+    "started_at": "2026-11-28T13:07:50.021689+00:00",
+    "completed_at": "2026-11-28T13:10:06.268378+00:00",
+    "created_at": "2026-11-28T13:07:50.015831+00:00"
+  },
+  "events": [
+    {
+      "event_id": "tr_4ecf98eb448542fe",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 1,
+      "event_type": "run_started",
+      "stage": "RUN",
+      "phase": null,
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.021689+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Bắt đầu trả lời câu hỏi của phân tích viên",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "mode": "fresh",
+        "model_name": "sec-q5:latest",
+        "evidence_version": null,
+        "task_type": "risk_question"
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.021740+00:00"
+    },
+    {
+      "event_id": "tr_2de883b69ffe446a",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 2,
+      "event_type": "stage_started",
+      "stage": "INCIDENT_LOADED",
+      "phase": "CONTEXT_RETRIEVAL",
+      "status": "RUNNING",
+      "source_type": "MANAGER_STORE",
+      "started_at": "2026-11-28T13:07:50.033301+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang truy xuất incident.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.033318+00:00"
+    },
+    {
+      "event_id": "tr_a274de43af3e470d",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 3,
+      "event_type": "stage_completed",
+      "stage": "INCIDENT_LOADED",
+      "phase": "CONTEXT_RETRIEVAL",
+      "status": "COMPLETED",
+      "source_type": "MANAGER_STORE",
+      "started_at": "2026-11-28T13:07:50.033301+00:00",
+      "completed_at": "2026-11-28T13:07:50.040523+00:00",
+      "duration_ms": 7,
+      "summary": "Đã tải inc_q: risk 75.0/100 (high).",
+      "evidence_refs": [
+        "inc_q"
+      ],
+      "rule_refs": [],
+      "safe_result": {
+        "incident_id": "inc_q",
+        "risk_score": 75.0,
+        "severity": "high",
+        "agent_id": "aws-test"
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.040561+00:00"
+    },
+    {
+      "event_id": "tr_89894e9b374f43b3",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 4,
+      "event_type": "stage_started",
+      "stage": "EVIDENCE_RETRIEVAL",
+      "phase": "CONTEXT_RETRIEVAL",
+      "status": "RUNNING",
+      "source_type": "ENDPOINT_AGENT",
+      "started_at": "2026-11-28T13:07:50.048252+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang đọc evidence.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.048269+00:00"
+    },
+    {
+      "event_id": "tr_f2c27b1e94a14ba6",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 5,
+      "event_type": "stage_completed",
+      "stage": "EVIDENCE_RETRIEVAL",
+      "phase": "CONTEXT_RETRIEVAL",
+      "status": "COMPLETED",
+      "source_type": "ENDPOINT_AGENT",
+      "started_at": "2026-11-28T13:07:50.048252+00:00",
+      "completed_at": "2026-11-28T13:07:50.055968+00:00",
+      "duration_ms": 8,
+      "summary": "Đã đọc 1 HTTP, 0 xác thực, 0 tiến trình, 0 kết nối.",
+      "evidence_refs": [
+        "F1",
+        "F2",
+        "ev_inc_q",
+        "web_inc_q"
+      ],
+      "rule_refs": [],
+      "safe_result": {
+        "counts": {
+          "http_events": 1,
+          "auth_events": 0,
+          "processes": 0,
+          "network_flows": 0,
+          "host_events": 1,
+          "analyst_notes": 0,
+          "containment_artifacts": 0
+        },
+        "missing_data": []
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.056001+00:00"
+    },
+    {
+      "event_id": "tr_56834a4016474f75",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 6,
+      "event_type": "stage_started",
+      "stage": "MATCHED_RULES",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.062266+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang lấy matched rules.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.062294+00:00"
+    },
+    {
+      "event_id": "tr_32633879dc0e40ab",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 7,
+      "event_type": "stage_completed",
+      "stage": "MATCHED_RULES",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "COMPLETED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.062266+00:00",
+      "completed_at": "2026-11-28T13:07:50.068935+00:00",
+      "duration_ms": 7,
+      "summary": "1 rule khớp: web_attack.",
+      "evidence_refs": [],
+      "rule_refs": [
+        "web_attack"
+      ],
+      "safe_result": {
+        "matched_rule_ids": [
+          "web_attack"
+        ],
+        "breakdown_source": "risk_assessment_service"
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.068973+00:00"
+    },
+    {
+      "event_id": "tr_0e317fad4a1c41a8",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 8,
+      "event_type": "stage_started",
+      "stage": "RISK_RULE_EXPLANATION",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.076736+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang đối chiếu score contributions.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.076757+00:00"
+    },
+    {
+      "event_id": "tr_ec8851f280ea4c29",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 9,
+      "event_type": "stage_completed",
+      "stage": "RISK_RULE_EXPLANATION",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "COMPLETED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.076736+00:00",
+      "completed_at": "2026-11-28T13:07:50.083409+00:00",
+      "duration_ms": 7,
+      "summary": "Tấn công bảo mật nên bỏ qua EMA: điểm cuối bằng điểm gốc.",
+      "evidence_refs": [],
+      "rule_refs": [
+        "web_attack"
+      ],
+      "safe_result": {
+        "breakdown_available": true,
+        "source": "risk_assessment_service",
+        "message": "Lấy dữ liệu phân rã trực tiếp từ snapshot tính điểm lúc tạo/cập nhật sự cố.",
+        "raw_score": 75.0,
+        "smoothed_score": 75.0,
+        "previous_smoothed": null,
+        "ema_applied": false,
+        "security_attack_bypass": true,
+        "final_score": 75.0,
+        "severity": "high",
+        "thresholds": {
+          "incident_creation_threshold": 50.0,
+          "severity_high": 70.0,
+          "severity_critical": 85.0
+        },
+        "rule_breakdown": [
+          {
+            "rule_id": "web_attack",
+            "label": "Web attack",
+            "matched": true,
+            "raw_score": 65.0,
+            "debounced_score": 65.0,
+            "weight": 1.1538,
+            "weighted_contribution": 75.0,
+            "evidence_ids": [
+              "web_inc_q"
+            ],
+            "reason": "SQLi probe on /login"
+          }
+        ],
+        "matched_rule_ids": [
+          "web_attack"
+        ],
+        "reconciliation": {
+          "status": "OBSERVED",
+          "contributions_sum": 75.0,
+          "final_score": 75.0,
+          "raw_score": 75.0,
+          "legacy_partial": false,
+          "detail": "Tấn công bảo mật nên bỏ qua EMA: điểm cuối bằng điểm gốc."
+        }
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.083505+00:00"
+    },
+    {
+      "event_id": "tr_c0adddba67ae4180",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 10,
+      "event_type": "stage_skipped",
+      "stage": "PROCESS_NETWORK_CORRELATION",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "SKIPPED",
+      "source_type": "ENDPOINT_AGENT",
+      "started_at": "2026-11-28T13:07:50.089850+00:00",
+      "completed_at": "2026-11-28T13:07:50.089850+00:00",
+      "duration_ms": 0,
+      "summary": "Không có telemetry tiến trình hoặc kết nối mạng để liên kết.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "skip_reason": "Không có telemetry tiến trình hoặc kết nối mạng để liên kết.",
+        "status": "UNKNOWN",
+        "has_web_compromise_chain": false,
+        "process_count": 0,
+        "network_count": 0,
+        "matched_pids": [],
+        "note": "Không tìm thấy tiến trình hoặc kết nối mạng tương ứng trong khoảng thời gian sự cố; không tự suy đoán PID hay shell."
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.089921+00:00"
+    },
+    {
+      "event_id": "tr_a94d0e557e544f74",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 11,
+      "event_type": "stage_started",
+      "stage": "ALTERNATIVE_EXPLANATIONS",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.097595+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang tìm các giải thích hợp lệ khác.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.097615+00:00"
+    },
+    {
+      "event_id": "tr_1953840fc3ff46f9",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 12,
+      "event_type": "stage_completed",
+      "stage": "ALTERNATIVE_EXPLANATIONS",
+      "phase": "EVIDENCE_ANALYSIS",
+      "status": "COMPLETED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:07:50.097595+00:00",
+      "completed_at": "2026-11-28T13:07:50.104416+00:00",
+      "duration_ms": 7,
+      "summary": "Có 2 giải thích khác cần cân nhắc.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "alternatives": [
+          {
+            "alt_id": "A1",
+            "explanation": "Có thể chỉ là quét hoặc thử payload không thành công.",
+            "certainty": "INFERRED",
+            "basis": "Có request HTTP nhưng không có tiến trình con nào được ghi nhận trong cửa sổ sự cố.",
+            "evidence_ids": [
+              "F1",
+              "F2",
+              "ev_inc_q",
+              "web_inc_q"
+            ]
+          },
+          {
+            "alt_id": "A2",
+            "explanation": "Hoạt động kiểm thử bảo mật được phép.",
+            "certainty": "UNKNOWN",
+            "basis": "Telemetry không phân biệt kiểm thử được phép với tấn công thật; cần xác nhận với người vận hành.",
+            "evidence_ids": []
+          }
+        ]
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.104521+00:00"
+    },
+    {
+      "event_id": "tr_c271f75d36b14f0a",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 13,
+      "event_type": "stage_started",
+      "stage": "ANSWER_GENERATION",
+      "phase": "MODEL_GENERATION",
+      "status": "RUNNING",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:07:50.113470+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang tạo bản phân tích bằng sec-q5:latest.",
+      "evidence_refs": [
+        "inc_q",
+        "web_inc_q",
+        "F1",
+        "F2",
+        "ev_inc_q"
+      ],
+      "rule_refs": [],
+      "safe_result": {
+        "model": "sec-q5:latest",
+        "attempt": 1,
+        "facts": 6,
+        "feedback": []
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:07:50.113513+00:00"
+    },
+    {
+      "event_id": "tr_41bbeb5022994a17",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 14,
+      "event_type": "stage_completed",
+      "stage": "ANSWER_GENERATION",
+      "phase": "MODEL_GENERATION",
+      "status": "COMPLETED",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:07:50.113470+00:00",
+      "completed_at": "2026-11-28T13:08:40.352523+00:00",
+      "duration_ms": 50239,
+      "summary": "Mô hình trả lời (lần 1); chuyển sang kiểm chứng.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "model": "sec-q5:latest",
+        "attempt": 1,
+        "cited_facts": []
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:08:40.352586+00:00"
+    },
+    {
+      "event_id": "tr_2eb9836c45ad4ccc",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 15,
+      "event_type": "stage_started",
+      "stage": "ANSWER_VERIFICATION",
+      "phase": "TOOL_VALIDATION",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:08:40.476947+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang kiểm chứng kết luận.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:08:40.476965+00:00"
+    },
+    {
+      "event_id": "tr_a975321d5a5344dc",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 16,
+      "event_type": "stage_failed",
+      "stage": "ANSWER_VERIFICATION",
+      "phase": "TOOL_VALIDATION",
+      "status": "FAILED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:08:40.476947+00:00",
+      "completed_at": "2026-11-28T13:08:40.483794+00:00",
+      "duration_ms": 7,
+      "summary": "Lần 1: 1/7 kiểm tra không đạt — Chỉ trích dẫn dữ kiện có thật",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "attempt": 1,
+        "checks": [
+          {
+            "check_id": "schema",
+            "label": "Đúng schema JSON",
+            "passed": true,
+            "detail": "Có đủ các trường bắt buộc."
+          },
+          {
+            "check_id": "fact_ids_exist",
+            "label": "Chỉ trích dẫn dữ kiện có thật",
+            "passed": false,
+            "detail": "Không trích dẫn dữ kiện nào."
+          },
+          {
+            "check_id": "score_from_engine",
+            "label": "Điểm khớp Detection Engine",
+            "passed": true,
+            "detail": "Mọi con số điểm trong kết luận đều lấy từ Detection Engine."
+          },
+          {
+            "check_id": "evidence_ids_exist",
+            "label": "Mã bằng chứng tồn tại trong sự cố",
+            "passed": true,
+            "detail": "0 mã bằng chứng đều thuộc sự cố."
+          },
+          {
+            "check_id": "no_unproven_execution",
+            "label": "Không khẳng định thực thi khi thiếu bằng chứng",
+            "passed": true,
+            "detail": "Không đồng nhất HTTP failure hoặc scan thành thực thi RCE nếu thiếu tiến trình chứng minh."
+          },
+          {
+            "check_id": "root_privilege_guard",
+            "label": "Không gán quyền root nếu thiếu UID=0",
+            "passed": true,
+            "detail": "Chưa có bằng chứng UID=0; không khẳng định đặc quyền root."
+          },
+          {
+            "check_id": "no_action_claim",
+            "label": "Không tuyên bố đã thực hiện ứng phó",
+            "passed": true,
+            "detail": "Không tuyên bố hành động ứng phó chưa diễn ra."
+          }
+        ]
+      },
+      "error_code": "VERIFICATION_FAILED",
+      "created_at": "2026-11-28T13:08:40.484023+00:00"
+    },
+    {
+      "event_id": "tr_e8f877000cc846db",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 17,
+      "event_type": "stage_started",
+      "stage": "ANSWER_GENERATION",
+      "phase": "MODEL_GENERATION",
+      "status": "RUNNING",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:08:40.492057+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang sửa bản phân tích (lần 2) theo 1 lỗi kiểm chứng.",
+      "evidence_refs": [
+        "inc_q",
+        "web_inc_q",
+        "F1",
+        "F2",
+        "ev_inc_q"
+      ],
+      "rule_refs": [],
+      "safe_result": {
+        "model": "sec-q5:latest",
+        "attempt": 2,
+        "facts": 6,
+        "feedback": [
+          "Chỉ trích dẫn dữ kiện có thật: Không trích dẫn dữ kiện nào."
+        ]
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:08:40.492106+00:00"
+    },
+    {
+      "event_id": "tr_55b0ae803812461b",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 18,
+      "event_type": "stage_completed",
+      "stage": "ANSWER_GENERATION",
+      "phase": "MODEL_GENERATION",
+      "status": "COMPLETED",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:08:40.492057+00:00",
+      "completed_at": "2026-11-28T13:10:06.223882+00:00",
+      "duration_ms": 85732,
+      "summary": "Mô hình trả lời (lần 2); chuyển sang kiểm chứng.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "model": "sec-q5:latest",
+        "attempt": 2,
+        "cited_facts": [
+          "F1",
+          "F2",
+          "F3",
+          "F4",
+          "F5",
+          "F6"
+        ]
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.223957+00:00"
+    },
+    {
+      "event_id": "tr_6d5ea2eccf7a4e9f",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 19,
+      "event_type": "stage_started",
+      "stage": "ANSWER_VERIFICATION",
+      "phase": "TOOL_VALIDATION",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:10:06.233237+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang kiểm chứng kết luận.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.233258+00:00"
+    },
+    {
+      "event_id": "tr_51f6ee122bc94d0b",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 20,
+      "event_type": "stage_completed",
+      "stage": "ANSWER_VERIFICATION",
+      "phase": "TOOL_VALIDATION",
+      "status": "COMPLETED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:10:06.233237+00:00",
+      "completed_at": "2026-11-28T13:10:06.240167+00:00",
+      "duration_ms": 7,
+      "summary": "Lần 2: đạt 7/7 kiểm tra.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "attempt": 2,
+        "checks": [
+          {
+            "check_id": "schema",
+            "label": "Đúng schema JSON",
+            "passed": true,
+            "detail": "Có đủ các trường bắt buộc."
+          },
+          {
+            "check_id": "fact_ids_exist",
+            "label": "Chỉ trích dẫn dữ kiện có thật",
+            "passed": true,
+            "detail": "Trích dẫn 6 dữ kiện hợp lệ."
+          },
+          {
+            "check_id": "score_from_engine",
+            "label": "Điểm khớp Detection Engine",
+            "passed": true,
+            "detail": "Mọi con số điểm trong kết luận đều lấy từ Detection Engine."
+          },
+          {
+            "check_id": "evidence_ids_exist",
+            "label": "Mã bằng chứng tồn tại trong sự cố",
+            "passed": true,
+            "detail": "5 mã bằng chứng đều thuộc sự cố."
+          },
+          {
+            "check_id": "no_unproven_execution",
+            "label": "Không khẳng định thực thi khi thiếu bằng chứng",
+            "passed": true,
+            "detail": "Không đồng nhất HTTP failure hoặc scan thành thực thi RCE nếu thiếu tiến trình chứng minh."
+          },
+          {
+            "check_id": "root_privilege_guard",
+            "label": "Không gán quyền root nếu thiếu UID=0",
+            "passed": true,
+            "detail": "Chưa có bằng chứng UID=0; không khẳng định đặc quyền root."
+          },
+          {
+            "check_id": "no_action_claim",
+            "label": "Không tuyên bố đã thực hiện ứng phó",
+            "passed": true,
+            "detail": "Không tuyên bố hành động ứng phó chưa diễn ra."
+          }
+        ]
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.240348+00:00"
+    },
+    {
+      "event_id": "tr_21d1d84edb164199",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 21,
+      "event_type": "stage_started",
+      "stage": "RESULT_SYNTHESIS",
+      "phase": "RESULT_SYNTHESIS",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:10:06.248651+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang tổng hợp kết quả.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.248672+00:00"
+    },
+    {
+      "event_id": "tr_a83f61975b0c46ff",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 22,
+      "event_type": "stage_completed",
+      "stage": "RESULT_SYNTHESIS",
+      "phase": "RESULT_SYNTHESIS",
+      "status": "COMPLETED",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:10:06.248651+00:00",
+      "completed_at": "2026-11-28T13:10:06.255745+00:00",
+      "duration_ms": 7,
+      "summary": "Kết luận AI đã qua kiểm chứng.",
+      "evidence_refs": [
+        "F1",
+        "F2",
+        "ev_inc_q",
+        "inc_q",
+        "web_inc_q"
+      ],
+      "rule_refs": [],
+      "safe_result": {
+        "conclusion_source": "AI_INFERENCE",
+        "attempts": 2
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.255786+00:00"
+    },
+    {
+      "event_id": "tr_62dab495c4174ac2",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 23,
+      "event_type": "answer_delta",
+      "stage": "RESULT_SYNTHESIS",
+      "phase": "RESULT_SYNTHESIS",
+      "status": "RUNNING",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:10:06.262288+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Sự cố này có risk score 75.0 theo Detection Engine, không phải 55. Điều này được xác nhận bởi F1 và F2. F3 cho thấy đóng góp +75 điểm từ tấn công SQLi probe, nhưng F4 chỉ ra rằng không có tiến trình hoặc kết nối mạng được ghi nhận trong cửa sổ sự cố. F5 và F6 đều không tìm thấy bằng chứng về tiến trình hoặc kết nối mạng. Do đó, có thể sự cố này chỉ là quét hoặc thử payload không thành công, không phải tấn công thật.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "conclusion_source": "AI_INFERENCE"
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.262288+00:00"
+    },
+    {
+      "event_id": "tr_6edd6322d7ac4b51",
+      "analysis_run_id": "run_3e7e56618ba34d26",
+      "incident_id": "inc_q",
+      "sequence": 24,
+      "event_type": "run_completed",
+      "stage": "RUN",
+      "phase": null,
+      "status": "COMPLETED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:10:06.269018+00:00",
+      "completed_at": "2026-11-28T13:10:06.268378+00:00",
+      "duration_ms": null,
+      "summary": "Hoàn tất: kết luận AI đã kiểm chứng.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "analysis_id": null,
+        "conclusion_source": "AI_INFERENCE"
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:10:06.269018+00:00"
+    }
+  ]
+}

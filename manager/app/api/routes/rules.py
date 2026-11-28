@@ -4,7 +4,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Request, Depends, Query, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Request, Depends, Query, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, desc, asc, update
 from app.models.rule_conversation import RuleConversation
@@ -15,7 +15,7 @@ from app.models.rule_candidate import RuleCandidate
 from app.models.rule_version import RuleVersion
 from app.services.ai.harvest_service import GenerationError, harvest_service
 from app.services.ai.validation_service import validation_service
-from app.services.ai import rule_assistant
+from app.services.ai import rule_assistant, rule_generator
 from app.models.rule_monitor_hit import RuleMonitorHit
 
 logger = logging.getLogger("larp.api.rules")
@@ -142,96 +142,60 @@ async def harvest_rule(
 
 
 async def owned_conversation(db, key, actor):
-    row = await db.scalar(select(RuleConversation).where(RuleConversation.id == key.hex,
-                                                         RuleConversation.owner == actor))
-    if row is None:
-        raise HTTPException(404, "Conversation unavailable")
-    return row
+    try:
+        return await rule_generator.owned_conversation(db, key, actor)
+    except rule_generator.TurnError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
 
 
 @router.post("/assistant")
 async def rule_assistant_turn(request: Request, body: AssistantRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        return await rule_generator.run_turn(db, request.state.operator, body)
+    except rule_generator.TurnError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+
+
+@router.post("/assistant/runs", status_code=202)
+async def rule_assistant_run(request: Request, body: AssistantRequest, background_tasks: BackgroundTasks,
+                             db: AsyncSession = Depends(get_db)):
+    """Same turn as /assistant, run in the background with a Decision Trace streamed over SSE.
+
+    Request errors (foreign conversation, stale revision, unasked answer) are answered here, before any work.
+    The reply is stored with the conversation; the run's result names its revision.
+    """
+    from app.services.ai.decision_trace import TraceRecorder, app_session_factory, trace_broker
     actor = request.state.operator
-    row = await owned_conversation(db, body.conversation_id, actor) if body.conversation_id else None
-    state = row.state if row else {}
-    if body.resume and row:
-        return state
-    if row and body.revision != row.revision:
-        raise HTTPException(409, "Conversation changed; reload the latest turn")
-    editing = not body.answer and not body.message and body.intent is not None
-    intent, _ = rule_assistant.sanitize(body.intent if editing else state.get("intent", body.intent or {}))
-    message = (body.message or "").strip()
-    context = state.get("context", body.context or "")
-    if len(context) + len(message) > 8000:
-        raise HTTPException(422, "Start a new conversation for this request")
-    error = None
-    model_used = False
-    # Deterministic requirement check first: requests that cannot become a process_creation rule never
-    # reach the model, and a platform conflict is asked back instead of resolved by the model.
-    restriction, notices = rule_assistant.request_constraints(message)
-    if row and not message and state.get("classification") in {"UNSUPPORTED_REQUIREMENT", "INSUFFICIENT_TELEMETRY"}:
-        restriction, notices = state["classification"], list(state["notices"])
-    if body.answer is not None:
-        if row and body.answer.slot not in {q["slot"] for q in state["questions"]}:
-            raise HTTPException(422, "Answer does not correspond to an open question")
+    if body.resume:
+        raise HTTPException(422, "Use POST /assistant with resume=true to reload a conversation")
+    try:
+        await rule_generator.precheck(db, actor, body)
+    except rule_generator.TurnError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    run = await trace_broker.create_task_run(
+        db, task_type="rule_generation", requested_by=actor,
+        subject_id=body.conversation_id.hex if body.conversation_id else None,
+        question=body.message or (f"{body.answer.slot}: {body.answer.value}" if body.answer else None),
+        model_name=rule_assistant.DEFAULT_MODEL)
+    await db.commit()
+    factory = app_session_factory(request.app)
+
+    async def job():
+        rec = TraceRecorder(run_id=run.id, session_factory=factory)
         try:
-            if body.answer.slot == "scenario":
-                intent, restriction, extra = rule_assistant.apply_scenario(intent, str(body.answer.value))
-                notices.extend(extra)
-            else:
-                intent = rule_assistant.apply_answer(intent, body.answer.slot, body.answer.value, body.answer.replace)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        context = (context + "\n" + str(body.answer.value))[-8000:]
-    elif message and restriction in (None, "NEEDS_CLARIFICATION"):
-        try:
-            if row:  # release the read transaction before waiting for inference
-                await db.commit()
-            intent, extracted = await rule_assistant.extract(message, intent, context=context)
-            notices.extend(extracted)
-            model_used = True
-        except rule_assistant.GenerationError as exc:
-            error = f"AI không phản hồi được ({exc}). Bạn có thể điền trực tiếp các ô bên dưới."
-    if restriction == "NEEDS_CLARIFICATION":
-        intent["platform"] = None
-    context = (context + "\n" + message).strip()
-    observed = await rule_assistant.observed_options(db)
-    asks = rule_assistant.questions(intent, observed)
-    scenario = rule_assistant.scenario_question(message, intent) if message and not restriction else None
-    if scenario:
-        asks.insert(0, scenario)
-        notices.append("Yêu cầu chưa nêu hành vi cụ thể. Chọn một hành vi bên dưới thay vì tạo một rule bao quát "
-                       "mọi tiến trình.")
-    if restriction in {"INSUFFICIENT_TELEMETRY", "UNSUPPORTED_REQUIREMENT"}:
-        asks = []
-    if message and re.search(r"\bhttp\b", message, re.I):
-        notices.append("Sigma process_creation chỉ thấy tiến trình, không thấy request HTTP. Việc nối request với "
-                       "tiến trình do Web Compromise Chain làm (theo request ID và thời gian).")
-    sigma_yaml = None
-    if not asks and not restriction and not error:
-        try:
-            sigma_yaml, _ = rule_assistant.compile_rule(intent, context)
-        except ValueError as exc:
-            asks = [{"slot": "child", "text": f"Chưa tạo được rule: {exc}", "options": [], "allow_text": True}]
-    if sigma_yaml:
-        notices.append("Rule khớp khi mọi điều kiện trong detection.selection cùng đúng. Tác vụ quản trị hợp lệ vẫn "
-                       "có thể khớp; xem mẫu benign và false positive trong kết quả kiểm định Agent B.")
-    revision = row.revision + 1 if row else 1
-    key = row.id if row else uuid.uuid4().hex
-    result = {"conversation_id": key, "revision": revision, "context": context, "intent": intent,
-              "classification": restriction or ("READY_TO_GENERATE" if sigma_yaml else "NEEDS_CLARIFICATION"),
-              "questions": asks, "ready": bool(sigma_yaml), "sigma_yaml": sigma_yaml, "notices": notices,
-              "model_used": model_used, "has_model_input": model_used or state.get("has_model_input", False),
-              "model": rule_assistant.DEFAULT_MODEL, "error": error}
-    if row:
-        changed = await db.execute(update(RuleConversation).where(RuleConversation.id == key,
-            RuleConversation.owner == actor, RuleConversation.revision == body.revision).values(state=result, revision=revision))
-        if not changed.rowcount:
-            raise HTTPException(409, "Conversation changed; reload the latest turn")
-    else:
-        db.add(RuleConversation(id=key, owner=actor, revision=revision, state=result))
-    await db.flush()
-    return result
+            async with factory() as session:
+                await rule_generator.run_turn(session, actor, body, rec, validate=True)
+        except rule_generator.TurnError as exc:
+            await rec.fail_run(stage="RUN", error_code=f"HTTP_{exc.status}", error_message=exc.detail,
+                               summary=f"Lượt hội thoại bị từ chối: {exc.detail}")
+        except Exception as exc:  # noqa: BLE001 - the run must end visibly
+            logger.exception("Rule Generator run failed run=%s", run.id)
+            await rec.fail_run(stage="RUN", error_code=type(exc).__name__.upper()[:64],
+                               error_message="Lỗi hệ thống", summary="Lượt hội thoại thất bại do lỗi hệ thống.")
+
+    background_tasks.add_task(job)
+    return {"status": "running", "run_id": run.id, "analysis_run_id": run.id, "task_type": "rule_generation",
+            "stream_url": f"/api/v1/ai/runs/{run.id}/stream"}
 
 
 @router.post("/assistant/create")

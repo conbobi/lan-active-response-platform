@@ -19,16 +19,27 @@ def _utcnow() -> datetime:
 
 
 class AIAnalysisRun(Base):
-    """Represents one end-to-end execution of AI Risk Analyst triage for an incident."""
+    """One end-to-end execution of an AI workflow (Reasoning Orchestrator run).
+
+    task_type: ``incident_analysis`` (AI Risk Analyst triage), ``risk_question`` (an analyst's question about an
+    incident) or ``rule_generation`` (AI Rule Generator turn; ``subject_id`` is the rule conversation).
+    """
     __tablename__ = "ai_analysis_runs"
     __table_args__ = (
         Index("ix_ai_analysis_runs_incident_created", "incident_id", "created_at"),
+        Index("ix_ai_analysis_runs_task_subject", "task_type", "subject_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"run_{uuid.uuid4().hex[:16]}")
-    incident_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    incident_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, default="incident_analysis")
+    subject_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(J, nullable=True)
+    current_stage: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    stage_status: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
     agent_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     requested_by: Mapped[str] = mapped_column(String(128), nullable=False, default="system")
     mode: Mapped[str] = mapped_column(String(24), nullable=False, default="reuse")
@@ -55,7 +66,7 @@ class AIDecisionTraceEvent(Base):
     analysis_run_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("ai_analysis_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    incident_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    incident_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     stage: Mapped[str] = mapped_column(String(48), nullable=False)

@@ -44,6 +44,28 @@ def ensure_activity_schema(connection):
         index.create(connection, checkfirst=True)
 
 
+def ensure_ai_run_schema(connection):
+    """Reasoning Orchestrator runs (Rule Generator, Risk Analyst questions) on a table created before them."""
+    inspector = inspect(connection)
+    if not inspector.has_table("ai_analysis_runs"):
+        return  # create_all made it with the current columns
+    postgres = connection.dialect.name == "postgresql"
+    columns = (("task_type", "VARCHAR(32) NOT NULL DEFAULT 'incident_analysis'"), ("subject_id", "VARCHAR(64)"),
+               ("question", "TEXT"), ("result", "JSONB" if postgres else "JSON"), ("current_stage", "VARCHAR(48)"),
+               ("stage_status", "VARCHAR(24)"))
+    existing = {c["name"] for c in inspector.get_columns("ai_analysis_runs")}
+    for name, datatype in columns:
+        if postgres:
+            connection.execute(text(f"ALTER TABLE ai_analysis_runs ADD COLUMN IF NOT EXISTS {name} {datatype}"))
+        elif name not in existing:
+            connection.execute(text(f"ALTER TABLE ai_analysis_runs ADD COLUMN {name} {datatype}"))
+    if postgres:  # Rule Generator runs belong to a conversation, not to an incident
+        connection.execute(text("ALTER TABLE ai_analysis_runs ALTER COLUMN incident_id DROP NOT NULL"))
+        connection.execute(text("ALTER TABLE ai_decision_trace_events ALTER COLUMN incident_id DROP NOT NULL"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_analysis_runs_task_subject "
+                            "ON ai_analysis_runs (task_type, subject_id)"))
+
+
 async def init_db() -> None:
     """Initialize database tables asynchronously."""
     async with async_engine.begin() as conn:

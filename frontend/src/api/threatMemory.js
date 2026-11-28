@@ -1,6 +1,7 @@
 // AI Threat Memory & Decision Trace API + authenticated SSE streaming client.
 import api, { BASE_URL, refreshAccessToken } from './api.js';
 import { readSession } from './operatorSession.js';
+import { isTerminalEvent } from '../components/ai/traceModel.js';
 
 export const getAnalysisSource = (incidentId) => api.get(`/ai/incidents/${incidentId}/analysis-source`);
 export const runAnalysis = (incidentId, mode) => api.post(`/ai/incidents/${incidentId}/analysis/run`, { mode });
@@ -11,6 +12,14 @@ export const changeThreatMemory = (id, operation, reason) => api.post(`/ai/threa
 
 export const listAnalysisRuns = (incidentId, limit = 15) =>
   api.get(`/ai/incidents/${encodeURIComponent(incidentId)}/analysis/runs`, { params: { limit } });
+
+export const askRiskAnalyst = (incidentId, question) =>
+  api.post(`/ai/incidents/${encodeURIComponent(incidentId)}/questions`, { question });
+
+export const listQuestionRuns = (incidentId, limit = 10) =>
+  api.get(`/ai/incidents/${encodeURIComponent(incidentId)}/analysis/runs`, { params: { limit, task_type: 'risk_question' } });
+
+export const startRuleAssistantRun = (body) => api.post('/rules/assistant/runs', body);
 
 export const getRunTrace = (runId) =>
   api.get(`/ai/runs/${encodeURIComponent(runId)}/trace`);
@@ -86,7 +95,7 @@ export async function streamRunTrace(
           cursor = seq;
         }
         onEvent?.(parsed);
-        return parsed?.event_type === 'analysis_completed' || parsed?.event_type === 'analysis_failed';
+        return isTerminalEvent(parsed);
       } catch {
         return false;
       }

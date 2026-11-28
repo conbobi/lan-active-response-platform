@@ -14,7 +14,7 @@ from app.core.network_security import authenticate_operator_request, token_match
 from app.core.database import get_pool_status
 from app.models.soc_auth import SocUser
 from app.services.auth.jwt_service import uses_ephemeral_key
-from app.initializers.init_db import ensure_activity_schema, ensure_network_evidence_columns, ensure_process_instance_column, init_db
+from app.initializers.init_db import ensure_activity_schema, ensure_ai_run_schema, ensure_network_evidence_columns, ensure_process_instance_column, init_db
 from app.routers.v1 import api_router
 from app.websocket.agent_ws import agent_websocket_endpoint
 from app.websocket.dashboard_ws import router as dashboard_ws_router
@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
             await conn.run_sync(ensure_process_instance_column)
             await conn.run_sync(ensure_network_evidence_columns)
             await conn.run_sync(ensure_activity_schema)
+            await conn.run_sync(ensure_ai_run_schema)
         logger.info(f"[STARTUP] ✓ Tables ready: {len(Base.metadata.tables)} tables")
     except Exception as e:
         logger.error(f"[STARTUP] ✗ Failed to create tables: {e}")
@@ -134,7 +135,7 @@ OWN_AUTHORIZATION = [re.compile(p) for p in (
 # Only these candidate mutations grant write access to scoped SOC operators.
 _AI_RULES = r"/api/(?:v1/)?rules"
 RULE_WRITES = {
-    "POST": re.compile(rf"{_AI_RULES}/(?:harvest|assistant(?:/create)?|{_ID}/(?:validate|activate|reject|disable))/?"),
+    "POST": re.compile(rf"{_AI_RULES}/(?:harvest|assistant(?:/create|/runs)?|{_ID}/(?:validate|activate|reject|disable))/?"),
     "PUT": re.compile(rf"{_AI_RULES}/{_ID}/?"),
 }
 # Incident workflow calls any configured operator (analyst or admin) may make. They change incident

@@ -1,9 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FiSend, FiCpu, FiUser, FiPlay, FiCheckCircle, FiExternalLink } from 'react-icons/fi';
 import api from '../../api/api';
 import ValidationResultPanel from './ValidationResultPanel';
+import ReasoningTracePanel from './ReasoningTracePanel';
+import { startRuleAssistantRun } from '../../api/threatMemory';
+import useRunTrace from '../../hooks/useRunTrace';
+import { TERMINAL_RUN_STATUSES } from './traceModel';
 
 // Natural-language rule creation: the model only fills the intent; answers and the rule itself are
 // deterministic on the Manager. Values the analyst did not write are dropped and asked back.
@@ -48,6 +52,13 @@ export default function RuleAssistant() {
   const [modelUsed, setModelUsed] = useState(false);
   const [created, setCreated] = useState(null);
   const [answerText, setAnswerText] = useState('');
+  const [validation, setValidation] = useState(null);
+  const trace = useRunTrace('harvest-rule-run');
+  const [lastBody, setLastBody] = useState(null);
+  const appliedRun = useRef(null);
+  const [mountedAt] = useState(() => Date.now());
+  const running = trace.status === 'RUNNING' || trace.status === 'CREATED';
+  const busy = loading || running;
 
   const userTexts = messages.filter((m) => m.role === 'user').map((m) => m.text);
 
@@ -62,6 +73,7 @@ export default function RuleAssistant() {
     setIntent(res.intent);
     setQuestions(res.questions || []);
     setSigmaYaml(res.sigma_yaml);
+    setValidation(res.validation || null);
     setModelUsed(Boolean(res.has_model_input || res.model_used));
     const lines = [];
     if (res.error) lines.push(res.error);
@@ -88,7 +100,24 @@ export default function RuleAssistant() {
     return () => { mounted = false; };
   }, []);
 
+  // A finished run: load the reply the backend stored with the conversation (never a client-side guess).
+  useEffect(() => {
+    const run = trace.run;
+    // Wait for the persisted run record (with its result), not only the terminal stream event.
+    if (!run || !TERMINAL_RUN_STATUSES.has(run.status) || appliedRun.current === trace.runId) return;
+    appliedRun.current = trace.runId;
+    if (run.completed_at && Date.parse(run.completed_at) < mountedAt) return; // shown by the resume above
+    // Without a stored reply (rejected turn) the trace panel shows the backend's failure summary.
+    if (run.result?.conversation_id) {
+      api.post('/rules/assistant', { conversation_id: run.result.conversation_id, resume: true })
+        .then(apply)
+        .catch((err) => say(`Lỗi: ${err.message}`));
+    }
+  }, [trace.status, trace.run, trace.runId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const reset = () => {
+    trace.attach(null);
+    setValidation(null);
     sessionStorage.removeItem('harvest-conversation');
     setConversation(null); setMessages([]); setQuestions([]); setIntent(emptyIntent);
     setClassification(''); setSigmaYaml(null); setCreated(null); setModelUsed(false); setAnswerText(''); setInput('');
@@ -97,7 +126,9 @@ export default function RuleAssistant() {
   const call = async (body) => {
     setLoading(true);
     try {
-      apply(await api.post('/rules/assistant', { ...body, ...conversation }));
+      const res = await startRuleAssistantRun({ ...body, ...conversation });
+      setLastBody(body);
+      trace.attach(res.run_id);
     } catch (err) {
       say(`Lỗi: ${err.message}`);
     } finally {
@@ -107,7 +138,7 @@ export default function RuleAssistant() {
 
   const send = async (text) => {
     const message = (text ?? input).trim();
-    if (!message || loading) return;
+    if (!message || busy) return;
     setInput('');
     setCreated(null);
     say(message, 'user');
@@ -115,7 +146,7 @@ export default function RuleAssistant() {
   };
 
   const answer = async (question, value) => {
-    if (!value || loading) return;
+    if (!value || busy) return;
     say(Array.isArray(value) ? value.join(', ') : value, 'user');
     setAnswerText('');
     await call({ intent, answer: { slot: question.slot, value, replace: question.replace || null } });
@@ -160,7 +191,7 @@ export default function RuleAssistant() {
       {/* Conversation */}
       <div style={{ ...box, display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: '28rem' }}>
         <div style={{ color: '#e6edf3', fontWeight: 600 }}>Mô tả rule bằng lời</div>
-        {conversation && <button disabled={loading} onClick={reset} className="harvest-btn-secondary">Yêu cầu mới</button>}
+        {conversation && <button disabled={busy} onClick={reset} className="harvest-btn-secondary">Yêu cầu mới</button>}
         {classification && (
           <div data-testid="harvest-classification"
                style={{ fontSize: '0.8rem', color: (CLASSIFICATION[classification] || [])[1] || '#8b949e' }}>
@@ -172,7 +203,7 @@ export default function RuleAssistant() {
             <div style={{ color: '#8b949e', fontSize: '0.85rem' }}>
               Gõ điều bạn muốn phát hiện. AI chỉ trích thông tin; nếu thiếu hoặc chưa rõ, trợ lý sẽ hỏi lại. Ví dụ:
               {EXAMPLES.map((e) => (
-                <button key={e} onClick={() => send(e)} disabled={loading}
+                <button key={e} onClick={() => send(e)} disabled={busy}
                         style={{ ...chip, display: 'block', marginTop: '0.5rem', borderRadius: '0.4rem', textAlign: 'left' }}>
                   {e}
                 </button>
@@ -190,10 +221,10 @@ export default function RuleAssistant() {
               {m.role === 'user' && <FiUser style={{ color: '#58a6ff', marginTop: '0.2rem', flexShrink: 0 }} />}
             </div>
           ))}
-          {loading && <div style={{ color: '#8b949e', fontSize: '0.8rem' }}>Đang xử lý… (AI chạy trên CPU có thể mất khoảng 1 phút)</div>}
+          {busy && <div style={{ color: '#8b949e', fontSize: '0.8rem' }}>Đang xử lý… (AI chạy trên CPU có thể mất khoảng 1 phút — xem từng bước ở bảng bên dưới)</div>}
         </div>
 
-        {question && !loading && (
+        {question && !busy && (
           <div style={{ borderTop: '1px solid #30363d', paddingTop: '0.6rem' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.4rem' }}>
               {(question.options || []).map((opt) => (
@@ -213,13 +244,23 @@ export default function RuleAssistant() {
           </div>
         )}
 
+        {trace.runId && (
+          <ReasoningTracePanel
+            activeRun={trace.run}
+            events={trace.events}
+            streaming={trace.streaming}
+            onRetry={lastBody ? () => call(lastBody) : undefined}
+          />
+        )}
+        {trace.error && <div style={{ color: '#fbbf24', fontSize: '0.78rem' }}>{trace.error}</div>}
+
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={2}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                     placeholder="Ví dụ: báo khi nginx sinh shell chạy whoami"
                     style={{ flex: 1, background: '#010409', border: '1px solid #30363d', color: '#e6edf3',
                              borderRadius: '0.4rem', padding: '0.5rem', fontSize: '0.85rem', resize: 'vertical' }} />
-          <button className="harvest-btn-activate" onClick={() => send()} disabled={loading || !input.trim()}>
+          <button className="harvest-btn-activate" onClick={() => send()} disabled={busy || !input.trim()}>
             <FiSend size={14} />
           </button>
         </div>
@@ -252,7 +293,7 @@ export default function RuleAssistant() {
               {['low', 'medium', 'high', 'critical'].map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
-          <button className="harvest-btn-secondary" style={{ marginTop: '0.7rem' }} onClick={recheck} disabled={loading}>
+          <button className="harvest-btn-secondary" style={{ marginTop: '0.7rem' }} onClick={recheck} disabled={busy}>
             Cập nhật & kiểm tra
           </button>
         </div>
@@ -261,8 +302,16 @@ export default function RuleAssistant() {
           <div style={box}>
             <div style={{ color: '#e6edf3', fontWeight: 600, marginBottom: '0.4rem' }}>Rule sẽ được tạo (do hệ thống sinh, không phải AI)</div>
             <pre style={{ fontSize: '0.75rem', color: '#c9d1d9', whiteSpace: 'pre-wrap', margin: 0 }}>{sigmaYaml}</pre>
+            {validation && !created && (
+              <div style={{ marginTop: '0.6rem' }}>
+                <div style={{ color: '#8b949e', fontSize: '0.78rem', marginBottom: '0.3rem' }}>
+                  Kết quả Validator (Agent B) trước khi tạo rule:
+                </div>
+                <ValidationResultPanel result={validation} />
+              </div>
+            )}
             {!created && (
-              <button className="harvest-btn-activate" style={{ marginTop: '0.7rem' }} onClick={create} disabled={loading}>
+              <button className="harvest-btn-activate" style={{ marginTop: '0.7rem' }} onClick={create} disabled={busy}>
                 <FiPlay size={13} /> Tạo rule & bắt đầu giám sát
               </button>
             )}

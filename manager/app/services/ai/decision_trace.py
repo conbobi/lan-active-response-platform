@@ -21,34 +21,74 @@ from app.models.risk_score import RiskScoreRecord
 
 logger = logging.getLogger(__name__)
 
-RUN_STATUSES: Tuple[str, ...] = ("CREATED", "RUNNING", "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED")
+RUN_STATUSES: Tuple[str, ...] = (
+    "CREATED", "RUNNING", "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "NEEDS_CLARIFICATION",
+)
 ACTIVE_RUN_STATUSES: Tuple[str, ...] = ("CREATED", "RUNNING")
+TERMINAL_RUN_STATUSES = frozenset(set(RUN_STATUSES) - set(ACTIVE_RUN_STATUSES))
 
-STAGES: Tuple[str, ...] = (
-    "INCIDENT_LOADED",
-    "EVIDENCE_RETRIEVAL",
-    "RISK_RULE_EXPLANATION",
-    "PROCESS_NETWORK_CORRELATION",
-    "CACHE_LOOKUP",
-    "MODEL_INFERENCE",
-    "DETERMINISTIC_FALLBACK",
-    "CLAIM_VERIFICATION",
-    "ANALYSIS_PERSISTENCE",
-    "RESPONSE_RECOMMENDATION",
+TASK_TYPES: Tuple[str, ...] = ("incident_analysis", "risk_question", "rule_generation")
+
+# Orchestrator state machine: every concrete stage below belongs to exactly one phase.
+# CREATED → CONTEXT_RETRIEVAL → REQUIREMENT_CHECK → EVIDENCE_ANALYSIS → MODEL_GENERATION → TOOL_VALIDATION
+# → RESULT_SYNTHESIS → COMPLETED / FAILED / TIMEOUT / NEEDS_CLARIFICATION. A task only emits the stages it needs.
+PHASES: Tuple[str, ...] = (
+    "CONTEXT_RETRIEVAL", "REQUIREMENT_CHECK", "EVIDENCE_ANALYSIS", "MODEL_GENERATION", "TOOL_VALIDATION",
+    "RESULT_SYNTHESIS",
+)
+STAGE_PHASE: Dict[str, str] = {
+    # AI Risk Analyst (incident analysis and analyst questions)
+    "INCIDENT_LOADED": "CONTEXT_RETRIEVAL",
+    "EVIDENCE_RETRIEVAL": "CONTEXT_RETRIEVAL",
+    "MATCHED_RULES": "EVIDENCE_ANALYSIS",
+    "RISK_RULE_EXPLANATION": "EVIDENCE_ANALYSIS",
+    "PROCESS_NETWORK_CORRELATION": "EVIDENCE_ANALYSIS",
+    "ALTERNATIVE_EXPLANATIONS": "EVIDENCE_ANALYSIS",
+    "CACHE_LOOKUP": "CONTEXT_RETRIEVAL",
+    "MODEL_INFERENCE": "MODEL_GENERATION",
+    "ANSWER_GENERATION": "MODEL_GENERATION",
+    "DETERMINISTIC_FALLBACK": "RESULT_SYNTHESIS",
+    "CLAIM_VERIFICATION": "TOOL_VALIDATION",
+    "ANSWER_VERIFICATION": "TOOL_VALIDATION",
+    "ANALYSIS_PERSISTENCE": "RESULT_SYNTHESIS",
+    "RESPONSE_RECOMMENDATION": "RESULT_SYNTHESIS",
+    "RESULT_SYNTHESIS": "RESULT_SYNTHESIS",
+    # AI Rule Generator
+    "REQUEST_UNDERSTANDING": "REQUIREMENT_CHECK",
+    "PLATFORM_LOGSOURCE": "REQUIREMENT_CHECK",
+    "TELEMETRY_FIELDS": "CONTEXT_RETRIEVAL",
+    "CLARIFICATION": "REQUIREMENT_CHECK",
+    "SIGMA_GENERATION": "MODEL_GENERATION",
+    "SCHEMA_RUNTIME_CHECK": "TOOL_VALIDATION",
+    "HISTORICAL_VALIDATION": "TOOL_VALIDATION",
+    "RESULT_EXPLANATION": "RESULT_SYNTHESIS",
+}
+
+STAGES: Tuple[str, ...] = tuple(STAGE_PHASE) + ("RUN",)
+
+STAGE_STATUSES: Tuple[str, ...] = (
+    "PENDING", "RUNNING", "COMPLETED", "SKIPPED", "FAILED", "TIMEOUT", "CANCELLED", "NEEDS_CLARIFICATION",
 )
 
-STAGE_STATUSES: Tuple[str, ...] = ("PENDING", "RUNNING", "COMPLETED", "SKIPPED", "FAILED", "TIMEOUT", "CANCELLED")
-
 EVENT_TYPES: Tuple[str, ...] = (
-    "analysis_started",
+    "run_started",
     "stage_started",
     "stage_completed",
     "stage_skipped",
     "stage_failed",
-    "model_answer_delta",
-    "analysis_completed",
-    "analysis_failed",
+    "clarification_required",
+    "answer_delta",
+    "run_completed",
+    "run_failed",
 )
+TERMINAL_EVENT_TYPES = frozenset({"run_completed", "run_failed", "clarification_required"})
+# Rows written before the generic orchestrator used these names; they are renamed when read, never rewritten.
+LEGACY_EVENT_TYPES: Dict[str, str] = {
+    "analysis_started": "run_started",
+    "model_answer_delta": "answer_delta",
+    "analysis_completed": "run_completed",
+    "analysis_failed": "run_failed",
+}
 
 SOURCE_TYPES: Tuple[str, ...] = (
     "ENDPOINT_AGENT",
@@ -141,9 +181,40 @@ def sanitize_safe_result(value: Any, *, depth: int = 0) -> Any:
     return sanitize_trace_text(str(value), max_len=500)
 
 
+def app_session_factory(app: Any = None) -> Callable[[], Any]:
+    """Session factory for background work that honours a get_db dependency override (isolated test labs)."""
+    from contextlib import asynccontextmanager
+
+    from app.core.deps import get_db
+
+    override = getattr(app, "dependency_overrides", {}).get(get_db) if app is not None else None
+    if override is None:
+        return _session_factory()
+
+    @asynccontextmanager
+    async def scope():
+        gen = override()
+        session = await gen.__anext__()
+        try:
+            yield session
+        finally:
+            await gen.aclose()
+
+    return scope
+
+
 def serialize_run(run: AIAnalysisRun) -> Dict[str, Any]:
     return {
         "analysis_run_id": run.id,
+        "run_id": run.id,
+        "task_type": run.task_type or "incident_analysis",
+        "actor": run.requested_by,
+        "subject_id": run.subject_id,
+        "question": sanitize_trace_text(run.question, max_len=500) if run.question else None,
+        "current_stage": run.current_stage,
+        "current_phase": STAGE_PHASE.get(run.current_stage or ""),
+        "stage_status": run.stage_status,
+        "result": sanitize_safe_result(run.result) if run.result is not None else None,
         "incident_id": run.incident_id,
         "agent_id": run.agent_id,
         "requested_by": run.requested_by,
@@ -166,8 +237,9 @@ def serialize_event(event: AIDecisionTraceEvent) -> Dict[str, Any]:
         "analysis_run_id": event.analysis_run_id,
         "incident_id": event.incident_id,
         "sequence": event.sequence,
-        "event_type": event.event_type,
+        "event_type": LEGACY_EVENT_TYPES.get(event.event_type, event.event_type),
         "stage": event.stage,
+        "phase": STAGE_PHASE.get(event.stage),
         "status": event.status,
         "source_type": event.source_type,
         "started_at": _iso(event.started_at),
@@ -236,6 +308,7 @@ class TraceBroker:
             select(AIAnalysisRun)
             .where(
                 AIAnalysisRun.incident_id == incident_id,
+                AIAnalysisRun.task_type == "incident_analysis",
                 AIAnalysisRun.status.in_(ACTIVE_RUN_STATUSES),
                 AIAnalysisRun.created_at >= cutoff,
             )
@@ -279,6 +352,31 @@ class TraceBroker:
             self._active_runs[incident_id] = run.id
             return run, False
 
+    async def create_task_run(
+        self,
+        db,
+        *,
+        task_type: str,
+        requested_by: str,
+        incident_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        subject_id: Optional[str] = None,
+        question: Optional[str] = None,
+        model_name: Optional[str] = None,
+        evidence_version: Optional[str] = None,
+    ) -> AIAnalysisRun:
+        """A new run for a task that is not deduplicated per incident (questions, Rule Generator turns)."""
+        assert task_type in TASK_TYPES, task_type
+        run = AIAnalysisRun(
+            id=f"run_{uuid.uuid4().hex[:16]}", incident_id=incident_id, agent_id=agent_id,
+            requested_by=requested_by or "system", mode="fresh", status="CREATED", task_type=task_type,
+            subject_id=subject_id, question=(question or None) and sanitize_trace_text(question, max_len=2000),
+            model_name=model_name, evidence_version=evidence_version,
+        )
+        db.add(run)
+        await db.flush()
+        return run
+
 
 trace_broker = TraceBroker()
 trace_run_context: ContextVar[Optional[Tuple[str, str]]] = ContextVar("trace_run_context", default=None)
@@ -291,7 +389,7 @@ class TraceRecorder:
         self,
         *,
         run_id: str,
-        incident_id: str,
+        incident_id: Optional[str] = None,
         session_factory: Optional[Callable[[], Any]] = None,
         broker: Optional[TraceBroker] = None,
         initial_sequence: int = 0,
@@ -360,13 +458,14 @@ class TraceRecorder:
             factory = self._factory()
             async with factory() as session:
                 async with session.begin():
-                    if run_updates:
-                        run = await session.get(AIAnalysisRun, self.run_id)
-                        if run is not None:
-                            for key, val in run_updates.items():
-                                if key == "error_message" and val is not None:
-                                    val = sanitize_trace_text(val, max_len=500)
-                                setattr(run, key, val)
+                    run = await session.get(AIAnalysisRun, self.run_id)
+                    if run is not None:
+                        if event_type != "answer_delta" and stage != "RUN":
+                            run.current_stage, run.stage_status = stage, status
+                        for key, val in (run_updates or {}).items():
+                            if key == "error_message" and val is not None:
+                                val = sanitize_trace_text(val, max_len=500)
+                            setattr(run, key, val)
                     seq = await self._next_sequence(session)
                     event = AIDecisionTraceEvent(
                         id=f"tr_{uuid.uuid4().hex[:16]}",
@@ -401,6 +500,8 @@ class TraceRecorder:
         evidence_version: Optional[str] = None,
         mode: str = "reuse",
         summary: str = "Khởi tạo phiên phân tích AI Risk Analyst",
+        stage: str = "INCIDENT_LOADED",
+        safe_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         now = _utcnow()
         updates: Dict[str, Any] = {"status": "RUNNING", "started_at": now, "mode": mode}
@@ -410,15 +511,17 @@ class TraceRecorder:
             updates["model_name"] = model_name
         if evidence_version is not None:
             updates["evidence_version"] = evidence_version
-        self._broker.register_active(self.incident_id, self.run_id)
+        if self.incident_id:
+            self._broker.register_active(self.incident_id, self.run_id)
         return await self._record_event(
-            event_type="analysis_started",
-            stage="INCIDENT_LOADED",
+            event_type="run_started",
+            stage=stage,
             status="RUNNING",
             source_type="DETERMINISTIC",
             started_at=now,
             summary=summary,
-            safe_result={"mode": mode, "model_name": model_name, "evidence_version": evidence_version},
+            safe_result={"mode": mode, "model_name": model_name, "evidence_version": evidence_version,
+                         **(safe_result or {})},
             run_updates=updates,
         )
 
@@ -545,7 +648,7 @@ class TraceRecorder:
         if not clean:
             return None
         return await self._record_event(
-            event_type="model_answer_delta",
+            event_type="answer_delta",
             stage=stage,
             status="RUNNING",
             source_type=source_type,
@@ -562,12 +665,15 @@ class TraceRecorder:
         final_stage: str = "RESPONSE_RECOMMENDATION",
         summary: str = "Hoàn tất phân tích và kiểm chứng bằng chứng",
         safe_result: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         now = _utcnow()
         updates: Dict[str, Any] = {
             "status": "COMPLETED",
             "completed_at": now,
         }
+        if result is not None:
+            updates["result"] = sanitize_safe_result(result)
         if analysis_id is not None:
             updates["analysis_id"] = analysis_id
         if evidence_version is not None:
@@ -576,7 +682,7 @@ class TraceRecorder:
             updates["model_name"] = model_name
         try:
             return await self._record_event(
-                event_type="analysis_completed",
+                event_type="run_completed",
                 stage=final_stage,
                 status="COMPLETED",
                 source_type="DETERMINISTIC",
@@ -586,7 +692,34 @@ class TraceRecorder:
                 run_updates=updates,
             )
         finally:
-            self._broker.clear_active(self.incident_id, self.run_id)
+            if self.incident_id:
+                self._broker.clear_active(self.incident_id, self.run_id)
+
+    async def require_clarification(
+        self,
+        *,
+        questions: List[Dict[str, Any]],
+        summary: str,
+        result: Optional[Dict[str, Any]] = None,
+        stage: str = "CLARIFICATION",
+    ) -> Dict[str, Any]:
+        """Terminal: the task cannot continue without the analyst's answer (state is kept for the next turn)."""
+        now = _utcnow()
+        updates: Dict[str, Any] = {"status": "NEEDS_CLARIFICATION", "completed_at": now}
+        if result is not None:
+            updates["result"] = sanitize_safe_result(result)
+        return await self._record_event(
+            event_type="clarification_required",
+            stage=stage,
+            status="NEEDS_CLARIFICATION",
+            source_type="DETERMINISTIC",
+            completed_at=now,
+            summary=summary,
+            safe_result={"questions": [
+                {"slot": q.get("slot"), "text": q.get("text"), "options": list(q.get("options") or [])[:12]}
+                for q in questions]},
+            run_updates=updates,
+        )
 
     async def fail_run(
         self,
@@ -597,6 +730,7 @@ class TraceRecorder:
         error_message: str = "",
         summary: str = "",
         analysis_id: Optional[str] = None,
+        result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if status not in {"FAILED", "TIMEOUT", "CANCELLED"}:
             status = "FAILED"
@@ -609,9 +743,11 @@ class TraceRecorder:
         }
         if analysis_id is not None:
             updates["analysis_id"] = analysis_id
+        if result is not None:
+            updates["result"] = sanitize_safe_result(result)
         try:
             return await self._record_event(
-                event_type="analysis_failed",
+                event_type="run_failed",
                 stage=stage,
                 status=status,
                 source_type="DETERMINISTIC",
@@ -622,7 +758,8 @@ class TraceRecorder:
                 run_updates=updates,
             )
         finally:
-            self._broker.clear_active(self.incident_id, self.run_id)
+            if self.incident_id:
+                self._broker.clear_active(self.incident_id, self.run_id)
 
 
 async def load_run_trace(db, run_id: str) -> Optional[Dict[str, Any]]:
@@ -642,11 +779,12 @@ async def load_run_trace(db, run_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-async def list_incident_runs(db, incident_id: str, *, limit: int = 15) -> List[Dict[str, Any]]:
+async def list_incident_runs(db, incident_id: str, *, limit: int = 15,
+                             task_type: str = "incident_analysis") -> List[Dict[str, Any]]:
     rows = (
         await db.scalars(
             select(AIAnalysisRun)
-            .where(AIAnalysisRun.incident_id == incident_id)
+            .where(AIAnalysisRun.incident_id == incident_id, AIAnalysisRun.task_type == task_type)
             .order_by(desc(AIAnalysisRun.created_at))
             .limit(max(1, min(limit, 50)))
         )

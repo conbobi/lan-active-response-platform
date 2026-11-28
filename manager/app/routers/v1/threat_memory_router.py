@@ -24,6 +24,9 @@ from app.services.ai import threat_memory as tm
 from app.services.ai.ai_client import ai_client
 from app.services.ai.alert_context_projector import evidence_version
 from app.services.ai.decision_trace import (
+    TERMINAL_EVENT_TYPES,
+    TERMINAL_RUN_STATUSES,
+    app_session_factory,
     list_incident_runs,
     load_run_trace,
     serialize_event,
@@ -41,6 +44,10 @@ class ReasonBody(BaseModel):
 
 class RunBody(BaseModel):
     mode: Literal["reuse", "fresh"] = "reuse"
+
+
+class QuestionBody(BaseModel):
+    question: str = Field(..., min_length=3, max_length=500)
 
 
 async def _auth(db, authorization, agent_id=None, roles=None):
@@ -136,8 +143,16 @@ async def analysis_source(incident_id: str, authorization: Optional[str] = Heade
     }
 
 
-_TERMINAL_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "TIMEOUT", "CANCELLED"})
-_TERMINAL_EVENT_TYPES = frozenset({"analysis_completed", "analysis_failed"})
+_TERMINAL_RUN_STATUSES = TERMINAL_RUN_STATUSES
+_TERMINAL_EVENT_TYPES = TERMINAL_EVENT_TYPES
+
+
+async def _authorize_run(db, authorization, run: AIAnalysisRun):
+    """Incident runs follow the incident's Agent scope; Rule Generator runs are private to their owner."""
+    actor = await _auth(db, authorization, run.agent_id)
+    if run.task_type == "rule_generation" and actor != run.requested_by:
+        raise HTTPException(404, "Không tìm thấy phiên phân tích")
+    return actor
 _SSE_HEARTBEAT_SECONDS = 10.0
 
 
@@ -205,9 +220,33 @@ async def run_analysis(incident_id: str, body: RunBody, background: BackgroundTa
 
 
 @router.get("/incidents/{incident_id}/analysis/runs")
-async def list_runs(incident_id: str, limit: int = 15, authorization: Optional[str] = Header(None), db=Depends(get_db)):
+async def list_runs(incident_id: str, limit: int = 15,
+                    task_type: Literal["incident_analysis", "risk_question"] = "incident_analysis",
+                    authorization: Optional[str] = Header(None), db=Depends(get_db)):
     await _incident(db, incident_id, authorization)
-    return {"incident_id": incident_id, "runs": await list_incident_runs(db, incident_id, limit=limit)}
+    return {"incident_id": incident_id, "task_type": task_type,
+            "runs": await list_incident_runs(db, incident_id, limit=limit, task_type=task_type)}
+
+
+@router.post("/incidents/{incident_id}/questions", status_code=202)
+async def ask_risk_analyst(incident_id: str, body: QuestionBody, request: Request, background: BackgroundTasks,
+                           authorization: Optional[str] = Header(None), db=Depends(get_db)):
+    """AI Risk Analyst answers a question about the incident. Read-only: the score and incident are never changed."""
+    incident, actor = await _incident(db, incident_id, authorization)
+    question = body.question.strip()
+    run = await trace_broker.create_task_run(
+        db, task_type="risk_question", requested_by=actor, incident_id=incident_id, agent_id=incident.agent_id,
+        question=question, model_name=ai_client.model, evidence_version=evidence_version(incident))
+    await db.commit()
+    factory = app_session_factory(request.app)
+
+    async def job():
+        from app.services.ai.risk_analyst import answer_question
+        await answer_question(run.id, incident_id, question, session_factory=factory, model=ai_client.model)
+
+    background.add_task(job)
+    return {"status": "analyzing", "analysis_run_id": run.id, "run_id": run.id, "task_type": "risk_question",
+            "stream_url": f"/api/v1/ai/runs/{run.id}/stream"}
 
 
 @router.get("/runs/{run_id}/trace")
@@ -215,7 +254,7 @@ async def get_run_trace(run_id: str, authorization: Optional[str] = Header(None)
     run = await db.get(AIAnalysisRun, run_id)
     if run is None:
         raise HTTPException(404, "Không tìm thấy phiên phân tích")
-    await _auth(db, authorization, run.agent_id)
+    await _authorize_run(db, authorization, run)
     payload = await load_run_trace(db, run_id)
     if payload is None:
         raise HTTPException(404, "Không tìm thấy phiên phân tích")
@@ -237,7 +276,7 @@ async def stream_run_trace(
         run = await db.get(AIAnalysisRun, run_id)
         if run is None:
             raise HTTPException(404, "Không tìm thấy phiên phân tích")
-        await _auth(db, authorization, run.agent_id)
+        await _authorize_run(db, authorization, run)
 
     cursor = after_sequence or 0
     if last_event_id is not None:

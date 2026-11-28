@@ -1,0 +1,246 @@
+{
+  "run": {
+    "analysis_run_id": "run_b8fae449004d4fac",
+    "run_id": "run_b8fae449004d4fac",
+    "task_type": "rule_generation",
+    "actor": "admin",
+    "subject_id": null,
+    "question": "Phát hiện web server Linux sinh tiến trình shell sau khi nhận request HTTP đáng ngờ.",
+    "current_stage": "CLARIFICATION",
+    "current_phase": "REQUIREMENT_CHECK",
+    "stage_status": "NEEDS_CLARIFICATION",
+    "result": {
+      "conversation_id": "d1b4e8779a364c4a8bcbce2e8ec5cdda",
+      "revision": 1,
+      "classification": "NEEDS_CLARIFICATION",
+      "ready": false
+    },
+    "incident_id": null,
+    "agent_id": null,
+    "requested_by": "admin",
+    "mode": "fresh",
+    "status": "NEEDS_CLARIFICATION",
+    "evidence_version": null,
+    "analysis_id": null,
+    "model_name": "sec-q5:latest",
+    "error_code": null,
+    "error_message": null,
+    "started_at": "2026-11-28T13:25:31.480196+00:00",
+    "completed_at": "2026-11-28T13:26:50.859790+00:00",
+    "created_at": "2026-11-28T13:25:31.470727+00:00"
+  },
+  "events": [
+    {
+      "event_id": "tr_e08dfbf88f6f4cad",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 1,
+      "event_type": "run_started",
+      "stage": "RUN",
+      "phase": null,
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:25:31.480196+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Bắt đầu lượt AI Rule Generator",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "mode": "fresh",
+        "model_name": "sec-q5:latest",
+        "evidence_version": null,
+        "task_type": "rule_generation"
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:25:31.480239+00:00"
+    },
+    {
+      "event_id": "tr_0e975423754f49a3",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 2,
+      "event_type": "stage_started",
+      "stage": "REQUEST_UNDERSTANDING",
+      "phase": "REQUIREMENT_CHECK",
+      "status": "RUNNING",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:25:31.498432+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang hiểu yêu cầu.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:25:31.498452+00:00"
+    },
+    {
+      "event_id": "tr_3f0185a4a9bb4720",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 3,
+      "event_type": "stage_completed",
+      "stage": "REQUEST_UNDERSTANDING",
+      "phase": "REQUIREMENT_CHECK",
+      "status": "COMPLETED",
+      "source_type": "AI_INFERENCE",
+      "started_at": "2026-11-28T13:25:31.498432+00:00",
+      "completed_at": "2026-11-28T13:26:50.779877+00:00",
+      "duration_ms": 79281,
+      "summary": "Mô hình sec-q5:latest trích ý định; 5 giá trị không có trong lời người dùng đã bị loại.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "classification": null,
+        "model_used": true,
+        "intent": {
+          "platform": "linux",
+          "parent": [],
+          "parent_hint": "web server",
+          "child": [
+            "shell"
+          ],
+          "command": [],
+          "chaining": false
+        },
+        "notices": [
+          "AI đoán tiến trình cha 'nginx' nhưng bạn chưa nêu; cần bạn xác nhận.",
+          "AI đoán tiến trình 'bash' nhưng bạn chưa nêu; cần bạn xác nhận.",
+          "AI đoán tiến trình 'sh' nhưng bạn chưa nêu; cần bạn xác nhận.",
+          "AI đoán từ khóa lệnh 'whoami' nhưng bạn chưa nêu; cần bạn xác nhận.",
+          "AI đoán từ khóa lệnh 'curl' nhưng bạn chưa nêu; cần bạn xác nhận."
+        ]
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:26:50.780023+00:00"
+    },
+    {
+      "event_id": "tr_975f4763c21f4fa4",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 4,
+      "event_type": "stage_started",
+      "stage": "PLATFORM_LOGSOURCE",
+      "phase": "REQUIREMENT_CHECK",
+      "status": "RUNNING",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:26:50.792350+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang xác định nền tảng và logsource.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:26:50.792370+00:00"
+    },
+    {
+      "event_id": "tr_6166cf0d87364fb5",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 5,
+      "event_type": "stage_completed",
+      "stage": "PLATFORM_LOGSOURCE",
+      "phase": "REQUIREMENT_CHECK",
+      "status": "COMPLETED",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:26:50.792350+00:00",
+      "completed_at": "2026-11-28T13:26:50.804666+00:00",
+      "duration_ms": 12,
+      "summary": "Nền tảng linux, logsource process_creation/linux.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "platform": "linux",
+        "logsource": {
+          "category": "process_creation",
+          "product": "linux"
+        },
+        "foreign_children": []
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:26:50.804733+00:00"
+    },
+    {
+      "event_id": "tr_f2d434be81c44593",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 6,
+      "event_type": "stage_started",
+      "stage": "TELEMETRY_FIELDS",
+      "phase": "CONTEXT_RETRIEVAL",
+      "status": "RUNNING",
+      "source_type": "ENDPOINT_AGENT",
+      "started_at": "2026-11-28T13:26:50.814587+00:00",
+      "completed_at": null,
+      "duration_ms": null,
+      "summary": "Đang kiểm tra Agent telemetry fields.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": null,
+      "error_code": null,
+      "created_at": "2026-11-28T13:26:50.814608+00:00"
+    },
+    {
+      "event_id": "tr_fb5d4ef86e3048b2",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 7,
+      "event_type": "stage_completed",
+      "stage": "TELEMETRY_FIELDS",
+      "phase": "CONTEXT_RETRIEVAL",
+      "status": "COMPLETED",
+      "source_type": "ENDPOINT_AGENT",
+      "started_at": "2026-11-28T13:26:50.814587+00:00",
+      "completed_at": "2026-11-28T13:26:50.829591+00:00",
+      "duration_ms": 15,
+      "summary": "Agent gửi Image, ParentImage, CommandLine, ParentCommandLine; 24 giờ qua thấy nền tảng (chưa có).",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "fields": [
+          "Image",
+          "ParentImage",
+          "CommandLine",
+          "ParentCommandLine",
+          "ProcessName",
+          "ParentProcessName"
+        ],
+        "observed_platforms": [],
+        "observed_parents": [],
+        "observed_scripts": []
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:26:50.829654+00:00"
+    },
+    {
+      "event_id": "tr_494a47c5a6dd4de1",
+      "analysis_run_id": "run_b8fae449004d4fac",
+      "incident_id": null,
+      "sequence": 8,
+      "event_type": "clarification_required",
+      "stage": "CLARIFICATION",
+      "phase": "REQUIREMENT_CHECK",
+      "status": "NEEDS_CLARIFICATION",
+      "source_type": "DETERMINISTIC",
+      "started_at": "2026-11-28T13:26:50.859854+00:00",
+      "completed_at": "2026-11-28T13:26:50.859790+00:00",
+      "duration_ms": null,
+      "summary": "Cần làm rõ 1 thông tin trước khi tạo rule.",
+      "evidence_refs": [],
+      "rule_refs": [],
+      "safe_result": {
+        "questions": [
+          {
+            "slot": "parent",
+            "text": "Tiến trình cha (web server) cụ thể là gì? Chọn tiến trình Agent đang thấy hoặc gõ tên.",
+            "options": []
+          }
+        ]
+      },
+      "error_code": null,
+      "created_at": "2026-11-28T13:26:50.859854+00:00"
+    }
+  ]
+}

@@ -15,6 +15,8 @@ import Button from '../ui/Button';
 import AISuggestionPanel from './AISuggestionPanel';
 import AnalysisSourcePanel from './AnalysisSourcePanel';
 import DecisionTracePanel from './DecisionTracePanel';
+import RiskAnalystQA from './RiskAnalystQA';
+import { eventType, isTerminalEvent } from '../ai/traceModel';
 import { getRunTrace, listAnalysisRuns, runAnalysis, streamRunTrace } from '../../api/threatMemory';
 import { SafeStructuredParagraphs, parseAnalysisSections } from './SafeAnalysisContent';
 import {
@@ -82,10 +84,11 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       if (prev.some((item) => item.sequence === ev.sequence)) return prev;
       return [...prev, ev].sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
     });
-    if (ev.event_type === 'analysis_started') {
+    const kind = eventType(ev);
+    if (kind === 'run_started') {
       setActiveRun((prev) => (prev ? { ...prev, status: 'RUNNING', started_at: ev.started_at || prev.started_at } : prev));
-    } else if (ev.event_type === 'analysis_completed' || ev.event_type === 'analysis_failed') {
-      const terminalStatus = ev.status === 'TIMEOUT' ? 'TIMEOUT' : ev.event_type === 'analysis_completed' ? 'COMPLETED' : (ev.status || 'FAILED');
+    } else if (isTerminalEvent(ev)) {
+      const terminalStatus = ev.status === 'TIMEOUT' ? 'TIMEOUT' : kind === 'run_completed' ? 'COMPLETED' : (ev.status || 'FAILED');
       setActiveRun((prev) =>
         prev
           ? {
@@ -110,7 +113,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
       signal: controller.signal,
       onEvent: (ev) => {
         appendTraceEvent(ev);
-        if (ev.event_type === 'analysis_completed' || ev.event_type === 'analysis_failed') {
+        if (isTerminalEvent(ev)) {
           if (pollTimerRef.current) {
             clearInterval(pollTimerRef.current);
             pollTimerRef.current = null;
@@ -131,7 +134,7 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
           }
           if (ev.status === 'TIMEOUT') {
             toast('AI hết thời gian chờ — đã tạo báo cáo dự phòng xác định.', { icon: '⚠' });
-          } else if (ev.event_type === 'analysis_completed') {
+          } else if (eventType(ev) === 'run_completed') {
             toast.success('Đã hoàn tất phân tích AI!');
           } else {
             toast.error('Phiên phân tích AI không thành công');
@@ -712,6 +715,8 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
         streaming={traceStreaming}
         expanded={traceExpanded}
         onToggleExpand={() => setTraceExpanded((prev) => !prev)}
+        title="Quá trình suy luận và kiểm chứng (AI Decision Trace)"
+        emptyText="Sự cố này chưa có lịch sử Decision Trace (có thể được tạo trước khi bật ghi vết theo từng bước). Nhấn Phân tích lại bằng AI để theo dõi quá trình nạp dữ liệu, tính điểm, tương quan và kiểm chứng thời gian thực."
         onSelectRun={(selectedRunId) => loadRunTrace(selectedRunId, { autoStream: true })}
         onSelectEvidenceRef={(eid) => {
           const idx = observedFacts.findIndex((f) => Array.isArray(f.evidenceIds) && f.evidenceIds.includes(eid));
@@ -722,6 +727,14 @@ export default function AIAnalysisTab({ incidentId, incident = null, httpInciden
             navigator.clipboard?.writeText?.(eid).catch(() => {});
             toast(`Mã bằng chứng: ${eid}`, { icon: '🔍' });
           }
+        }}
+      />
+
+      <RiskAnalystQA
+        incident={incident || { id: incidentId }}
+        onSelectEvidenceRef={(eid) => {
+          navigator.clipboard?.writeText?.(eid).catch(() => {});
+          toast(`Mã bằng chứng: ${eid}`, { icon: '🔍' });
         }}
       />
 
